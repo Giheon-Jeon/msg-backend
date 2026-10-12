@@ -63,7 +63,7 @@ class KothSecurityFixTests(TestCase):
 
     # BK-03
     def test_scheduled_challenge_url_hidden_active_shown(self):
-        self.client.credentials()
+        self.auth()
         r = self.client.get("/api/v1/koth/clubs")
         urls = {
             c["name"]: {ch["title"]: ch["challenge_url"] for ch in c["challenges"]}

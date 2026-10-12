@@ -83,7 +83,7 @@ def _challenge_payload(challenge, include_times=True):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def clubs(request):
     from .models import KothClub
 
@@ -114,7 +114,7 @@ def clubs(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def club_detail(request, club_id):
     try:
         uuid.UUID(str(club_id))
