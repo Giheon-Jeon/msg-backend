@@ -451,7 +451,7 @@ class ChallengeSubmitTests(TestCase):
                     for challenge in (self.challenge, other_challenge)
                 ])
                 teams.extend(new_teams)
-                with self.assertNumQueries(3):
+                with self.assertNumQueries(4):
                     current_score = update_dynamic_score_and_team_scores(self.challenge)
                 self.assertEqual(
                     set(Team.objects.filter(pk__in=[team.pk for team in teams]).values_list("team_score", flat=True)),
@@ -459,7 +459,7 @@ class ChallengeSubmitTests(TestCase):
                 )
                 unaffected_team.refresh_from_db()
                 self.assertEqual(unaffected_team.team_score, Decimal("77"))
-                with self.assertNumQueries(3):
+                with self.assertNumQueries(4):
                     self.assertEqual(update_dynamic_score_and_team_scores(self.challenge), current_score)
 
     def test_unchanged_score_updates_only_new_team_but_changes_and_admin_update_all(self):
@@ -480,7 +480,7 @@ class ChallengeSubmitTests(TestCase):
                 updated_rows.append(context["cursor"].rowcount)
             return result
 
-        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(2):
+        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(3):
             score = update_dynamic_score_and_team_scores(self.challenge, newly_solved_team_id=new_team.pk)
         self.assertEqual(updated_rows, [1])
         self.assertEqual(score, Decimal("1000"))
@@ -493,14 +493,14 @@ class ChallengeSubmitTests(TestCase):
         self.challenge.decay = 1
         self.challenge.save(update_fields=["minimum_score", "decay"])
         updated_rows.clear()
-        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(3):
+        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(4):
             score = update_dynamic_score_and_team_scores(self.challenge, newly_solved_team_id=new_team.pk)
         self.assertEqual(updated_rows, [2])
         self.assertEqual(score, Decimal("900"))
         self.assertEqual(set(Team.objects.filter(pk__in=[self.team.pk, new_team.pk]).values_list("team_score", flat=True)), {Decimal("900")})
 
         updated_rows.clear()
-        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(3):
+        with connection.execute_wrapper(track_score_updates), self.assertNumQueries(4):
             update_dynamic_score_and_team_scores(self.challenge)
         self.assertEqual(updated_rows, [2])
 

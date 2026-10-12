@@ -58,6 +58,11 @@ def update_dynamic_score_and_team_scores(challenge, *, newly_solved_team_id=None
         affected_teams = Team.objects.filter(pk=newly_solved_team_id)
     else:
         affected_teams = Team.objects.filter(pk__in=affected_team_ids)
+
+    # Lock every affected team in the same order as challenge submissions.
+    list(
+        affected_teams.select_for_update(no_key=True).order_by("pk")
+    )
     affected_teams.update(
         team_score=Coalesce(
             Subquery(team_totals),
