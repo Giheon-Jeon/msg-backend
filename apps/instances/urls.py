@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.instances.admin_views import ReleaseActivateView, ReleaseDeriveView, ReleaseListCreateView
 from apps.instances.secret_views import RuntimeSecretListCreateView
+from apps.instances.environment_file_views import EnvironmentFileImportView, EnvironmentFilePreviewView
 from apps.instances.views import (
     InstanceCreateView,
     InstanceDeleteView,
@@ -11,6 +12,14 @@ from apps.instances.views import (
 )
 
 urlpatterns = [
+    path(
+        "admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/environment_files/preview",
+        EnvironmentFilePreviewView.as_view(), name="admin-environment-file-preview",
+    ),
+    path(
+        "admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/environment_files/import",
+        EnvironmentFileImportView.as_view(), name="admin-environment-file-import",
+    ),
     path(
         "admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/derive",
         ReleaseDeriveView.as_view(),

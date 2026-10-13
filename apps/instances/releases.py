@@ -4,7 +4,7 @@ from django.db.models import Max
 
 from apps.instances.models import ChallengeRelease, IsolationProfile, ReleaseContainer, RuntimeSecret
 from apps.instances.services import isoformat_z
-from apps.instances.execution_settings import validate_env, validate_secret_env
+from apps.instances.execution_settings import validate_env, validate_secret_env, validate_env_rules
 from apps.instances.runtime_secrets import bind_secret_env
 
 # 공급망 발행 명명과 동일한 digest 고정 GHCR 참조만 허용한다
@@ -295,11 +295,12 @@ def validate_derived_settings(body, source):
         raise ReleaseValidationError("실행 설정 요청 형식이 올바르지 않습니다")
     raw_containers = body.get("containers")
     source_containers = list(source.containers.all())
+    rules_by_container = {container.name: container.env_rules for container in source_containers}
     if not isinstance(raw_containers, list) or len(raw_containers) != len(source_containers):
         raise ReleaseValidationError("원본 릴리스의 모든 컨테이너 설정이 필요합니다")
     requested = {}
     for raw in raw_containers:
-        if not isinstance(raw, dict) or set(raw) - {"name", "env", "secret_env"}:
+        if not isinstance(raw, dict) or set(raw) - {"name", "env", "secret_env", "env_rules"}:
             raise ReleaseValidationError("컨테이너 실행 설정 형식이 올바르지 않습니다")
         name = raw.get("name")
         if not isinstance(name, str) or name in requested:
@@ -307,9 +308,10 @@ def validate_derived_settings(body, source):
         try:
             env = validate_env(raw.get("env", {}))
             aliases = validate_secret_env(raw.get("secret_env", {}), env)
+            rules = validate_env_rules(raw.get("env_rules", rules_by_container.get(name, {})), env, aliases)
         except ValueError as error:
             raise ReleaseValidationError(str(error)) from None
-        requested[name] = {"env": env, "secret_env": aliases}
+        requested[name] = {"env": env, "secret_env": aliases, "env_rules": rules}
     if set(requested) != {container.name for container in source_containers}:
         raise ReleaseValidationError("원본 릴리스와 컨테이너 이름이 일치하지 않습니다")
     note = body.get("note")
@@ -346,7 +348,10 @@ def create_release(challenge, validated, created_by, derived_from=None):
     bindings = []
     for container in validated["containers"]:
         try:
-            bindings.append(bind_secret_env(challenge, container.get("secret_env", {}), container.get("env", {})))
+            bindings.append(bind_secret_env(
+                challenge, container.get("secret_env", {}), container.get("env", {}),
+                pinned=container.get("secret_versions"),
+            ))
         except ValueError as error:
             raise ReleaseValidationError(str(error)) from None
     release = ChallengeRelease.objects.create(
@@ -364,6 +369,8 @@ def create_release(challenge, validated, created_by, derived_from=None):
         healthcheck=validated["healthcheck"],
         source_ref=validated["source_ref"],
         note=validated["note"],
+        env_import_id=validated.get("env_import_id"),
+        env_import_fingerprint=validated.get("env_import_fingerprint", ""),
         created_by=created_by,
     )
     ReleaseContainer.objects.bulk_create(
@@ -375,6 +382,7 @@ def create_release(challenge, validated, created_by, derived_from=None):
                 ports=container["ports"],
                 env=container.get("env", {}),
                 secret_env=bindings[index],
+                env_rules=container.get("env_rules", {}),
             )
             for index, container in enumerate(validated["containers"])
         ]
@@ -479,6 +487,7 @@ def serialize_release(release, current_release_id=None):
                 **({"env": container.env} if container.env else {}),
                 **({"secret_ref": str(container.id)} if container.secret_env else {}),
                 "secret_bindings": secret_bindings(container),
+                "env_rules": container.env_rules,
             }
             for container in containers
         ],

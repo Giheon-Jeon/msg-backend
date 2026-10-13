@@ -173,6 +173,9 @@ class ChallengeRelease(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
     source_ref = models.CharField(max_length=200, blank=True, default="")
     note = models.TextField(null=True, blank=True)
+    # .env 저장 요청의 재시도는 같은 릴리스를 반환한다. 응답에는 포함하지 않는다
+    env_import_id = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    env_import_fingerprint = models.CharField(max_length=64, blank=True, default="", editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.CharField(max_length=50, blank=True, default="")
 
@@ -204,6 +207,7 @@ class ReleaseContainer(models.Model):
     env = models.JSONField(default=dict)
     # 릴리스 등록 때 선택한 불변 RuntimeSecret UUID를 저장한다
     secret_env = models.JSONField(default=dict)
+    env_rules = models.JSONField(default=dict)
 
     class Meta:
         db_table = "challenge_release_containers"

@@ -71,11 +71,14 @@ def decrypt_runtime_secret(secret):
 
 
 @sensitive_variables()
-def bind_secret_env(challenge, aliases, env=None):
+def bind_secret_env(challenge, aliases, env=None, pinned=None):
     bindings = {}
     total = sum(len(name) + len(value.encode("utf-8")) for name, value in (env or {}).items())
     for name, alias in aliases.items():
-        secret = RuntimeSecret.objects.filter(challenge=challenge, name=alias).order_by("-version").first()
+        candidates = RuntimeSecret.objects.filter(challenge=challenge, name=alias)
+        if pinned and name in pinned:
+            candidates = candidates.filter(secret_id=pinned[name])
+        secret = candidates.order_by("-version").first()
         if secret is None:
             raise ValueError("문제에 등록되지 않은 비밀값 참조가 있습니다")
         value = decrypt_runtime_secret(secret)
