@@ -127,7 +127,7 @@ class ChallengeSettingsTests(ReleaseTestBase):
         self.assertNotIn(secret.encrypted_value, json.dumps(response.data))
 
     def test_files_list_real_metadata_without_contents_or_fake_published_links(self):
-        response = self.client.get(self.url + "/files")
+        response = self.client.get(self.url + "/repository-files")
         self.assertEqual(response.status_code, 200)
         files = {item["path"]: item for item in response.data["data"]["files"]}
         self.assertEqual(files["prob/for_user/자료.zip"]["kind"], "participant")
@@ -135,23 +135,22 @@ class ChallengeSettingsTests(ReleaseTestBase):
         self.assertEqual(files["env/app.env"]["kind"], "configuration")
         self.assertEqual(files["compose.runtime.yaml"]["kind"], "configuration")
         self.assertTrue(all(item["source_url"] is None for item in files.values()))
-        self.assertFalse(response.data["data"]["participant_downloads_connected"])
         self.snapshot.read.assert_not_called()
         self.assertIn("no-store", response["Cache-Control"])
 
     def test_published_file_links_are_pinned_to_the_listed_revision(self):
         self.snapshot.published = True
-        files = self.client.get(self.url + "/files").data["data"]["files"]
+        files = self.client.get(self.url + "/repository-files").data["data"]["files"]
         self.assertTrue(all(f"/blob/{self.snapshot.revision}/web-basic/" in item["source_url"] for item in files))
         self.assertTrue(any("%EC%9E%90%EB%A3%8C.zip" in item["source_url"] for item in files))
 
     def test_missing_source_is_reported_separately_from_basic_information(self):
         self.repository.side_effect = RepositorySourceUnavailable("저장소 연결을 확인해주세요")
-        self.assertEqual(self.client.get(self.url + "/files").status_code, 503)
+        self.assertEqual(self.client.get(self.url + "/repository-files").status_code, 503)
         self.assertEqual(self.client.get(self.url).status_code, 200)
 
     def test_settings_require_admin_for_read_and_reveal(self):
-        targets = [("get", self.url), ("get", self.url + "/flag"), ("get", self.url + "/files"), ("post", self.url + "/flag/reveal")]
+        targets = [("get", self.url), ("get", self.url + "/flag"), ("get", self.url + "/repository-files"), ("post", self.url + "/flag/reveal")]
         self.auth("player")
         for method, url in targets:
             with self.subTest(method=method, url=url):

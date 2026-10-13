@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch, Q, Sum
 from django.db.models.deletion import SET_NULL
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from datetime import datetime
 
 from rest_framework.decorators import api_view, permission_classes
@@ -36,6 +37,7 @@ from apps.board.services import (
 )
 from apps.timer.models import Contest
 from .models import AdminEvent, AdminSetting
+from .challenge_deployment import deployment_summaries
 
 from apps.teams.models import (
     MileageHistory,
@@ -1357,6 +1359,7 @@ def challenge_detail(request, challenge_id):
     return ok(_serialize_challenge(challenge), message="문제가 수정되었습니다.")
 
 
+@never_cache
 @api_view(["GET", "POST"])
 @permission_classes([IsAdmin])
 def challenge_list(request):
@@ -1401,7 +1404,8 @@ def challenge_list(request):
 
     total_count = queryset.count()
     offset = (page - 1) * size
-    rows = queryset.order_by(CHALLENGE_SORT[sort], "title")[offset : offset + size]
+    rows = list(queryset.order_by(CHALLENGE_SORT[sort], "title")[offset : offset + size])
+    deployments = deployment_summaries(rows)
 
     challenges = [
         {
@@ -1415,6 +1419,7 @@ def challenge_list(request):
             "solved_team_count": c.solved_team_count,
             "running_instance_count": c.running_instance_count,
             "failed_instance_count": c.failed_instance_count,
+            "deployment": deployments.get(c.pk),
         }
         for c in rows
     ]

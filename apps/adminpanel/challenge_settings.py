@@ -128,7 +128,7 @@ def _file_kind(path):
 @never_cache
 @api_view(["GET"])
 @permission_classes([IsAdmin])
-def challenge_files(request, challenge_id):
+def challenge_repository_files(request, challenge_id):
     challenge = Challenge.objects.filter(pk=challenge_id).first()
     if challenge is None:
         return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다", 404)
@@ -146,5 +146,4 @@ def challenge_files(request, challenge_id):
         files.append({"path": path, "name": PurePosixPath(path).name, "size_bytes": item["size"],
                       "kind": _file_kind(path), "source_url": url})
     return ok({"repository": snapshot.repository, "source_revision": snapshot.revision,
-               "source_published": snapshot.published, "files": files,
-               "participant_downloads_connected": False})
+               "source_published": snapshot.published, "files": files})

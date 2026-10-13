@@ -159,6 +159,40 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = "static/"
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "/media/"
+
+GCS_ENABLED = os.getenv("GCS_ENABLED", "False").lower() == "true"
+if GCS_ENABLED:
+    GCS_PROJECT_ID = os.getenv("GCS_PROJECT_ID", "").strip()
+    GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "").strip()
+    GCS_OBJECT_PREFIX = os.getenv("GCS_OBJECT_PREFIX", "").strip("/")
+    missing = [
+        name
+        for name, value in (
+            ("GCS_PROJECT_ID", GCS_PROJECT_ID),
+            ("GCS_BUCKET_NAME", GCS_BUCKET_NAME),
+            ("GCS_OBJECT_PREFIX", GCS_OBJECT_PREFIX),
+        )
+        if not value
+    ]
+    if missing:
+        raise ImproperlyConfigured(
+            "GCS_ENABLED=True requires: " + ", ".join(missing)
+        )
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+            "OPTIONS": {
+                "project_id": GCS_PROJECT_ID,
+                "bucket_name": GCS_BUCKET_NAME,
+                "location": GCS_OBJECT_PREFIX,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
