@@ -247,6 +247,13 @@ class AdminDeploymentTests(ReleaseTestBase):
         self.assertEqual(DeploymentTest.objects.count(), 0)
         self.assertEqual(self.calls, [])
 
+    def test_docker_container_release_uses_existing_scheduler_placement(self):
+        self.release.runtime_type = "DOCKER"
+        self.release.save(update_fields=["runtime_type"])
+        self.assertEqual(self.start().status_code, 202)
+        self.assertEqual(self.calls[0][2]["release_id"], str(self.release.pk))
+        self.assertEqual(self.calls[0][2]["containers"][0]["image"], self.release.containers.get().image_ref)
+
     def test_remote_wrong_scope_and_excessive_lifetime_are_rejected(self):
         self.start()
         record = DeploymentTest.objects.get()

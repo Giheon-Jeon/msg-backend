@@ -156,5 +156,6 @@ approved_at과 current_release는 그대로 유지하며 종료·만료 뒤에�
 상태 응답에는 환경변수, 비밀값, 런타임 원문 로그를 포함하지 않습니다
 실패 사유는 허용된 오류 코드로 표시하며 배포 실패 뒤 정리가 완료되어도 원인을 유지합니다
 
-현재 테스트 실행은 Kubernetes 릴리스만 지원합니다 VM·Windows 및 Docker 릴리스는 이 경로에서 거절합니다
+Kubernetes·Docker 컨테이너 릴리스를 기존 참가자 실행과 같은 스케줄러 경로로 전달합니다
+실제 실행 환경은 스케줄러가 자원을 배정하면서 정합니다 VM·Windows 릴리스는 이 경로에서 거절합니다
 검사: [배포 테스트 API](../apps/instances/tests_deployment_tests.py)

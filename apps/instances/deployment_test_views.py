@@ -64,8 +64,8 @@ class DeploymentTestCreateView(APIView):
             if active:
                 return fail("DEPLOYMENT_TEST_ACTIVE", "진행 중인 테스트를 종료한 뒤 다시 실행해주세요", 409,
                             {"active_test": serialize_test(active)})
-            if release.runtime_type != RuntimeType.KUBERNETES:
-                return fail("RELEASE_NOT_DEPLOYABLE", "현재 테스트 실행은 Kubernetes 배포 버전을 지원합니다", 400)
+            if release.runtime_type not in {RuntimeType.KUBERNETES, RuntimeType.DOCKER}:
+                return fail("RELEASE_NOT_DEPLOYABLE", "VM 배포 테스트는 아직 지원하지 않습니다", 400)
             try:
                 validate_release_for_scheduler(release)
             except SchedulerError as error:
