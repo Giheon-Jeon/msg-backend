@@ -21,12 +21,15 @@ LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"
 @override_settings(CACHES=LOCMEM)
 class AuthTests(TestCase):
     def setUp(self):
-        cache.clear()                      # 쓰로틀 카운터 초기화
+        cache.clear()  # 쓰로틀 카운터 초기화
         self.client = APIClient()
         self.team = Team.objects.create(team_name="테스트팀")
         self.user = User.objects.create_user(
-            login_id="tester", password="pw1234", nickname="테스터",
-            team=self.team, is_leader=True,
+            login_id="tester",
+            password="pw1234",
+            nickname="테스터",
+            team=self.team,
+            is_leader=True,
         )
 
     def login(self, login_id="tester", password="pw1234"):
@@ -84,19 +87,27 @@ class AuthTests(TestCase):
 
     def test_token_expired(self):
         payload = {
-            "typ": "access", "sub": str(self.user.user_id),
-            "exp": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1),
+            "typ": "access",
+            "sub": str(self.user.user_id),
+            "exp": datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(hours=1),
         }
         expired = pyjwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
-        res = self.client.get("/api/v1/teams/me", HTTP_AUTHORIZATION=f"Bearer {expired}")
+        res = self.client.get(
+            "/api/v1/teams/me", HTTP_AUTHORIZATION=f"Bearer {expired}"
+        )
         self.assertEqual(res.data["code"], "TOKEN_EXPIRED")
 
     def test_token_signed_with_unknown_key_rejected(self):
         """현재 JWT 키와 다른 임시 키로 만든 토큰은 거절돼야 한다."""
         payload = {
-            "typ": "access", "sub": str(self.user.user_id),
-            "team_id": str(self.team.team_id), "role": "ADMIN", "is_leader": True,
-            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
+            "typ": "access",
+            "sub": str(self.user.user_id),
+            "team_id": str(self.team.team_id),
+            "role": "ADMIN",
+            "is_leader": True,
+            "exp": datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(hours=1),
         }
         unknown_key = secrets.token_urlsafe(48)
         self.assertNotEqual(unknown_key, settings.JWT_SECRET)
@@ -107,27 +118,34 @@ class AuthTests(TestCase):
     def test_refresh_token_cannot_call_api(self):
         """refresh 토큰으로 일반 API 를 호출할 수 없다 (typ 검증)."""
         refresh = self.login().data["data"]["refresh_token"]
-        res = self.client.get("/api/v1/teams/me", HTTP_AUTHORIZATION=f"Bearer {refresh}")
+        res = self.client.get(
+            "/api/v1/teams/me", HTTP_AUTHORIZATION=f"Bearer {refresh}"
+        )
         self.assertEqual(res.data["code"], "TOKEN_INVALID")
 
     # ---- refresh / logout ----
     def test_refresh_and_logout(self):
         refresh = self.login().data["data"]["refresh_token"]
 
-        res = self.client.post("/api/v1/auth/refresh", {"refresh_token": refresh}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/refresh", {"refresh_token": refresh}, format="json"
+        )
         self.assertEqual(res.data["code"], "SUCCESS")
 
         access = res.data["data"]["access_token"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         self.assertEqual(
-            self.client.post("/api/v1/auth/logout", {"refresh_token": refresh},
-                             format="json").data["code"],
+            self.client.post(
+                "/api/v1/auth/logout", {"refresh_token": refresh}, format="json"
+            ).data["code"],
             "SUCCESS",
         )
         self.client.credentials()
 
         # 로그아웃한 토큰으로는 재발급 불가
-        res = self.client.post("/api/v1/auth/refresh", {"refresh_token": refresh}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/refresh", {"refresh_token": refresh}, format="json"
+        )
         self.assertEqual(res.data["code"], "REFRESH_TOKEN_NOT_FOUND")
 
     # ---- 요청 제한 ----
@@ -139,15 +157,17 @@ class AuthTests(TestCase):
         self.assertEqual(res.data["code"], "TOO_MANY_REQUESTS")
 
     def test_throttle_does_not_affect_other_account(self):
-        User.objects.create_user(login_id="other", password="pw1234",
-                                 nickname="다른사람", team=self.team)
+        User.objects.create_user(
+            login_id="other", password="pw1234", nickname="다른사람", team=self.team
+        )
         for _ in range(11):
             self.login(password="wrong")
         res = self.login(login_id="other", password="pw1234")
         self.assertEqual(res.status_code, 200)
-    
+
     def test_banned_team_login_shows_ban_info(self):
         from apps.accounts.models import Team
+
         Team.objects.filter(pk=self.team.pk).update(is_banned=True, ban_reason="어뷰징")
         res = self.login()
         self.assertEqual(res.status_code, 200)
@@ -158,9 +178,16 @@ class AuthTests(TestCase):
 
         res = self.login()
         expected = {
-            "access_token", "refresh_token", "role", "is_leader",
-            "nickname", "team_id", "team_name", "user_id",
-            "is_banned", "ban_reason",
+            "access_token",
+            "refresh_token",
+            "role",
+            "is_leader",
+            "nickname",
+            "team_id",
+            "team_name",
+            "user_id",
+            "is_banned",
+            "ban_reason",
         }
         self.assertEqual(set(res.data["data"]), expected)
 
@@ -169,14 +196,19 @@ class RefreshLogoutRaceTest(TransactionTestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="레이스팀")
         self.user = User.objects.create_user(
-            login_id="racer", password="pw1234", nickname="레이서",
-            team=self.team, is_leader=True,
+            login_id="racer",
+            password="pw1234",
+            nickname="레이서",
+            team=self.team,
+            is_leader=True,
         )
 
     def _issue_token(self):
         raw, expires_at = issue_refresh_token(self.user)
         RefreshToken.objects.create(
-            user=self.user, token_hash=hash_token(raw), expires_at=expires_at,
+            user=self.user,
+            token_hash=hash_token(raw),
+            expires_at=expires_at,
         )
         return raw
 
@@ -188,14 +220,18 @@ class RefreshLogoutRaceTest(TransactionTestCase):
         logout = auth.post("/api/v1/auth/logout", {"refresh_token": raw}, format="json")
         self.assertEqual(logout.status_code, 200)
 
-        again = APIClient().post("/api/v1/auth/refresh", {"refresh_token": raw}, format="json")
+        again = APIClient().post(
+            "/api/v1/auth/refresh", {"refresh_token": raw}, format="json"
+        )
         self.assertEqual(again.status_code, 401)
         self.assertEqual(again.data["code"], "REFRESH_TOKEN_NOT_FOUND")
 
     def test_refresh_before_logout_succeeds(self):
         raw = self._issue_token()
 
-        refreshed = APIClient().post("/api/v1/auth/refresh", {"refresh_token": raw}, format="json")
+        refreshed = APIClient().post(
+            "/api/v1/auth/refresh", {"refresh_token": raw}, format="json"
+        )
         self.assertEqual(refreshed.status_code, 200)
         self.assertIn("access_token", refreshed.data["data"])
 
@@ -207,12 +243,16 @@ class RefreshLogoutRaceTest(TransactionTestCase):
     def test_refresh_holds_lock_until_token_issued(self):
         raw = self._issue_token()
         logout_client = APIClient()
-        logout_client.credentials(HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.user)}")
+        logout_client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.user)}"
+        )
 
         state = {}
 
         def run_logout():
-            res = logout_client.post("/api/v1/auth/logout", {"refresh_token": raw}, format="json")
+            res = logout_client.post(
+                "/api/v1/auth/logout", {"refresh_token": raw}, format="json"
+            )
             state["logout_status"] = res.status_code
             connections.close_all()
 
@@ -227,7 +267,9 @@ class RefreshLogoutRaceTest(TransactionTestCase):
             return real_issue(user)
 
         with mock.patch.object(views, "issue_access_token", side_effect=issue_spy):
-            res = APIClient().post("/api/v1/auth/refresh", {"refresh_token": raw}, format="json")
+            res = APIClient().post(
+                "/api/v1/auth/refresh", {"refresh_token": raw}, format="json"
+            )
 
         state["worker"].join(timeout=5)
         connections.close_all()

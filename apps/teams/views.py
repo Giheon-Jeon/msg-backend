@@ -21,6 +21,7 @@ from .models import MileageHistory, PaymentToken, PaymentTokenStatus
 
 QR_TOKEN_TTL_MINUTES = 5
 
+
 def _get_team(request):
     if request.user.team_id is None:
         raise UserHasNoTeam()
@@ -33,11 +34,15 @@ def team_me(request):
     team = _get_team(request)
 
     jeopardy_score = team.team_score
-    koth_score = team.koth_solves.aggregate(total=Sum("earned_score"))["total"] or Decimal("0")
-    signature_score = (
-        team.signature_solves.aggregate(total=Sum("earned_score"))["total"]
-        or Decimal("0")
-    )
+    koth_score = team.koth_solves.aggregate(total=Sum("earned_score"))[
+        "total"
+    ] or Decimal("0")
+    signature_score = team.signature_solves.aggregate(total=Sum("earned_score"))[
+        "total"
+    ] or Decimal("0")
+    line_score = team.line_monopolies.aggregate(total=Sum("earned_score"))[
+        "total"
+    ] or Decimal("0")
 
     members = [
         {
@@ -53,10 +58,13 @@ def team_me(request):
         {
             "team_id": str(team.team_id),
             "team_name": team.team_name,
-            "team_score": num(jeopardy_score + koth_score + signature_score),
+            "team_score": num(
+                jeopardy_score + koth_score + signature_score + line_score
+            ),
             "jeopardy_score": num(jeopardy_score),
             "koth_score": num(koth_score),
             "signature_score": num(signature_score),
+            "line_score": num(line_score),
             "mileage": team.mileage,
             "is_banned": team.is_banned,
             "ban_reason": team.ban_reason,
@@ -70,7 +78,9 @@ def team_me(request):
 def mileage_history(request):
     team = _get_team(request)
 
-    rows = MileageHistory.objects.filter(team=team).order_by("-created_at", "-history_id")
+    rows = MileageHistory.objects.filter(team=team).order_by(
+        "-created_at", "-history_id"
+    )
     history = [
         {
             "history_id": str(row.history_id),
@@ -85,7 +95,9 @@ def mileage_history(request):
         for row in rows
     ]
 
-    return ok({"mileage": team.mileage, "history": history, "total_count": len(history)})
+    return ok(
+        {"mileage": team.mileage, "history": history, "total_count": len(history)}
+    )
 
 
 @api_view(["POST"])
@@ -102,8 +114,9 @@ def qr_token(request):
         Team.objects.select_for_update(no_key=True).get(pk=team.team_id)
 
         old_ids = list(
-            PaymentToken.objects.filter(team=team, status=PaymentTokenStatus.ACTIVE)
-            .values_list("pk", flat=True)
+            PaymentToken.objects.filter(
+                team=team, status=PaymentTokenStatus.ACTIVE
+            ).values_list("pk", flat=True)
         )
         if old_ids:
             PaymentToken.objects.filter(pk__in=old_ids).update(
@@ -117,10 +130,11 @@ def qr_token(request):
         )
 
         if old_ids:
-            PaymentToken.objects.filter(pk__in=old_ids).update(invalidated_by_token=new_token)
+            PaymentToken.objects.filter(pk__in=old_ids).update(
+                invalidated_by_token=new_token
+            )
 
     return ok({"payment_token": raw_token, "expires_at": expires_at})
-
 
 
 @api_view(["GET"])
@@ -136,23 +150,25 @@ def solves(request):
         .select_related("challenge", "solved_by_user")
         .order_by("-solved_at", "-solve_id")
     ):
-        items.append({
-            "source_type": "JEOPARDY",
-            "challenge_id": str(row.challenge_id),
-            "challenge_title": row.challenge.title,
-            "earned_score": num(row.earned_score),
-            "earned_mileage": row.earned_mileage,
-            "is_extra_dice_granted": row.is_extra_dice_granted,
-            "solved_by": (
-                {
-                    "user_id": str(row.solved_by_user_id),
-                    "nickname": row.solved_by_user.nickname,
-                }
-                if row.solved_by_user_id
-                else None
-            ),
-            "solved_at": row.solved_at,
-        })
+        items.append(
+            {
+                "source_type": "JEOPARDY",
+                "challenge_id": str(row.challenge_id),
+                "challenge_title": row.challenge.title,
+                "earned_score": num(row.earned_score),
+                "earned_mileage": row.earned_mileage,
+                "is_extra_dice_granted": row.is_extra_dice_granted,
+                "solved_by": (
+                    {
+                        "user_id": str(row.solved_by_user_id),
+                        "nickname": row.solved_by_user.nickname,
+                    }
+                    if row.solved_by_user_id
+                    else None
+                ),
+                "solved_at": row.solved_at,
+            }
+        )
 
     # KOTH 는 팀 단위 집계라 개인 제출자(solved_by)가 없고, 마일리지/주사위와 무관.
     # 아직 점수를 못 받은(solved_at 없는) 행은 풀이로 보지 않는다.
@@ -161,39 +177,43 @@ def solves(request):
         .select_related("challenge")
         .order_by("-solved_at", "-solve_id")
     ):
-        items.append({
-            "source_type": "KOTH",
-            "koth_challenge_id": str(row.challenge_id),
-            "challenge_title": row.challenge.title,
-            "earned_score": num(row.earned_score),
-            "earned_mileage": 0,
-            "is_extra_dice_granted": False,
-            "solved_by": None,
-            "solved_at": row.solved_at,
-        })
+        items.append(
+            {
+                "source_type": "KOTH",
+                "koth_challenge_id": str(row.challenge_id),
+                "challenge_title": row.challenge.title,
+                "earned_score": num(row.earned_score),
+                "earned_mileage": 0,
+                "is_extra_dice_granted": False,
+                "solved_by": None,
+                "solved_at": row.solved_at,
+            }
+        )
 
     for row in (
         SignatureSolve.objects.filter(team=team)
         .select_related("challenge", "solved_by_user")
         .order_by("-solved_at", "-solve_id")
     ):
-        items.append({
-            "source_type": "SIGNATURE",
-            "signature_id": str(row.challenge_id),
-            "challenge_title": row.challenge.title,
-            "earned_score": num(row.earned_score),
-            "earned_mileage": 0,
-            "is_extra_dice_granted": False,
-            "solved_by": (
-                {
-                    "user_id": str(row.solved_by_user_id),
-                    "nickname": row.solved_by_user.nickname,
-                }
-                if row.solved_by_user_id
-                else None
-            ),
-            "solved_at": row.solved_at,
-        })
+        items.append(
+            {
+                "source_type": "SIGNATURE",
+                "signature_id": str(row.challenge_id),
+                "challenge_title": row.challenge.title,
+                "earned_score": num(row.earned_score),
+                "earned_mileage": 0,
+                "is_extra_dice_granted": False,
+                "solved_by": (
+                    {
+                        "user_id": str(row.solved_by_user_id),
+                        "nickname": row.solved_by_user.nickname,
+                    }
+                    if row.solved_by_user_id
+                    else None
+                ),
+                "solved_at": row.solved_at,
+            }
+        )
 
     # 두 목록을 solved_at 최신순으로 병합(파이썬 정렬은 안정적이라 동시각이면 기존 순서 유지).
     items.sort(key=lambda s: s["solved_at"], reverse=True)

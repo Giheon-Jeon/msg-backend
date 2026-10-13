@@ -43,29 +43,48 @@ class MergeOpenedChallengesMigrationTests(TransactionTestCase):
         solved_at = opened_at + timedelta(minutes=2)
         cases = []
 
-        for has_access, solved in ((False, False), (False, True), (True, False), (True, True)):
+        for has_access, solved in (
+            (False, False),
+            (False, True),
+            (True, False),
+            (True, True),
+        ):
             cell = Cell.objects.create(
-                cell_index=len(cases) + 1, type="CHALLENGE", name="migration-cell",
+                cell_index=len(cases) + 1,
+                type="CHALLENGE",
+                name="migration-cell",
             )
             challenge = Challenge.objects.create(
-                title=f"migration-{has_access}-{solved}", category="WEB",
-                difficulty="EASY", score=1000, flag_hash="a" * 64,
+                title=f"migration-{has_access}-{solved}",
+                category="WEB",
+                difficulty="EASY",
+                score=1000,
+                flag_hash="a" * 64,
             )
             BoardChallenge.objects.create(
-                challenge=challenge, challenge_number=len(cases) + 1, club_name="migration-club",
+                challenge=challenge,
+                challenge_number=len(cases) + 1,
+                club_name="migration-club",
             )
             opened = OpenedChallenge.objects.create(
-                team=team, challenge=challenge, cell_index=cell.pk,
+                team=team,
+                challenge=challenge,
+                cell_index=cell.pk,
                 solve_deadline_at=opened_at + timedelta(minutes=15),
             )
             OpenedChallenge.objects.filter(pk=opened.pk).update(opened_at=opened_at)
             access = None
             if has_access:
-                access = Access.objects.create(team=team, challenge=challenge, source_cell=cell)
+                access = Access.objects.create(
+                    team=team, challenge=challenge, source_cell=cell
+                )
                 Access.objects.filter(pk=access.pk).update(opened_at=board_opened_at)
             if solved:
                 solve = Solve.objects.create(
-                    team=team, challenge=challenge, earned_score=1000, earned_mileage=30,
+                    team=team,
+                    challenge=challenge,
+                    earned_score=1000,
+                    earned_mileage=30,
                 )
                 Solve.objects.filter(pk=solve.pk).update(solved_at=solved_at)
             cases.append((challenge.pk, cell.pk, access.pk if access else None, solved))
@@ -81,7 +100,9 @@ class MergeOpenedChallengesMigrationTests(TransactionTestCase):
                 self.assertEqual(access.source_cell_id, cell_id)
                 self.assertEqual(access.status, "CLEARED" if solved else "OPENED")
                 self.assertEqual(access.cleared_at, solved_at if solved else None)
-                self.assertEqual(access.opened_at, board_opened_at if access_id else opened_at)
+                self.assertEqual(
+                    access.opened_at, board_opened_at if access_id else opened_at
+                )
                 if access_id:
                     self.assertEqual(access.pk, access_id)
 
@@ -97,7 +118,9 @@ class MergeOpenedChallengesMigrationTests(TransactionTestCase):
             self.assertEqual(item["club_name"], "migration-club")
             self.assertEqual(item["is_solved"], solved)
             self.assertEqual(item["solved_at"], solved_at if solved else None)
-            self.assertEqual(item["opened_at"], board_opened_at if access_id else opened_at)
+            self.assertEqual(
+                item["opened_at"], board_opened_at if access_id else opened_at
+            )
 
     def test_missing_board_metadata_stops_before_changes_and_can_be_repaired(self):
         Team = self.old_apps.get_model("accounts", "Team")
@@ -114,30 +137,47 @@ class MergeOpenedChallengesMigrationTests(TransactionTestCase):
         # Include a valid row first, and missing metadata both with and without
         # legacy rows / existing board accesses. No access may be silently lost.
         for index, (has_legacy, has_access, has_meta) in enumerate(
-            ((True, False, True), (True, False, False),
-             (True, True, False), (False, True, False)), start=1,
+            (
+                (True, False, True),
+                (True, False, False),
+                (True, True, False),
+                (False, True, False),
+            ),
+            start=1,
         ):
-            cell = Cell.objects.create(cell_index=index, type="CHALLENGE", name=str(index))
+            cell = Cell.objects.create(
+                cell_index=index, type="CHALLENGE", name=str(index)
+            )
             challenge = Challenge.objects.create(
-                title=f"metadata-{index}", category="WEB", difficulty="EASY",
-                score=1000, flag_hash="a" * 64,
+                title=f"metadata-{index}",
+                category="WEB",
+                difficulty="EASY",
+                score=1000,
+                flag_hash="a" * 64,
             )
             if has_legacy:
                 opened = OpenedChallenge.objects.create(
-                    team=team, challenge=challenge, cell_index=cell.pk,
+                    team=team,
+                    challenge=challenge,
+                    cell_index=cell.pk,
                     solve_deadline_at=opened_at + timedelta(minutes=15),
                 )
                 OpenedChallenge.objects.filter(pk=opened.pk).update(opened_at=opened_at)
             if has_access:
                 Access.objects.create(team=team, challenge=challenge, source_cell=cell)
-            Solve.objects.create(team=team, challenge=challenge, earned_score=1000, earned_mileage=30)
+            Solve.objects.create(
+                team=team, challenge=challenge, earned_score=1000, earned_mileage=30
+            )
             if has_meta:
-                BoardChallenge.objects.create(challenge=challenge, challenge_number=index)
+                BoardChallenge.objects.create(
+                    challenge=challenge, challenge_number=index
+                )
             else:
                 missing_ids.append(challenge.pk)
                 # Also repair on assertion failure so cleanup can restore the schema.
                 self.addCleanup(
-                    BoardChallenge.objects.get_or_create, challenge_id=challenge.pk,
+                    BoardChallenge.objects.get_or_create,
+                    challenge_id=challenge.pk,
                     defaults={"challenge_number": index, "club_name": "repaired-club"},
                 )
 
@@ -147,15 +187,22 @@ class MergeOpenedChallengesMigrationTests(TransactionTestCase):
             MigrationExecutor(connection).migrate(self.migrate_to)
         for challenge_id in missing_ids:
             self.assertIn(str(challenge_id), str(error.exception))
-        self.assertEqual(list(Access.objects.order_by("pk").values()), original_accesses)
-        self.assertEqual(list(OpenedChallenge.objects.order_by("pk").values()), original_opened)
+        self.assertEqual(
+            list(Access.objects.order_by("pk").values()), original_accesses
+        )
+        self.assertEqual(
+            list(OpenedChallenge.objects.order_by("pk").values()), original_opened
+        )
         self.assertNotIn(
-            self.migrate_to[0], MigrationExecutor(connection).loader.applied_migrations,
+            self.migrate_to[0],
+            MigrationExecutor(connection).loader.applied_migrations,
         )
 
         for index, challenge_id in enumerate(missing_ids, start=2):
             BoardChallenge.objects.create(
-                challenge_id=challenge_id, challenge_number=index, club_name="repaired-club",
+                challenge_id=challenge_id,
+                challenge_number=index,
+                club_name="repaired-club",
             )
         MigrationExecutor(connection).migrate(self.migrate_to)
         # 현재 모델을 사용하는 서비스 호출 전에 DB 스키마도 최신 상태로 복원한다.

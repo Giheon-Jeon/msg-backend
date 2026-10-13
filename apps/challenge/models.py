@@ -20,8 +20,12 @@ class Challenge(models.Model):
         MEDIUM = "MEDIUM"
         HARD = "HARD"
 
-    challenge_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    challenge_slug = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    challenge_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    challenge_slug = models.CharField(
+        max_length=100, unique=True, null=True, blank=True
+    )
     title = models.CharField(max_length=200)
     category = models.CharField(max_length=20, choices=CategoryType.choices)
     difficulty = models.CharField(max_length=20, choices=DifficultyType.choices)
@@ -44,8 +48,12 @@ class Challenge(models.Model):
 
 class Solve(models.Model):
     solve_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    team = models.ForeignKey("accounts.Team", on_delete=models.CASCADE, related_name="solves")
-    challenge = models.ForeignKey(Challenge, on_delete=models.CASCADE, related_name="solves")
+    team = models.ForeignKey(
+        "accounts.Team", on_delete=models.CASCADE, related_name="solves"
+    )
+    challenge = models.ForeignKey(
+        Challenge, on_delete=models.CASCADE, related_name="solves"
+    )
     solved_by_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -61,7 +69,9 @@ class Solve(models.Model):
     class Meta:
         db_table = "solves"
         constraints = [
-            models.UniqueConstraint(fields=["team", "challenge"], name="unique_team_challenge_solve"),
+            models.UniqueConstraint(
+                fields=["team", "challenge"], name="unique_team_challenge_solve"
+            ),
         ]
         indexes = [
             models.Index(fields=["solved_by_user"]),
@@ -75,8 +85,12 @@ class FlagSubmission(models.Model):
         ALREADY_SOLVED = "ALREADY_SOLVED"
         TOO_MANY_ATTEMPTS = "TOO_MANY_ATTEMPTS"
 
-    submission_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    team = models.ForeignKey("accounts.Team", on_delete=models.CASCADE, related_name="flag_submissions")
+    submission_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    team = models.ForeignKey(
+        "accounts.Team", on_delete=models.CASCADE, related_name="flag_submissions"
+    )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -84,7 +98,9 @@ class FlagSubmission(models.Model):
         null=True,
         related_name="flag_submissions",
     )
-    challenge = models.ForeignKey(Challenge, on_delete=models.CASCADE, related_name="flag_submissions")
+    challenge = models.ForeignKey(
+        Challenge, on_delete=models.CASCADE, related_name="flag_submissions"
+    )
     submitted_flag_hash = models.CharField(max_length=255)
     result = models.CharField(max_length=30, choices=SubmissionResult.choices)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -99,8 +115,12 @@ class FlagSubmission(models.Model):
 
 
 class FlagSubmissionLock(models.Model):
-    team = models.ForeignKey("accounts.Team", on_delete=models.CASCADE, related_name="flag_locks")
-    challenge = models.ForeignKey(Challenge, on_delete=models.CASCADE, related_name="flag_locks")
+    team = models.ForeignKey(
+        "accounts.Team", on_delete=models.CASCADE, related_name="flag_locks"
+    )
+    challenge = models.ForeignKey(
+        Challenge, on_delete=models.CASCADE, related_name="flag_locks"
+    )
     failed_count = models.IntegerField(default=0)
     locked_until = models.DateTimeField(blank=True, null=True)
     last_failed_at = models.DateTimeField(blank=True, null=True)
@@ -109,7 +129,9 @@ class FlagSubmissionLock(models.Model):
     class Meta:
         db_table = "flag_submission_locks"
         constraints = [
-            models.UniqueConstraint(fields=["team", "challenge"], name="unique_flag_submission_lock"),
+            models.UniqueConstraint(
+                fields=["team", "challenge"], name="unique_flag_submission_lock"
+            ),
         ]
         indexes = [
             models.Index(fields=["locked_until"]),

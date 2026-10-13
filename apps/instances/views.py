@@ -89,8 +89,7 @@ class InstanceCreateView(APIView):
             replaced_instance_id = scheduler_data.get("replaced_instance_id")
             if replaced_instance_id:
                 replaced_instance = (
-                    Instance.objects
-                    .select_for_update()
+                    Instance.objects.select_for_update()
                     .filter(instance_id=replaced_instance_id, user=user)
                     .first()
                 )
@@ -127,15 +126,25 @@ class InstanceDeleteView(APIView):
         with transaction.atomic():
             lock_instance_user(request.user)
 
-            instance = Instance.objects.select_for_update().filter(instance_id=instance_id).first()
+            instance = (
+                Instance.objects.select_for_update()
+                .filter(instance_id=instance_id)
+                .first()
+            )
             if instance is None:
-                return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404)
+                return fail(
+                    "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
+                )
 
             if instance.user_id != request.user.user_id:
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in DELETABLE_INSTANCE_STATUSES:
-                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 요청을 처리할 수 없습니다.", 400)
+                return fail(
+                    "INVALID_STATE_TRANSITION",
+                    "현재 상태에서는 요청을 처리할 수 없습니다.",
+                    400,
+                )
 
             try:
                 call_scheduler_delete(instance, scheduler_auth_header(request))
@@ -163,23 +172,30 @@ class InstanceResetView(APIView):
             lock_instance_user(request.user)
 
             instance = (
-                Instance.objects
-                .select_for_update()
+                Instance.objects.select_for_update()
                 .select_related("challenge")
                 .filter(instance_id=instance_id)
                 .first()
             )
             if instance is None:
-                return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404)
+                return fail(
+                    "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
+                )
 
             if instance.user_id != request.user.user_id:
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in RESETTABLE_INSTANCE_STATUSES:
-                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 요청을 처리할 수 없습니다.", 400)
+                return fail(
+                    "INVALID_STATE_TRANSITION",
+                    "현재 상태에서는 요청을 처리할 수 없습니다.",
+                    400,
+                )
 
             try:
-                scheduler_data = call_scheduler_reset(instance, scheduler_auth_header(request))
+                scheduler_data = call_scheduler_reset(
+                    instance, scheduler_auth_header(request)
+                )
             except SchedulerError as error:
                 return fail(error.code, error.message, error.status_code)
 
@@ -213,26 +229,37 @@ class InstanceExtendView(APIView):
             lock_instance_user(request.user)
 
             instance = (
-                Instance.objects
-                .select_for_update()
+                Instance.objects.select_for_update()
                 .select_related("challenge")
                 .filter(instance_id=instance_id)
                 .first()
             )
             if instance is None:
-                return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404)
+                return fail(
+                    "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
+                )
 
             if instance.user_id != request.user.user_id:
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in EXTENDABLE_INSTANCE_STATUSES:
-                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 요청을 처리할 수 없습니다.", 400)
+                return fail(
+                    "INVALID_STATE_TRANSITION",
+                    "현재 상태에서는 요청을 처리할 수 없습니다.",
+                    400,
+                )
 
             if instance.extend_count >= MAX_EXTEND_COUNT:
-                return fail("HARD_TIMEOUT_EXCEEDED", "더 이상 인스턴스 시간을 연장할 수 없습니다.", 400)
+                return fail(
+                    "HARD_TIMEOUT_EXCEEDED",
+                    "더 이상 인스턴스 시간을 연장할 수 없습니다.",
+                    400,
+                )
 
             try:
-                scheduler_data = call_scheduler_extend(instance, scheduler_auth_header(request))
+                scheduler_data = call_scheduler_extend(
+                    instance, scheduler_auth_header(request)
+                )
             except SchedulerError as error:
                 return fail(error.code, error.message, error.status_code)
 
@@ -257,17 +284,23 @@ class MyInstanceView(APIView):
     def get(self, request):
         # 현재 access token의 user_id 기준 활성 인스턴스 한 개를 Scheduler와 동기화해 조회한다
         try:
-            scheduler_data = call_scheduler_active(request.user, scheduler_auth_header(request))
+            scheduler_data = call_scheduler_active(
+                request.user, scheduler_auth_header(request)
+            )
         except SchedulerError as error:
             if error.code == "INSTANCE_NOT_FOUND":
                 return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
 
             return fail(error.code, error.message, error.status_code)
 
-        instance = Instance.objects.filter(
-            instance_id=scheduler_data.get("instance_id"),
-            user=request.user,
-        ).select_related("challenge").first()
+        instance = (
+            Instance.objects.filter(
+                instance_id=scheduler_data.get("instance_id"),
+                user=request.user,
+            )
+            .select_related("challenge")
+            .first()
+        )
         if instance is None:
             team = getattr(request.user, "team", None)
             challenge = Challenge.objects.filter(

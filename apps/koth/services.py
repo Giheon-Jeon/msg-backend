@@ -23,7 +23,12 @@ class ScoreFetchError(Exception):
 
 
 def format_utc(value):
-    return value.astimezone(dt_timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        value.astimezone(dt_timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def parse_period(value):
@@ -38,7 +43,9 @@ def parse_period(value):
 
 def _request_scores(challenge, period):
     if not challenge.score_api_url or not challenge.score_api_token_env:
-        raise ScoreFetchError("score API URL or token environment variable is not configured")
+        raise ScoreFetchError(
+            "score API URL or token environment variable is not configured"
+        )
     token = os.getenv(challenge.score_api_token_env)
     if not token:
         raise ScoreFetchError("score API token environment variable is empty")
@@ -48,19 +55,29 @@ def _request_scores(challenge, period):
     except ValueError as exc:
         raise ScoreFetchError("score API URL is invalid") from exc
     if (
-        parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname
-        or parsed_url.username is not None or parsed_url.password is not None
-        or parsed_url.fragment or port == 0
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.fragment
+        or port == 0
     ):
-        raise ScoreFetchError("score API URL must be HTTP(S), without credentials or a fragment")
+        raise ScoreFetchError(
+            "score API URL must be HTTP(S), without credentials or a fragment"
+        )
     query = [
-        (key, value) for key, value in urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(
+            parsed_url.query, keep_blank_values=True
+        )
         if key not in {"period_id", "scored_at"}
     ]
     query.extend((key, format_utc(period)) for key in ("period_id", "scored_at"))
     path = f"{parsed_url.path or '/'}?{urllib.parse.urlencode(query)}"
     connection_class = (
-        http.client.HTTPSConnection if parsed_url.scheme == "https" else http.client.HTTPConnection
+        http.client.HTTPSConnection
+        if parsed_url.scheme == "https"
+        else http.client.HTTPConnection
     )
     # Without an explicit port, http.client reparses an unbracketed IPv6 host
     # as host:port. Always supply the scheme's default when the URL omits it.
@@ -71,7 +88,9 @@ def _request_scores(challenge, period):
         connection = connection_class(parsed_url.hostname, port, timeout=10)
         # Use only HTTP(S) and never follow redirects with the internal token.
         connection.request(
-            "GET", path, headers={"X-KOTH-Internal-Token": token, "Accept": "application/json"},
+            "GET",
+            path,
+            headers={"X-KOTH-Internal-Token": token, "Accept": "application/json"},
         )
         with connection.getresponse() as response:
             if response.status != 200:
@@ -119,15 +138,23 @@ def _validated_results(challenge, period, payload):
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
             raise ScoreFetchError("score result has invalid required fields") from exc
         if rank < 1 or not metric.is_finite() or team_id in seen_teams:
-            raise ScoreFetchError("score result contains an invalid rank, metric, or duplicate team")
+            raise ScoreFetchError(
+                "score result contains an invalid rank, metric, or duplicate team"
+            )
         seen_teams.add(team_id)
         parsed.append((team_id, rank))
 
     _validate_rank_sequence(parsed)
-    teams = Team.objects.in_bulk([team_id for team_id, _ in parsed], field_name="team_id")
+    teams = Team.objects.in_bulk(
+        [team_id for team_id, _ in parsed], field_name="team_id"
+    )
     if len(teams) != len(parsed):
         raise ScoreFetchError("score response contains an unknown team")
-    results = [(teams[team_id], rank) for team_id, rank in parsed if not teams[team_id].is_banned]
+    results = [
+        (teams[team_id], rank)
+        for team_id, rank in parsed
+        if not teams[team_id].is_banned
+    ]
     return results
 
 
@@ -139,7 +166,9 @@ def _validate_rank_sequence(results):
     while index < len(ranks):
         rank = ranks[index]
         if rank != expected_rank:
-            raise ScoreFetchError("score result ranks must use standard competition ranking")
+            raise ScoreFetchError(
+                "score result ranks must use standard competition ranking"
+            )
         end = index + 1
         while end < len(ranks) and ranks[end] == rank:
             end += 1
@@ -153,7 +182,10 @@ def _awards(results):
         grouped[rank].append(team)
     awards = []
     for rank, teams in grouped.items():
-        occupied_points = sum(PERIOD_POINTS.get(position, 0) for position in range(rank, rank + len(teams)))
+        occupied_points = sum(
+            PERIOD_POINTS.get(position, 0)
+            for position in range(rank, rank + len(teams))
+        )
         amount = Decimal(occupied_points // len(teams))
         awards.extend((team, amount) for team in teams if amount > 0)
     return awards
@@ -177,10 +209,16 @@ def poll_challenge_period(challenge, period):
     except ScoreFetchError as exc:
         # Another poll may have committed while this request was in flight.
         # Keep APPLIED terminal with a conditional update under the DB row lock.
-        updated = KothScorePeriod.objects.filter(pk=record.pk).exclude(
-            status=KothScorePeriodStatus.APPLIED,
-        ).update(
-            status=KothScorePeriodStatus.FAILED, last_error=str(exc), updated_at=timezone.now()
+        updated = (
+            KothScorePeriod.objects.filter(pk=record.pk)
+            .exclude(
+                status=KothScorePeriodStatus.APPLIED,
+            )
+            .update(
+                status=KothScorePeriodStatus.FAILED,
+                last_error=str(exc),
+                updated_at=timezone.now(),
+            )
         )
         if not updated:
             return False
@@ -203,10 +241,22 @@ def poll_challenge_period(challenge, period):
         record.response_payload = payload
         record.last_error = ""
         record.applied_at = timezone.now()
-        record.save(update_fields=["status", "response_payload", "last_error", "applied_at", "updated_at"])
+        record.save(
+            update_fields=[
+                "status",
+                "response_payload",
+                "last_error",
+                "applied_at",
+                "updated_at",
+            ]
+        )
     return True
 
 
 def current_period(now=None):
-    now = (now or timezone.now()).astimezone(dt_timezone.utc).replace(second=0, microsecond=0)
+    now = (
+        (now or timezone.now())
+        .astimezone(dt_timezone.utc)
+        .replace(second=0, microsecond=0)
+    )
     return now - timedelta(minutes=now.minute % 15)

@@ -31,8 +31,15 @@ class KothClub(models.Model):
 
 
 class KothChallenge(models.Model):
-    koth_challenge_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    club = models.ForeignKey(KothClub, on_delete=models.PROTECT, db_column="club_id", related_name="challenges")
+    koth_challenge_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    club = models.ForeignKey(
+        KothClub,
+        on_delete=models.PROTECT,
+        db_column="club_id",
+        related_name="challenges",
+    )
     title = models.CharField(max_length=100)
     challenge_url = models.URLField(
         max_length=500,
@@ -41,7 +48,11 @@ class KothChallenge(models.Model):
         validators=[URLValidator(schemes=["http", "https"])],
         help_text="참가자가 접속할 HTTP(S) 문제 주소. 미정이면 비워 두세요.",
     )
-    status = models.CharField(max_length=20, choices=KothChallengeStatus.choices, default=KothChallengeStatus.SCHEDULED)
+    status = models.CharField(
+        max_length=20,
+        choices=KothChallengeStatus.choices,
+        default=KothChallengeStatus.SCHEDULED,
+    )
     open_group = models.PositiveSmallIntegerField()
     opened_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -68,7 +79,12 @@ class KothChallenge(models.Model):
 
 
 class KothTeamToken(models.Model):
-    team = models.OneToOneField("accounts.Team", on_delete=models.CASCADE, db_column="team_id", related_name="koth_team_token")
+    team = models.OneToOneField(
+        "accounts.Team",
+        on_delete=models.CASCADE,
+        db_column="team_id",
+        related_name="koth_team_token",
+    )
     token_hash = models.CharField(max_length=64, unique=True)
     issued_at = models.DateTimeField(auto_now_add=True)
 
@@ -78,8 +94,18 @@ class KothTeamToken(models.Model):
 
 class KothSolve(models.Model):
     solve_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    team = models.ForeignKey("accounts.Team", on_delete=models.CASCADE, db_column="team_id", related_name="koth_solves")
-    challenge = models.ForeignKey(KothChallenge, on_delete=models.CASCADE, db_column="koth_challenge_id", related_name="solves")
+    team = models.ForeignKey(
+        "accounts.Team",
+        on_delete=models.CASCADE,
+        db_column="team_id",
+        related_name="koth_solves",
+    )
+    challenge = models.ForeignKey(
+        KothChallenge,
+        on_delete=models.CASCADE,
+        db_column="koth_challenge_id",
+        related_name="solves",
+    )
     earned_score = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     solved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -94,8 +120,7 @@ class KothSolve(models.Model):
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(earned_score__lte=0)
-                    | models.Q(solved_at__isnull=False)
+                    models.Q(earned_score__lte=0) | models.Q(solved_at__isnull=False)
                 ),
                 name="ck_koth_positive_score_has_solved_at",
             ),
@@ -104,10 +129,21 @@ class KothSolve(models.Model):
 
 
 class KothScorePeriod(models.Model):
-    score_period_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    challenge = models.ForeignKey(KothChallenge, on_delete=models.CASCADE, db_column="koth_challenge_id", related_name="score_periods")
+    score_period_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    challenge = models.ForeignKey(
+        KothChallenge,
+        on_delete=models.CASCADE,
+        db_column="koth_challenge_id",
+        related_name="score_periods",
+    )
     period_id = models.DateTimeField()
-    status = models.CharField(max_length=20, choices=KothScorePeriodStatus.choices, default=KothScorePeriodStatus.PENDING)
+    status = models.CharField(
+        max_length=20,
+        choices=KothScorePeriodStatus.choices,
+        default=KothScorePeriodStatus.PENDING,
+    )
     attempts = models.PositiveSmallIntegerField(default=0)
     response_payload = models.JSONField(null=True, blank=True)
     last_error = models.TextField(blank=True)
@@ -117,14 +153,24 @@ class KothScorePeriod(models.Model):
 
     class Meta:
         db_table = "koth_score_periods"
-        constraints = [models.UniqueConstraint(fields=["challenge", "period_id"], name="uq_koth_score_period")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["challenge", "period_id"], name="uq_koth_score_period"
+            )
+        ]
         indexes = [models.Index(fields=["status", "period_id"])]
 
 
 class KothTokenVerificationAttempt(models.Model):
     """원문 토큰을 남기지 않는 문제별 검증 실패 집계용 운영 로그."""
+
     attempt_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    challenge = models.ForeignKey(KothChallenge, on_delete=models.CASCADE, db_column="koth_challenge_id", related_name="token_verification_attempts")
+    challenge = models.ForeignKey(
+        KothChallenge,
+        on_delete=models.CASCADE,
+        db_column="koth_challenge_id",
+        related_name="token_verification_attempts",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

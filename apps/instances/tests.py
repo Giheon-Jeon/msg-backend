@@ -103,7 +103,9 @@ class InstanceLockTests(TestCase):
             {"login_id": "instance-user", "password": "pw1234"},
             format="json",
         )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def create_challenge(self, title, is_published=True):
         return Challenge.objects.create(
@@ -135,8 +137,12 @@ class InstanceLockTests(TestCase):
             "challenge_id": str(self.challenge.challenge_id),
             "status": "REQUESTED",
             "service_url": None,
-            "expires_at": (timezone.now() + datetime.timedelta(minutes=120)).isoformat(),
-            "hard_expires_at": (timezone.now() + datetime.timedelta(minutes=180)).isoformat(),
+            "expires_at": (
+                timezone.now() + datetime.timedelta(minutes=120)
+            ).isoformat(),
+            "hard_expires_at": (
+                timezone.now() + datetime.timedelta(minutes=180)
+            ).isoformat(),
             "replaced_instance_id": None,
         }
 
@@ -220,7 +226,7 @@ class InstanceLockTests(TestCase):
             "endpoints": ENDPOINTS,
         }
 
-        res = self.client.get("/api/v1/teams/me/instance")
+        res = self.client.get("/api/v1/teams/me/instances")
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["data"]["host"], ENDPOINTS[0]["service_url"])
@@ -246,6 +252,38 @@ class InstanceLockTests(TestCase):
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.data["code"], "CHALLENGE_LOCKED")
         call_scheduler_create.assert_not_called()
+
+    @patch("apps.instances.views.call_scheduler_active")
+    def test_active_lookup_hides_endpoints_until_scheduler_reports_running(self, scheduler_active):
+        instance = Instance.objects.create(
+            user=self.user,
+            team=self.team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+            release=self.release,
+            host=ENDPOINTS[0]["service_url"],
+            endpoints=ENDPOINTS,
+        )
+
+        for scheduler_status in (InstanceStatus.PROVISIONING, InstanceStatus.FAILED):
+            with self.subTest(status=scheduler_status):
+                scheduler_active.return_value = {
+                    "instance_id": str(instance.instance_id),
+                    "challenge_id": str(self.challenge.challenge_id),
+                    "status": scheduler_status,
+                    "service_url": ENDPOINTS[0]["service_url"],
+                    "endpoints": ENDPOINTS,
+                }
+
+                response = self.client.get("/api/v1/teams/me/instances")
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["data"]["status"], scheduler_status)
+                self.assertIsNone(response.data["data"]["host"])
+                self.assertEqual(response.data["data"]["ports"], [])
+                self.assertEqual(response.data["data"]["endpoints"], [])
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, scheduler_status)
 
     @patch("apps.instances.views.call_scheduler_create")
     def test_instance_create_rejects_unopened_challenge(self, call_scheduler_create):
@@ -356,3 +394,55 @@ class InstanceLockTests(TestCase):
             old_instance.delete_reason,
             DeleteReason.REPLACED_BY_NEW_INSTANCE,
         )
+
+    @patch("apps.instances.services.scheduler_request")
+    def test_reset_keeps_original_release_healthcheck_after_activation(self, scheduler_request):
+        healthcheck = {"container": "web", "port": 8080, "path": "/health"}
+        self.release.healthcheck = healthcheck
+        self.release.save(update_fields=["healthcheck"])
+        old_instance = Instance.objects.create(
+            user=self.user,
+            team=self.team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+            release=self.release,
+        )
+        new_release = ChallengeRelease.objects.create(
+            challenge=self.challenge,
+            version=2,
+            registry_revision=2,
+            challenge_slug=self.release.challenge_slug,
+            cpu_millicores=500,
+            memory_mib=512,
+            ephemeral_storage_mib=1024,
+            isolation_profile="WEB",
+            source_ref="refs/heads/main",
+            healthcheck={"container": "web", "port": 8080, "path": "/new-health"},
+        )
+        ChallengeRuntimeConfig.objects.filter(challenge=self.challenge).update(
+            current_release=new_release,
+        )
+        new_instance_id = uuid.uuid4()
+        scheduler_request.return_value = {
+            "instance_id": str(new_instance_id),
+            "challenge_id": str(self.challenge.challenge_id),
+            "registry_revision": self.release.registry_revision,
+            "status": "REQUESTED",
+        }
+
+        response = self.client.post(
+            f"/api/v1/instances/{old_instance.instance_id}/reset",
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        scheduler_request.assert_called_once_with(
+            "POST",
+            f"/api/instances/{old_instance.instance_id}/reset",
+            body={},
+            auth_header="Bearer test-scheduler-token",
+        )
+        new_instance = Instance.objects.select_related("release").get(pk=new_instance_id)
+        self.assertEqual(new_instance.release_id, self.release.pk)
+        self.assertEqual(new_instance.release.healthcheck, healthcheck)
+        self.assertEqual(new_instance.replaced_instance_id, old_instance.pk)

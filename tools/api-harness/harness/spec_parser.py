@@ -14,6 +14,7 @@
    ## Request / ## Response / ## Error 섹션) - method/path를 페이지 속성에서 미리 알고
    있을 때 parse_endpoint_block()을 헤딩 분리 없이 바로 호출해서 사용 (notion_source.py 참고)
 """
+
 from __future__ import annotations
 
 import json
@@ -38,7 +39,15 @@ TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
 
 STATUS_CODE_RE = re.compile(r"\b([1-5]\d{2})\b\s*(?:[A-Za-z ]{0,20})?")
 
-AUTH_KEYWORDS = ("authorization", "bearer", "인증", "토큰", "api-key", "apikey", "x-auth")
+AUTH_KEYWORDS = (
+    "authorization",
+    "bearer",
+    "인증",
+    "토큰",
+    "api-key",
+    "apikey",
+    "x-auth",
+)
 
 REQUEST_HINT = ("request", "요청", "req body", "param")
 RESPONSE_HINT = ("response", "응답", "res body")
@@ -81,7 +90,9 @@ def _extract_json_objects(block: str) -> list[tuple[int, dict]]:
     return results
 
 
-def _walk_values(obj, parent_key: str | None = None, out: list | None = None) -> list[tuple[str, str | None, object]]:
+def _walk_values(
+    obj, parent_key: str | None = None, out: list | None = None
+) -> list[tuple[str, str | None, object]]:
     """JSON 객체를 재귀적으로 훑어서 (leaf키, 상위키, 값) 목록을 만든다.
 
     배열 안 객체는 배열 자체의 키(parent_key)를 그대로 물려받는다
@@ -155,13 +166,12 @@ def _extract_table_fields(block: str) -> dict[str, str]:
     rows = TABLE_ROW_RE.findall(block)
     header_idx = None
     name_col = type_col = None
-    parsed_rows = [
-        [c.strip() for c in r.split("|")] for r in rows
-    ]
+    parsed_rows = [[c.strip() for c in r.split("|")] for r in rows]
     for idx, cols in enumerate(parsed_rows):
         lowered = [c.lower() for c in cols]
         if header_idx is None and any(
-            k in " ".join(lowered) for k in ("필드", "field", "name", "파라미터", "param")
+            k in " ".join(lowered)
+            for k in ("필드", "field", "name", "파라미터", "param")
         ):
             for ci, c in enumerate(lowered):
                 if any(k in c for k in ("필드", "field", "name", "파라미터", "param")):
@@ -178,13 +188,21 @@ def _extract_table_fields(block: str) -> dict[str, str]:
             fname = cols[name_col].strip("` ")
             if not fname or fname.startswith("-"):
                 continue
-            ftype = cols[type_col].strip("` ") if type_col is not None and type_col < len(cols) else ""
+            ftype = (
+                cols[type_col].strip("` ")
+                if type_col is not None and type_col < len(cols)
+                else ""
+            )
             fields[fname] = ftype
     return fields
 
 
-def parse_endpoint_block(team: str, title: str, method: str, path: str, block: str) -> Endpoint:
-    ep = Endpoint(team=team, method=method, path=path, source_title=title, raw_block=block)
+def parse_endpoint_block(
+    team: str, title: str, method: str, path: str, block: str
+) -> Endpoint:
+    ep = Endpoint(
+        team=team, method=method, path=path, source_title=title, raw_block=block
+    )
 
     # JSON 예시 본문은 status/auth 스캔 대상에서 제외 (예: message_id: 100 이 status code로 오탐되는 것 방지)
     prose = JSON_FENCE_RE.sub("", block)
@@ -209,13 +227,15 @@ def parse_endpoint_block(team: str, title: str, method: str, path: str, block: s
     # JSON 예시 -> request/response/error 섹션별 분류
     for pos, obj in _extract_json_objects(block):
         section = _nearest_section(block, pos)
-        nearby = block[max(0, pos - 60):pos]
+        nearby = block[max(0, pos - 60) : pos]
         is_header_block = bool(HEADER_NEARBY_RE.search(nearby))
 
         if section == "request" and is_header_block:
             continue  # Request Header(Authorization 등 전송 계층 필드)는 필드/값 수집 대상에서 제외
 
-        ep.field_values.extend(_walk_values(obj))  # enum 값 검증 등을 위해 섹션 무관하게 전부 수집
+        ep.field_values.extend(
+            _walk_values(obj)
+        )  # enum 값 검증 등을 위해 섹션 무관하게 전부 수집
 
         if section == "request":
             for k, v in obj.items():
@@ -238,7 +258,8 @@ def parse_endpoint_block(team: str, title: str, method: str, path: str, block: s
                 # JSON 본문에 status가 없고 'Status Code: 401' / '401 Unauthorized' 처럼
                 # 프로즈에만 상태코드가 있는 경우, 가장 가까운 4xx/5xx 상태줄로 보강한다.
                 preceding_error_codes = [
-                    c for line_pos, c in _status_line_positions(block)
+                    c
+                    for line_pos, c in _status_line_positions(block)
                     if line_pos < pos and c[0] in "45"
                 ]
                 if preceding_error_codes:
@@ -247,7 +268,11 @@ def parse_endpoint_block(team: str, title: str, method: str, path: str, block: s
                 ep.error_code_status_pairs.append((code_val, str(status_val)))
             if isinstance(status_val, (int, str)):
                 code = str(status_val)
-                if code.isdigit() and code not in ep.status_codes and 100 <= int(code) <= 599:
+                if (
+                    code.isdigit()
+                    and code not in ep.status_codes
+                    and 100 <= int(code) <= 599
+                ):
                     ep.status_codes.append(code)
 
     # 표 기반 request 필드 (JSON 예시가 없는 경우 보강)
@@ -285,7 +310,15 @@ def _parse_table_style(team: str, title: str, text: str) -> list[Endpoint]:
         method = cols[method_col].strip("` ").upper()
         path = cols[path_col].strip("` ")
         if re.fullmatch(METHOD_RE, method) and path.startswith("/"):
-            endpoints.append(Endpoint(team=team, method=method, path=path, source_title=title, raw_block=" | ".join(cols)))
+            endpoints.append(
+                Endpoint(
+                    team=team,
+                    method=method,
+                    path=path,
+                    source_title=title,
+                    raw_block=" | ".join(cols),
+                )
+            )
     return endpoints
 
 

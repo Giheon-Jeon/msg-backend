@@ -16,7 +16,14 @@ from apps.board.models import (
 
 @admin.register(Cell)
 class CellAdmin(admin.ModelAdmin):
-    list_display = ["cell_index", "type", "difficulty", "name"]
+    list_display = ["cell_index", "type", "difficulty", "line_number", "name"]
+    readonly_fields = ["cell_index", "type", "line_number"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ChanceCard)
@@ -47,13 +54,30 @@ class BoardChallengeAdmin(admin.ModelAdmin):
 
 @admin.register(TeamChallengeAccess)
 class TeamChallengeAccessAdmin(admin.ModelAdmin):
-    list_display = ["id", "team", "challenge", "source_cell", "status", "opened_at", "cleared_at"]
+    list_display = [
+        "id",
+        "team",
+        "challenge",
+        "source_cell",
+        "status",
+        "opened_at",
+        "cleared_at",
+    ]
     list_filter = ["status"]
 
 
 @admin.register(TeamCellCandidate)
 class TeamCellCandidateAdmin(admin.ModelAdmin):
-    list_display = ["id", "team", "cell", "challenge", "display_order", "status", "offered_at", "selected_at"]
+    list_display = [
+        "id",
+        "team",
+        "cell",
+        "challenge",
+        "display_order",
+        "status",
+        "offered_at",
+        "selected_at",
+    ]
     list_filter = ["status"]
 
 

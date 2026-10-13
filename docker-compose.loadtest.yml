@@ -1,0 +1,101 @@
+name: msg-loadtest
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: msg_loadtest
+      POSTGRES_USER: msg_loadtest
+      POSTGRES_PASSWORD: msg_loadtest_local_only
+    ports:
+      - "55432:5432"
+    volumes:
+      - loadtest-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U msg_loadtest -d msg_loadtest"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DJANGO_SECRET_KEY: loadtest-django-secret-local-only
+      JWT_SECRET: loadtest-jwt-secret-local-only
+      KOTH_TEAM_TOKEN_SECRET: loadtest-koth-secret-local-only
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: "*"
+      POSTGRES_DB: msg_loadtest
+      POSTGRES_USER: msg_loadtest
+      POSTGRES_PASSWORD: msg_loadtest_local_only
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/1
+      LOADTEST_CONFIRM_ISOLATED: "YES"
+      LOADTEST_WORKERS: ${LOADTEST_WORKERS:-2}
+      LOADTEST_THREADS: ${LOADTEST_THREADS:-1}
+      LOADTEST_WORKER_CLASS: ${LOADTEST_WORKER_CLASS:-sync}
+      LOADTEST_KEEPALIVE: ${LOADTEST_KEEPALIVE:-2}
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        exec gunicorn config.wsgi:application
+        --bind 0.0.0.0:8080
+        --workers $${LOADTEST_WORKERS}
+        --worker-class $${LOADTEST_WORKER_CLASS}
+        --threads $${LOADTEST_THREADS}
+        --keep-alive $${LOADTEST_KEEPALIVE}
+        --timeout 30
+        --access-logfile -
+        --error-logfile -
+    cpus: ${APP_CPUS:-2.0}
+    mem_limit: ${APP_MEMORY:-2g}
+    ports:
+      - "58080:8080"
+    volumes:
+      - ./loadtests:/app/loadtests
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.Request('http://127.0.0.1:8080/healthz', headers={'X-Forwarded-Proto':'https'}); urllib.request.urlopen(r, timeout=3)\""]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  loadgen:
+    build:
+      context: loadtests
+      dockerfile: Dockerfile
+    environment:
+      TARGET_HOST: http://api:8080
+      LOADTEST_DATA: /loadtests/runtime/accounts.csv
+      LOADTEST_META: /loadtests/runtime/meta.json
+      LOADTEST_SCENARIO: ${LOADTEST_SCENARIO:-board_get}
+    volumes:
+      - ./loadtests:/loadtests
+    depends_on:
+      api:
+        condition: service_healthy
+    entrypoint: ["locust", "-f", "/loadtests/locustfile.py"]
+    profiles: ["loadgen"]
+
+volumes:
+  loadtest-postgres:

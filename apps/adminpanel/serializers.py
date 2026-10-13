@@ -21,7 +21,9 @@ class ChallengeCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200)
     category = serializers.ChoiceField(choices=Challenge.CategoryType.choices)
     difficulty = serializers.ChoiceField(choices=Challenge.DifficultyType.choices)
-    description = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    description = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
     flag = serializers.CharField(trim_whitespace=False, write_only=True)
     initial_score = serializers.IntegerField(
         min_value=0,
@@ -42,6 +44,56 @@ class ChallengeCreateSerializer(serializers.Serializer):
                 f"정의되지 않은 필드입니다: {', '.join(sorted(unknown_fields))}"
             )
         if attrs["initial_score"] < attrs["minimum_score"]:
+            raise serializers.ValidationError(
+                "initial_score는 minimum_score 이상이어야 합니다"
+            )
+        return attrs
+
+
+class ChallengeUpdateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200, required=False)
+    category = serializers.ChoiceField(
+        choices=Challenge.CategoryType.choices,
+        required=False,
+    )
+    difficulty = serializers.ChoiceField(
+        choices=Challenge.DifficultyType.choices,
+        required=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
+    flag = serializers.CharField(
+        trim_whitespace=False,
+        write_only=True,
+        required=False,
+    )
+    initial_score = serializers.IntegerField(
+        min_value=0,
+        max_value=9_999_999_999,
+        required=False,
+    )
+    minimum_score = serializers.IntegerField(
+        min_value=0,
+        max_value=9_999_999_999,
+        required=False,
+    )
+    decay = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data) - set(self.fields)
+        if unknown_fields:
+            raise serializers.ValidationError(
+                f"정의되지 않은 필드입니다: {', '.join(sorted(unknown_fields))}"
+            )
+        if not attrs:
+            raise serializers.ValidationError("수정할 항목이 하나 이상 필요합니다")
+
+        initial_score = attrs.get("initial_score", self.instance.initial_score)
+        minimum_score = attrs.get("minimum_score", self.instance.minimum_score)
+        if initial_score < minimum_score:
             raise serializers.ValidationError(
                 "initial_score는 minimum_score 이상이어야 합니다"
             )

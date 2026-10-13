@@ -13,112 +13,264 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('accounts', '0001_initial'),
-        ('koth', '0005_kothchallenge_challenge_url'),
+        ("accounts", "0001_initial"),
+        ("koth", "0005_kothchallenge_challenge_url"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='SignatureChallenge',
+            name="SignatureChallenge",
             fields=[
-                ('signature_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('title', models.CharField(max_length=200)),
-                ('description', models.TextField()),
-                ('score', models.DecimalField(decimal_places=2, default=Decimal('300.00'), max_digits=12, validators=[django.core.validators.MinValueValidator(Decimal('0.01'))])),
-                ('flag_hash', models.CharField(max_length=255)),
-                ('is_published', models.BooleanField(default=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('club', models.OneToOneField(db_column='club_id', on_delete=django.db.models.deletion.PROTECT, related_name='signature_challenge', to='koth.kothclub')),
+                (
+                    "signature_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("title", models.CharField(max_length=200)),
+                ("description", models.TextField()),
+                (
+                    "score",
+                    models.DecimalField(
+                        decimal_places=2,
+                        default=Decimal("300.00"),
+                        max_digits=12,
+                        validators=[
+                            django.core.validators.MinValueValidator(Decimal("0.01"))
+                        ],
+                    ),
+                ),
+                ("flag_hash", models.CharField(max_length=255)),
+                ("is_published", models.BooleanField(default=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "club",
+                    models.OneToOneField(
+                        db_column="club_id",
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="signature_challenge",
+                        to="koth.kothclub",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'signature_challenges',
-                'ordering': ['club__name'],
+                "db_table": "signature_challenges",
+                "ordering": ["club__name"],
             },
         ),
         migrations.CreateModel(
-            name='SignatureFlagSubmission',
+            name="SignatureFlagSubmission",
             fields=[
-                ('submission_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('submitted_flag_hash', models.CharField(max_length=255)),
-                ('result', models.CharField(choices=[('CORRECT', 'Correct'), ('INCORRECT', 'Incorrect'), ('ALREADY_SOLVED', 'Already Solved'), ('TOO_MANY_ATTEMPTS', 'Too Many Attempts')], max_length=30)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('challenge', models.ForeignKey(db_column='signature_id', on_delete=django.db.models.deletion.PROTECT, related_name='flag_submissions', to='signature.signaturechallenge')),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, related_name='signature_flag_submissions', to='accounts.team')),
-                ('user', models.ForeignKey(blank=True, db_column='user_id', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='signature_flag_submissions', to=settings.AUTH_USER_MODEL)),
+                (
+                    "submission_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("submitted_flag_hash", models.CharField(max_length=255)),
+                (
+                    "result",
+                    models.CharField(
+                        choices=[
+                            ("CORRECT", "Correct"),
+                            ("INCORRECT", "Incorrect"),
+                            ("ALREADY_SOLVED", "Already Solved"),
+                            ("TOO_MANY_ATTEMPTS", "Too Many Attempts"),
+                        ],
+                        max_length=30,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "challenge",
+                    models.ForeignKey(
+                        db_column="signature_id",
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="flag_submissions",
+                        to="signature.signaturechallenge",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="signature_flag_submissions",
+                        to="accounts.team",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="user_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="signature_flag_submissions",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'signature_flag_submissions',
+                "db_table": "signature_flag_submissions",
             },
         ),
         migrations.CreateModel(
-            name='SignatureSolve',
+            name="SignatureSolve",
             fields=[
-                ('solve_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('earned_score', models.DecimalField(decimal_places=2, max_digits=12)),
-                ('solved_at', models.DateTimeField(auto_now_add=True)),
-                ('challenge', models.ForeignKey(db_column='signature_id', on_delete=django.db.models.deletion.PROTECT, related_name='solves', to='signature.signaturechallenge')),
-                ('solved_by_user', models.ForeignKey(blank=True, db_column='solved_by_user_id', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='signature_solves', to=settings.AUTH_USER_MODEL)),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, related_name='signature_solves', to='accounts.team')),
+                (
+                    "solve_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("earned_score", models.DecimalField(decimal_places=2, max_digits=12)),
+                ("solved_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "challenge",
+                    models.ForeignKey(
+                        db_column="signature_id",
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="solves",
+                        to="signature.signaturechallenge",
+                    ),
+                ),
+                (
+                    "solved_by_user",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="solved_by_user_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="signature_solves",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="signature_solves",
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'signature_solves',
+                "db_table": "signature_solves",
             },
         ),
         migrations.CreateModel(
-            name='SignatureSubmissionLock',
+            name="SignatureSubmissionLock",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('failed_count', models.PositiveSmallIntegerField(default=0)),
-                ('locked_until', models.DateTimeField(blank=True, null=True)),
-                ('last_failed_at', models.DateTimeField(blank=True, null=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('challenge', models.ForeignKey(db_column='signature_id', on_delete=django.db.models.deletion.CASCADE, related_name='submission_locks', to='signature.signaturechallenge')),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, related_name='signature_submission_locks', to='accounts.team')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("failed_count", models.PositiveSmallIntegerField(default=0)),
+                ("locked_until", models.DateTimeField(blank=True, null=True)),
+                ("last_failed_at", models.DateTimeField(blank=True, null=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "challenge",
+                    models.ForeignKey(
+                        db_column="signature_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="submission_locks",
+                        to="signature.signaturechallenge",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="signature_submission_locks",
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'signature_submission_locks',
+                "db_table": "signature_submission_locks",
             },
         ),
         migrations.AddConstraint(
-            model_name='signaturechallenge',
-            constraint=models.CheckConstraint(condition=models.Q(('score__gt', 0)), name='ck_signature_challenge_score_positive'),
+            model_name="signaturechallenge",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("score__gt", 0)),
+                name="ck_signature_challenge_score_positive",
+            ),
         ),
         migrations.AddIndex(
-            model_name='signatureflagsubmission',
-            index=models.Index(fields=['team', 'challenge', 'created_at'], name='signature_f_team_id_f615bf_idx'),
+            model_name="signatureflagsubmission",
+            index=models.Index(
+                fields=["team", "challenge", "created_at"],
+                name="signature_f_team_id_f615bf_idx",
+            ),
         ),
         migrations.AddIndex(
-            model_name='signatureflagsubmission',
-            index=models.Index(fields=['challenge', 'result'], name='signature_f_signatu_4bd703_idx'),
+            model_name="signatureflagsubmission",
+            index=models.Index(
+                fields=["challenge", "result"], name="signature_f_signatu_4bd703_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='signatureflagsubmission',
-            index=models.Index(fields=['user', 'created_at'], name='signature_f_user_id_9d7e8f_idx'),
+            model_name="signatureflagsubmission",
+            index=models.Index(
+                fields=["user", "created_at"], name="signature_f_user_id_9d7e8f_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='signaturesolve',
-            index=models.Index(fields=['challenge', 'solved_at'], name='signature_s_signatu_e4c0b8_idx'),
+            model_name="signaturesolve",
+            index=models.Index(
+                fields=["challenge", "solved_at"], name="signature_s_signatu_e4c0b8_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='signaturesolve',
-            index=models.Index(fields=['solved_by_user'], name='signature_s_solved__a68e24_idx'),
+            model_name="signaturesolve",
+            index=models.Index(
+                fields=["solved_by_user"], name="signature_s_solved__a68e24_idx"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='signaturesolve',
-            constraint=models.UniqueConstraint(fields=('team', 'challenge'), name='uq_signature_solve_team_challenge'),
+            model_name="signaturesolve",
+            constraint=models.UniqueConstraint(
+                fields=("team", "challenge"), name="uq_signature_solve_team_challenge"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='signaturesolve',
-            constraint=models.CheckConstraint(condition=models.Q(('earned_score__gt', 0)), name='ck_signature_solve_score_positive'),
+            model_name="signaturesolve",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("earned_score__gt", 0)),
+                name="ck_signature_solve_score_positive",
+            ),
         ),
         migrations.AddIndex(
-            model_name='signaturesubmissionlock',
-            index=models.Index(fields=['locked_until'], name='signature_s_locked__220a4b_idx'),
+            model_name="signaturesubmissionlock",
+            index=models.Index(
+                fields=["locked_until"], name="signature_s_locked__220a4b_idx"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='signaturesubmissionlock',
-            constraint=models.UniqueConstraint(fields=('team', 'challenge'), name='uq_signature_lock_team_challenge'),
+            model_name="signaturesubmissionlock",
+            constraint=models.UniqueConstraint(
+                fields=("team", "challenge"), name="uq_signature_lock_team_challenge"
+            ),
         ),
     ]

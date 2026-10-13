@@ -6,13 +6,28 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('adminpanel', '0001_initial'),
+        ("adminpanel", "0001_initial"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='adminevent',
-            name='type',
-            field=models.CharField(choices=[('TEAM_BANNED', 'Team Banned'), ('TEAM_UNBANNED', 'Team Unbanned'), ('MILEAGE_ADJUSTED', 'Mileage Adjusted'), ('PAYMENT_REFUNDED', 'Payment Refunded'), ('INSTANCE_FAILED', 'Instance Failed'), ('INSTANCE_FORCED', 'Instance Forced'), ('CHALLENGE_VISIBILITY_CHANGED', 'Challenge Visibility Changed'), ('SETTINGS_CHANGED', 'Settings Changed'), ('DICE_ADJUSTED', 'Dice Adjusted'), ('BOARD_POSITION_MOVED', 'Board Position Moved'), ('CELL_STATUS_CHANGED', 'Cell Status Changed')], max_length=40),
+            model_name="adminevent",
+            name="type",
+            field=models.CharField(
+                choices=[
+                    ("TEAM_BANNED", "Team Banned"),
+                    ("TEAM_UNBANNED", "Team Unbanned"),
+                    ("MILEAGE_ADJUSTED", "Mileage Adjusted"),
+                    ("PAYMENT_REFUNDED", "Payment Refunded"),
+                    ("INSTANCE_FAILED", "Instance Failed"),
+                    ("INSTANCE_FORCED", "Instance Forced"),
+                    ("CHALLENGE_VISIBILITY_CHANGED", "Challenge Visibility Changed"),
+                    ("SETTINGS_CHANGED", "Settings Changed"),
+                    ("DICE_ADJUSTED", "Dice Adjusted"),
+                    ("BOARD_POSITION_MOVED", "Board Position Moved"),
+                    ("CELL_STATUS_CHANGED", "Cell Status Changed"),
+                ],
+                max_length=40,
+            ),
         ),
     ]

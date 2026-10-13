@@ -16,7 +16,9 @@ def exclude_start_from_completion(apps, schema_editor):
         .filter(consumed_count=35)
         .values("team_id")
     )
-    State.objects.using(alias).filter(team_id__in=completed_teams).update(next_dice_reset_at=None)
+    State.objects.using(alias).filter(team_id__in=completed_teams).update(
+        next_dice_reset_at=None
+    )
 
 
 class Migration(migrations.Migration):

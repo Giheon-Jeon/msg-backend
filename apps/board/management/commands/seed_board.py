@@ -32,6 +32,20 @@ SPECIAL_CELLS = {
     30: (Cell.CellType.CHANCE, "황금열쇠"),
 }
 
+BOARD_LINES = (
+    (2, 3, 4, 5, 6),
+    (8, 9, 10, 11, 12),
+    (13, 14, 15, 17, 18),
+    (19, 20, 22, 23, 24),
+    (26, 27, 28, 29, 31),
+    (32, 33, 34, 35, 36),
+)
+CELL_LINE_NUMBERS = {
+    cell_index: line_number
+    for line_number, cell_indexes in enumerate(BOARD_LINES, start=1)
+    for cell_index in cell_indexes
+}
+
 DIFFICULTY_COUNTS = {
     Cell.Difficulty.HARD: 6,
     Cell.Difficulty.MEDIUM: 12,
@@ -150,7 +164,9 @@ CHANCE_CARDS = [
 
 
 class Command(BaseCommand):
-    help = "Seed the fixed board, 30 demo challenges, and the single default team state."
+    help = (
+        "Seed the fixed board, 30 demo challenges, and the single default team state."
+    )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -172,9 +188,16 @@ class Command(BaseCommand):
                 f"challenge cells({len(challenge_indexes)}) != difficulty map({len(CELL_DIFFICULTY)})"
             )
             return
+        if set(challenge_indexes) != set(CELL_LINE_NUMBERS):
+            self.stderr.write(
+                f"challenge cells({len(challenge_indexes)}) != line map({len(CELL_LINE_NUMBERS)})"
+            )
+            return
 
         for difficulty, count in DIFFICULTY_COUNTS.items():
-            club_total = sum(len(clubs) for clubs in CATEGORY_CLUB_ASSIGNMENTS[difficulty].values())
+            club_total = sum(
+                len(clubs) for clubs in CATEGORY_CLUB_ASSIGNMENTS[difficulty].values()
+            )
             if club_total != count:
                 self.stderr.write(
                     f"{difficulty} club assignment count({club_total}) != difficulty count({count})"
@@ -194,6 +217,7 @@ class Command(BaseCommand):
                     cell_index=cell_index,
                     type=Cell.CellType.CHALLENGE,
                     difficulty=difficulty,
+                    line_number=CELL_LINE_NUMBERS[cell_index],
                     name=f"문제({DIFFICULTY_LABELS[difficulty]})",
                 )
             )
@@ -203,7 +227,11 @@ class Command(BaseCommand):
         challenges = []
         board_metas = []
         challenge_number = 1
-        for difficulty in [Cell.Difficulty.EASY, Cell.Difficulty.MEDIUM, Cell.Difficulty.HARD]:
+        for difficulty in [
+            Cell.Difficulty.EASY,
+            Cell.Difficulty.MEDIUM,
+            Cell.Difficulty.HARD,
+        ]:
             label = DIFFICULTY_LABELS[difficulty]
             for category, clubs in CATEGORY_CLUB_ASSIGNMENTS[difficulty].items():
                 for club_name in clubs:
@@ -249,12 +277,16 @@ class Command(BaseCommand):
         )
 
         if not User.objects.filter(login_id="demo_leader").exists():
-            leader = User(login_id="demo_leader", nickname="데모팀장", team=team, is_leader=True)
+            leader = User(
+                login_id="demo_leader", nickname="데모팀장", team=team, is_leader=True
+            )
             validate_password("demo1234", user=leader)
             leader.set_password("demo1234")
             leader.save()
         if not User.objects.filter(login_id="demo_member").exists():
-            member = User(login_id="demo_member", nickname="데모팀원", team=team, is_leader=False)
+            member = User(
+                login_id="demo_member", nickname="데모팀원", team=team, is_leader=False
+            )
             validate_password("demo1234", user=member)
             member.set_password("demo1234")
             member.save()

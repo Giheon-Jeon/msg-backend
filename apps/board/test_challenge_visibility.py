@@ -35,7 +35,9 @@ class BoardChallengeVisibilityTests(TestCase):
         )
         cls.team = Team.objects.create(team_name="visibility-team")
         cls.user = User.objects.create_user(
-            login_id="visibility-user", nickname="player", team=cls.team,
+            login_id="visibility-user",
+            nickname="player",
+            team=cls.team,
         )
         cls.state = TeamBoardState.objects.create(team=cls.team, position=cls.cell)
         cls.challenges = []
@@ -60,7 +62,8 @@ class BoardChallengeVisibilityTests(TestCase):
         response = self.client.get("/api/v1/board/cell/current")
         self.assertEqual(response.status_code, 200)
         return [
-            row["challenge_id"] for row in response.json()["data"]["challenge_candidates"]
+            row["challenge_id"]
+            for row in response.json()["data"]["challenge_candidates"]
         ]
 
     def open_challenge(self, challenge_id, key="visibility-open"):
@@ -77,7 +80,8 @@ class BoardChallengeVisibilityTests(TestCase):
 
         self.assertEqual(self.candidate_ids(), [str(published.pk)])
         self.assertEqual(
-            TeamCellCandidate.objects.filter(team=self.team).count(), 1,
+            TeamCellCandidate.objects.filter(team=self.team).count(),
+            1,
         )
 
     def test_no_candidates_when_all_challenges_are_unpublished(self):
@@ -90,7 +94,8 @@ class BoardChallengeVisibilityTests(TestCase):
         original_ids = self.candidate_ids()
         hidden_id = original_ids[1]
         hidden_candidate = TeamCellCandidate.objects.get(
-            team=self.team, challenge_id=hidden_id,
+            team=self.team,
+            challenge_id=hidden_id,
         )
         retained = list(
             TeamCellCandidate.objects.filter(team=self.team)
@@ -103,13 +108,16 @@ class BoardChallengeVisibilityTests(TestCase):
 
         self.assertEqual(len(refreshed_ids), 3)
         self.assertNotIn(hidden_id, refreshed_ids)
-        self.assertFalse(TeamCellCandidate.objects.filter(pk=hidden_candidate.pk).exists())
+        self.assertFalse(
+            TeamCellCandidate.objects.filter(pk=hidden_candidate.pk).exists()
+        )
         for candidate_id, display_order in retained:
             candidate = TeamCellCandidate.objects.get(pk=candidate_id)
             self.assertEqual(candidate.display_order, display_order)
             self.assertIn(str(candidate.challenge_id), refreshed_ids)
         replacement = TeamCellCandidate.objects.get(
-            team=self.team, display_order=hidden_candidate.display_order,
+            team=self.team,
+            display_order=hidden_candidate.display_order,
         )
         self.assertNotIn(str(replacement.challenge_id), original_ids)
         self.assertEqual(self.candidate_ids(), refreshed_ids)
@@ -136,7 +144,9 @@ class BoardChallengeVisibilityTests(TestCase):
         self.assertFalse(TeamChallengeAccess.objects.filter(team=self.team).exists())
         self.state.refresh_from_db()
         self.assertIsNone(self.state.active_challenge_access_id)
-        candidate = TeamCellCandidate.objects.get(team=self.team, challenge_id=challenge_id)
+        candidate = TeamCellCandidate.objects.get(
+            team=self.team, challenge_id=challenge_id
+        )
         self.assertEqual(candidate.status, TeamCellCandidate.Status.OFFERED)
         self.assertIsNone(candidate.selected_at)
 
@@ -144,7 +154,9 @@ class BoardChallengeVisibilityTests(TestCase):
         reopened = self.open_challenge(challenge_id)
         self.assertEqual(reopened.status_code, 200)
         self.assertEqual(
-            TeamChallengeAccess.objects.filter(team=self.team, challenge_id=challenge_id).count(),
+            TeamChallengeAccess.objects.filter(
+                team=self.team, challenge_id=challenge_id
+            ).count(),
             1,
         )
 
@@ -152,7 +164,9 @@ class BoardChallengeVisibilityTests(TestCase):
         challenge_id = self.candidate_ids()[0]
         opened = self.open_challenge(challenge_id)
         self.assertEqual(opened.status_code, 200)
-        access = TeamChallengeAccess.objects.get(team=self.team, challenge_id=challenge_id)
+        access = TeamChallengeAccess.objects.get(
+            team=self.team, challenge_id=challenge_id
+        )
         Challenge.objects.filter(pk=challenge_id).update(is_published=False)
 
         replayed = self.open_challenge(challenge_id)
@@ -167,7 +181,8 @@ class BoardChallengeVisibilityTests(TestCase):
         self.assertEqual(detail.status_code, 200)
         submitted = self.client.post(
             f"/api/v1/challenges/{challenge_id}/submit",
-            {"flag": "MSG{visibility}"}, format="json",
+            {"flag": "MSG{visibility}"},
+            format="json",
         )
         self.assertEqual(submitted.status_code, 200)
         access.refresh_from_db()
@@ -175,7 +190,9 @@ class BoardChallengeVisibilityTests(TestCase):
 
         other_team = Team.objects.create(team_name="unopened-team")
         other_user = User.objects.create_user(
-            login_id="unopened-user", nickname="other", team=other_team,
+            login_id="unopened-user",
+            nickname="other",
+            team=other_team,
         )
         TeamBoardState.objects.create(team=other_team, position=self.cell)
         self.client.force_authenticate(other_user)
@@ -196,18 +213,25 @@ class BoardChallengeVisibilityConcurrencyTests(TransactionTestCase):
         cache.clear()
         Cell.objects.create(cell_index=1, type=Cell.CellType.START, name="Start")
         cell = Cell.objects.create(
-            cell_index=2, type=Cell.CellType.CHALLENGE,
-            difficulty=Cell.Difficulty.EASY, name="Challenge",
+            cell_index=2,
+            type=Cell.CellType.CHALLENGE,
+            difficulty=Cell.Difficulty.EASY,
+            name="Challenge",
         )
         team = Team.objects.create(team_name="concurrent-visibility-team")
         user = User.objects.create_user(
-            login_id="concurrent-visibility-user", nickname="player", team=team,
+            login_id="concurrent-visibility-user",
+            nickname="player",
+            team=team,
         )
         state = TeamBoardState.objects.create(team=team, position=cell)
         challenge = Challenge.objects.create(
-            title="Concurrent challenge", category=Challenge.CategoryType.WEB,
+            title="Concurrent challenge",
+            category=Challenge.CategoryType.WEB,
             difficulty=Challenge.DifficultyType.EASY,
-            score=100, flag_hash="unused", is_published=True,
+            score=100,
+            flag_hash="unused",
+            is_published=True,
         )
         BoardChallenge.objects.create(challenge=challenge, challenge_number=1)
         client = APIClient()
@@ -229,7 +253,8 @@ class BoardChallengeVisibilityConcurrencyTests(TransactionTestCase):
                 worker_client.force_authenticate(user)
                 return worker_client.post(
                     "/api/v1/board/cell/open",
-                    {"challenge_id": str(challenge.pk)}, format="json",
+                    {"challenge_id": str(challenge.pk)},
+                    format="json",
                     HTTP_IDEMPOTENCY_KEY="concurrent-visibility-open",
                 )
             finally:
@@ -254,7 +279,9 @@ class BoardChallengeVisibilityConcurrencyTests(TransactionTestCase):
                     time.sleep(0.01)
             response = future.result(timeout=15)
 
-        self.assertTrue(blocked, "The selection must wait for the visibility transaction")
+        self.assertTrue(
+            blocked, "The selection must wait for the visibility transaction"
+        )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["code"], "CHALLENGE_NOT_CANDIDATE")
         self.assertFalse(TeamChallengeAccess.objects.filter(team=team).exists())

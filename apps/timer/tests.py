@@ -57,7 +57,7 @@ class TimerAPITest(APITestCase):
         self.assertEqual(response.data["code"], "SUCCESS")
         self.assertIsNone(response.data["data"])
 
-    def test_response_has_exact_fields(self): #응답 필드 전체 확인
+    def test_response_has_exact_fields(self):  # 응답 필드 전체 확인
         now = timezone.now()
         Contest.objects.create(
             name="test",
@@ -80,9 +80,8 @@ class TimerAPITest(APITestCase):
             },
         )
 
-
-    #remaining_seconds와 remaining_display 확인
-    def test_remaining_seconds_and_display_match(self): 
+    # remaining_seconds와 remaining_display 확인
+    def test_remaining_seconds_and_display_match(self):
         now = timezone.now()
         Contest.objects.create(
             name="test",
@@ -94,7 +93,7 @@ class TimerAPITest(APITestCase):
         self.assertAlmostEqual(data["remaining_seconds"], 7200, delta=5)
         self.assertRegex(data["remaining_display"], r"^01:59:\d{2}$")
 
-    #RUNNING + 0초 해결
+    # RUNNING + 0초 해결
     def test_running_at_exact_end_time_is_ended(self):
         now = timezone.now()
         contest = Contest.objects.create(
@@ -107,7 +106,7 @@ class TimerAPITest(APITestCase):
         self.assertEqual(snapshot["status"], "ENDED")
         self.assertEqual(snapshot["remaining_seconds"], 0)
 
-    #제약 위반 테스트
+    # 제약 위반 테스트
     def test_second_active_contest_rejected(self):
         now = timezone.now()
         Contest.objects.create(
@@ -134,7 +133,7 @@ class TimerAPITest(APITestCase):
                 is_active=False,
             )
 
-    #BEFORE 상태에서 remaining_seconds와 remaining_display 값을 확인하는 테스트
+    # BEFORE 상태에서 remaining_seconds와 remaining_display 값을 확인하는 테스트
     def test_before_returns_total_contest_duration(self):
         now = timezone.now()
         Contest.objects.create(
@@ -147,7 +146,6 @@ class TimerAPITest(APITestCase):
         self.assertEqual(data["remaining_seconds"], 43200)
         self.assertEqual(data["remaining_display"], "12:00:00")
         self.assertAlmostEqual(data["time_until_start"], 3600, delta=5)
-
 
     def test_server_time_matches_remaining(self):
         now = timezone.now()

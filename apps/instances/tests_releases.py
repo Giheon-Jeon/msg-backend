@@ -24,6 +24,24 @@ DIGEST_B = "b" * 64
 DIGEST_C = "c" * 64
 
 
+INVALID_HEALTHCHECKS = [
+    {},
+    [],
+    {"port": 8080, "path": "/health"},
+    {"container": "app", "path": "/health"},
+    {"container": "app", "port": 8080},
+    {"container": "missing", "port": 8080, "path": "/health"},
+    {"container": ["app"], "port": 8080, "path": "/health"},
+    {"container": "app", "port": 9090, "path": "/health"},
+    {"container": "app", "port": True, "path": "/health"},
+    {"container": "app", "port": "8080", "path": "/health"},
+    *[{"container": "app", "port": 8080, "path": path} for path in (
+        "", "health", "/" + "x" * 1024, "/health check", "/health\n", "/health\x00", "/health\x7f",
+        "/" + "\U0001f680" * 512,
+    )],
+]
+
+
 def artifact_payload(revision=1, slug="web-basic", containers=None, note=None, **overrides):
     # 공급망 artifact-v2.json 형식의 등록 요청 body를 만든다
     if containers is None:
@@ -122,6 +140,54 @@ class ReleaseTestBase(TestCase):
 
 
 class ReleaseRegisterTests(ReleaseTestBase):
+    def test_register_rejects_image_slug_or_container_mismatch(self):
+        self.auth("root")
+        for image_path in ("other-problem/app", "web-basic/other"):
+            with self.subTest(image_path=image_path):
+                body = artifact_payload()
+                body["artifact"]["workload"]["containers"][0]["image"] = (
+                    f"ghcr.io/msg-ctf/challenges/{image_path}@sha256:{DIGEST_A}"
+                )
+                response = self.client.post(self.base_url, body, format="json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "RELEASE_INVALID")
+                self.assertFalse(ChallengeRelease.objects.exists())
+
+    def test_register_accepts_utf16_healthcheck_length_limit(self):
+        self.auth("root")
+        healthcheck = {"container": "app", "port": 8080, "path": "/" + "\U0001f680" * 511 + "x"}
+        response = self.register(healthcheck=healthcheck)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["data"]["is_deployable"])
+        self.assertEqual(self.activate(response.data["data"]["release_id"]).status_code, 200)
+
+    def test_register_rejects_invalid_healthcheck_without_saving_release(self):
+        self.auth("root")
+        for location in ("artifact", "workload"):
+            for healthcheck in INVALID_HEALTHCHECKS:
+                with self.subTest(location=location, healthcheck=healthcheck):
+                    body = artifact_payload()
+                    target = body["artifact"] if location == "artifact" else body["artifact"]["workload"]
+                    target["healthcheck"] = healthcheck
+                    response = self.client.post(self.base_url, body, format="json")
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(response.data["code"], "RELEASE_INVALID")
+                    self.assertFalse(ChallengeRelease.objects.exists())
+
+    def test_register_accepts_private_healthcheck_port_and_path_length_limit(self):
+        self.auth("root")
+        healthcheck = {"container": "app", "port": 9090, "path": "/" + "x" * 1023}
+        response = self.register(
+            healthcheck=healthcheck,
+            containers=[{
+                "name": "app",
+                "image": f"ghcr.io/msg-ctf/challenges/web-basic/app@sha256:{DIGEST_A}",
+                "ports": [{"port": 8080, "public": True}, {"port": 9090, "public": False}],
+            }],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ChallengeRelease.objects.get().healthcheck, healthcheck)
+
     def test_register_creates_version_one(self):
         # 첫 등록은 version 1로 만들어지고 배포에는 영향이 없다
         self.auth("root")
@@ -263,7 +329,7 @@ class ReleaseRegisterTests(ReleaseTestBase):
                     "name": name,
                     "image": (
                         "ghcr.io/msg-ctf/challenges/web-basic/"
-                        f"app@sha256:{DIGEST_A}"
+                        f"{name}@sha256:{DIGEST_A}"
                     ),
                     "ports": [{"port": 8080, "public": True}],
                 }
@@ -358,6 +424,27 @@ class ReleaseRegisterTests(ReleaseTestBase):
 
 
 class ReleaseActivateTests(ReleaseTestBase):
+    def test_activate_rejects_invalid_stored_image_and_healthcheck(self):
+        self.auth("root")
+        release_id = self.register().data["data"]["release_id"]
+        container = ReleaseContainer.objects.get(release_id=release_id)
+        original_image = container.image_ref
+        for image_path in ("other-problem/app", "web-basic/other"):
+            with self.subTest(image_path=image_path):
+                container.image_ref = f"ghcr.io/msg-ctf/challenges/{image_path}@sha256:{DIGEST_A}"
+                container.save(update_fields=["image_ref"])
+                response = self.activate(release_id)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "RELEASE_NOT_DEPLOYABLE")
+                self.assertFalse(ChallengeRuntimeConfig.objects.exists())
+        container.image_ref = original_image
+        container.save(update_fields=["image_ref"])
+        ChallengeRelease.objects.filter(pk=release_id).update(
+            healthcheck={"container": "app", "port": 8080, "path": "/" + "\U0001f680" * 512},
+        )
+        self.assertEqual(self.activate(release_id).status_code, 400)
+        self.assertFalse(ChallengeRuntimeConfig.objects.exists())
+
     def test_activate_switches_current(self):
         # 전환하면 runtime_config 포인터가 바뀌고 직전 릴리스가 응답에 남는다
         self.auth("root")
@@ -743,6 +830,91 @@ class ReleaseInstanceCreateTests(ReleaseTestBase):
             challenge=self.challenge,
             source_cell=self.challenge_cell,
         )
+
+    @patch("apps.instances.services.scheduler_request")
+    def test_create_preserves_registered_healthcheck(self, scheduler_request):
+        healthcheck = {"container": "app", "port": 8080, "path": "/health"}
+        cases = (
+            ("artifact", healthcheck),
+            ("workload", healthcheck),
+            ("artifact", None),
+        )
+        for revision, (location, expected) in enumerate(cases, start=1):
+            with self.subTest(location=location, healthcheck=expected):
+                self.auth("root")
+                payload = artifact_payload(revision=revision)
+                target = payload["artifact"]
+                if location == "workload":
+                    target = target["workload"]
+                if expected is not None:
+                    target["healthcheck"] = expected
+                elif revision == 3:
+                    target["healthcheck"] = None
+
+                registered = self.client.post(self.base_url, payload, format="json")
+                self.assertEqual(registered.status_code, 200)
+                release_id = registered.data["data"]["release_id"]
+                release = ChallengeRelease.objects.get(pk=release_id)
+                self.assertEqual(release.healthcheck, expected)
+                self.assertEqual(self.activate(release_id).status_code, 200)
+
+                scheduler_request.return_value = {
+                    "instance_id": str(uuid.uuid4()),
+                    "status": "REQUESTED",
+                }
+                self.auth("player")
+                response = self.client.post(
+                    self.player_url,
+                    {"challenge_id": str(self.challenge.pk)},
+                    format="json",
+                )
+
+                self.assertEqual(response.status_code, 202)
+                body = scheduler_request.call_args.kwargs["body"]
+                self.assertEqual(body["registry_revision"], revision)
+                if expected is None:
+                    self.assertNotIn("healthcheck", body)
+                else:
+                    self.assertEqual(body["healthcheck"], expected)
+
+    @patch("apps.instances.services.scheduler_request")
+    def test_create_rejects_invalid_stored_healthcheck_before_scheduler(self, scheduler_request):
+        self.auth("root")
+        release_id = self.register().data["data"]["release_id"]
+        self.assertEqual(self.activate(release_id).status_code, 200)
+        self.auth("player")
+        for healthcheck in INVALID_HEALTHCHECKS:
+            # PostgreSQL JSONB cannot store NUL; registration rejection covers it.
+            if isinstance(healthcheck, dict) and "\x00" in healthcheck.get("path", ""):
+                continue
+            with self.subTest(healthcheck=healthcheck):
+                ChallengeRelease.objects.filter(pk=release_id).update(healthcheck=healthcheck)
+                response = self.client.post(
+                    self.player_url, {"challenge_id": str(self.challenge.pk)}, format="json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "RELEASE_NOT_DEPLOYABLE")
+                scheduler_request.assert_not_called()
+                self.assertFalse(Instance.objects.exists())
+
+    @patch("apps.instances.services.scheduler_request")
+    def test_create_rejects_invalid_stored_image_before_scheduler(self, scheduler_request):
+        self.auth("root")
+        release_id = self.register().data["data"]["release_id"]
+        self.assertEqual(self.activate(release_id).status_code, 200)
+        self.auth("player")
+        for image_path in ("other-problem/app", "web-basic/other"):
+            with self.subTest(image_path=image_path):
+                ReleaseContainer.objects.filter(release_id=release_id).update(
+                    image_ref=f"ghcr.io/msg-ctf/challenges/{image_path}@sha256:{DIGEST_A}",
+                )
+                response = self.client.post(
+                    self.player_url, {"challenge_id": str(self.challenge.pk)}, format="json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "RELEASE_NOT_DEPLOYABLE")
+                scheduler_request.assert_not_called()
+                self.assertFalse(Instance.objects.exists())
 
     def test_create_without_current_release_fails(self):
         # 활성 릴리스가 없으면 인스턴스를 만들 수 없다
@@ -1142,7 +1314,7 @@ class ReleaseInstanceCreateTests(ReleaseTestBase):
         }
 
         self.auth("player")
-        res = self.client.get("/api/v1/teams/me/instance")
+        res = self.client.get("/api/v1/teams/me/instances")
 
         self.assertEqual(res.status_code, 503)
         self.assertEqual(res.data["code"], "SCHEDULER_UNAVAILABLE")

@@ -1,4 +1,5 @@
 """Overlap recharge reads, solve rewards, and administrator dice adjustments."""
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
@@ -20,7 +21,10 @@ from apps.teams.models import MileageHistory
 
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locks")
-@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}, SECURE_SSL_REDIRECT=False)
+@override_settings(
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
+    SECURE_SSL_REDIRECT=False,
+)
 class DiceAdminConcurrencyTests(TransactionTestCase):
     def test_recharge_locks_before_solve_and_admin_adjustment(self):
         self.assert_three_requests_preserve_all_dice("status")
@@ -34,18 +38,33 @@ class DiceAdminConcurrencyTests(TransactionTestCase):
     def assert_three_requests_preserve_all_dice(self, first_action):
         cache.clear()
         team = Team.objects.create(team_name="three-way-dice")
-        user = User.objects.create_user(login_id="dice-player", nickname="player", team=team)
-        admin = User.objects.create_user(login_id="dice-admin", nickname="admin", role=Role.ADMIN)
-        Cell.objects.create(cell_index=1, type=Cell.CellType.START, name="start")
-        cell = Cell.objects.create(cell_index=2, type=Cell.CellType.CHALLENGE, name="challenge")
-        challenge = Challenge.objects.create(
-            title="three-way-dice", category="WEB", difficulty="EASY", score=1000,
-            flag_hash=hash_flag("MSG{three-way-dice}"), is_published=True,
+        user = User.objects.create_user(
+            login_id="dice-player", nickname="player", team=team
         )
-        access = TeamChallengeAccess.objects.create(team=team, challenge=challenge, source_cell=cell)
+        admin = User.objects.create_user(
+            login_id="dice-admin", nickname="admin", role=Role.ADMIN
+        )
+        Cell.objects.create(cell_index=1, type=Cell.CellType.START, name="start")
+        cell = Cell.objects.create(
+            cell_index=2, type=Cell.CellType.CHALLENGE, name="challenge"
+        )
+        challenge = Challenge.objects.create(
+            title="three-way-dice",
+            category="WEB",
+            difficulty="EASY",
+            score=1000,
+            flag_hash=hash_flag("MSG{three-way-dice}"),
+            is_published=True,
+        )
+        access = TeamChallengeAccess.objects.create(
+            team=team, challenge=challenge, source_cell=cell
+        )
         now = timezone.now()
         state = TeamBoardState.objects.create(
-            team=team, position=cell, active_challenge_access=access, dice_rolls_left=0,
+            team=team,
+            position=cell,
+            active_challenge_access=access,
+            dice_rolls_left=0,
             next_dice_reset_at=now - timedelta(seconds=1),
         )
         actions = ("status", "submit", "admin")
@@ -64,7 +83,11 @@ class DiceAdminConcurrencyTests(TransactionTestCase):
 
                 def synchronize(execute, sql, params, many, context):
                     nonlocal synchronized
-                    if synchronized or 'FROM "team_board_states"' not in sql or 'FOR UPDATE' not in sql:
+                    if (
+                        synchronized
+                        or 'FROM "team_board_states"' not in sql
+                        or "FOR UPDATE" not in sql
+                    ):
                         return execute(sql, params, many, context)
                     synchronized = True
                     if action == first_action:
@@ -72,7 +95,9 @@ class DiceAdminConcurrencyTests(TransactionTestCase):
                         first_locked.set()
                         for pending_action, event in waiting.items():
                             if not event.wait(timeout=10):
-                                raise AssertionError(f"{pending_action} never attempted the board lock")
+                                raise AssertionError(
+                                    f"{pending_action} never attempted the board lock"
+                                )
                         return result
                     waiting[action].set()
                     return execute(sql, params, many, context)
@@ -85,12 +110,14 @@ class DiceAdminConcurrencyTests(TransactionTestCase):
                     elif action == "submit":
                         response = client.post(
                             f"/api/v1/challenges/{challenge.pk}/submit",
-                            {"flag": "MSG{three-way-dice}"}, format="json",
+                            {"flag": "MSG{three-way-dice}"},
+                            format="json",
                         )
                     else:
                         response = client.post(
                             f"/api/v1/admin/teams/{team.pk}/board/dice",
-                            {"amount": 1, "reason": "concurrent reward"}, format="json",
+                            {"amount": 1, "reason": "concurrent reward"},
+                            format="json",
                         )
                 return action, response.status_code, response.data
             finally:

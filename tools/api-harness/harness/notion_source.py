@@ -6,6 +6,7 @@
 2) 오프라인 모드: 로컬 디렉토리 구조(팀원별 폴더 또는 파일)에서 .md 텍스트를 읽는다.
    - Notion 페이지를 export한 .md 파일을 그대로 사용하는 경우에도 이 모드를 쓰면 된다.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -40,19 +41,25 @@ def _get(url: str, token: str, params: dict | None = None) -> dict:
             time.sleep(float(resp.headers.get("Retry-After", "1")))
             continue
         if resp.status_code >= 400:
-            raise NotionError(f"Notion API 오류 {resp.status_code}: {resp.text[:300]} (url={url})")
+            raise NotionError(
+                f"Notion API 오류 {resp.status_code}: {resp.text[:300]} (url={url})"
+            )
         return resp.json()
     raise NotionError(f"Notion API 재시도 초과: {url}")
 
 
 def _post(url: str, token: str, json_body: dict | None = None) -> dict:
     for attempt in range(3):
-        resp = requests.post(url, headers=_headers(token), json=json_body or {}, timeout=30)
+        resp = requests.post(
+            url, headers=_headers(token), json=json_body or {}, timeout=30
+        )
         if resp.status_code == 429:
             time.sleep(float(resp.headers.get("Retry-After", "1")))
             continue
         if resp.status_code >= 400:
-            raise NotionError(f"Notion API 오류 {resp.status_code}: {resp.text[:300]} (url={url})")
+            raise NotionError(
+                f"Notion API 오류 {resp.status_code}: {resp.text[:300]} (url={url})"
+            )
         return resp.json()
     raise NotionError(f"Notion API 재시도 초과: {url}")
 
@@ -65,8 +72,12 @@ def query_database_pages(database_id: str, token: str) -> list[str]:
         body: dict = {"page_size": 100}
         if cursor:
             body["start_cursor"] = cursor
-        data = _post(f"{NOTION_API}/databases/{database_id}/query", token, json_body=body)
-        page_ids.extend(r["id"] for r in data.get("results", []) if r.get("object") == "page")
+        data = _post(
+            f"{NOTION_API}/databases/{database_id}/query", token, json_body=body
+        )
+        page_ids.extend(
+            r["id"] for r in data.get("results", []) if r.get("object") == "page"
+        )
         if not data.get("has_more"):
             break
         cursor = data.get("next_cursor")
@@ -85,7 +96,9 @@ def get_page_title(page_id: str, token: str) -> str:
     return page_id
 
 
-def get_page_endpoint_hint(page_id: str, token: str) -> tuple[str | None, str | None, str]:
+def get_page_endpoint_hint(
+    page_id: str, token: str
+) -> tuple[str | None, str | None, str]:
     """페이지 속성에서 (method, path, title)을 추출.
 
     '엔드포인트 1개 = 페이지 1개' 스타일의 노션 데이터베이스(예: 메소드=select 속성,
@@ -159,7 +172,9 @@ def _block_to_lines(block: dict, token: str, depth: int = 0) -> list[str]:
         lines.append(f"{indent}- {_rich_text_to_plain(payload.get('rich_text'))}")
     elif btype == "to_do":
         mark = "x" if payload.get("checked") else " "
-        lines.append(f"{indent}- [{mark}] {_rich_text_to_plain(payload.get('rich_text'))}")
+        lines.append(
+            f"{indent}- [{mark}] {_rich_text_to_plain(payload.get('rich_text'))}"
+        )
     elif btype == "quote":
         lines.append(f"{indent}> {_rich_text_to_plain(payload.get('rich_text'))}")
     elif btype == "callout":
@@ -207,7 +222,9 @@ def fetch_page_markdown(page_id: str, token: str) -> tuple[str, str]:
     return title, "\n".join(lines)
 
 
-def fetch_endpoint_page(page_id: str, token: str) -> tuple[str, str | None, str | None, str]:
+def fetch_endpoint_page(
+    page_id: str, token: str
+) -> tuple[str, str | None, str | None, str]:
     """'엔드포인트 1개 = 페이지 1개' 스타일 페이지를 (title, method, path, body_markdown)으로 반환.
 
     method/path는 페이지 속성에서 추출 시도하고, 못 찾으면 None (호출측에서 헤딩 기반

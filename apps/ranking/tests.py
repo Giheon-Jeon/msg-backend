@@ -43,8 +43,11 @@ def make_member(name, score=0, solved=0, at=None):
         "last_solved_at": at,
     }
 
+
 def auth(client, user):
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {issue_access_token(user)}")
+
+
 class ResolveLastSolvedAtTest(SimpleTestCase):
 
     def test_both_none_returns_none(self):
@@ -233,8 +236,10 @@ class CollectTeamDataTest(TestCase):
         for i in range(3):
             c = self.make_challenge(f"문제{i}", "1000")
             Solve.objects.create(
-                team=team, challenge=c,
-                earned_score=Decimal("1000"), earned_mileage=100,
+                team=team,
+                challenge=c,
+                earned_score=Decimal("1000"),
+                earned_mileage=100,
             )
 
         data = collect_team_data()
@@ -246,15 +251,18 @@ class CollectTeamDataTest(TestCase):
         for i in range(3):
             c = self.make_challenge(f"문제{i}", "1000")
             Solve.objects.create(
-                team=team, challenge=c,
-                earned_score=Decimal("1000"), earned_mileage=100,
+                team=team,
+                challenge=c,
+                earned_score=Decimal("1000"),
+                earned_mileage=100,
             )
 
         for i in range(2):
             club = KothClub.objects.create(name=f"동아리{i}")
             kc = self.make_koth_challenge(club, f"koth{i}")
             KothSolve.objects.create(
-                team=team, challenge=kc,
+                team=team,
+                challenge=kc,
                 earned_score=Decimal("100"),
                 solved_at=BASE_TIME,
             )
@@ -273,8 +281,10 @@ class CollectTeamDataTest(TestCase):
             club = KothClub.objects.create(name=f"동아리{i}")
             kc = self.make_koth_challenge(club, f"koth{i}")
             KothSolve.objects.create(
-                team=team, challenge=kc,
-                earned_score=Decimal("100"), solved_at=at,
+                team=team,
+                challenge=kc,
+                earned_score=Decimal("100"),
+                solved_at=at,
             )
 
         data = collect_team_data()
@@ -291,6 +301,7 @@ class CollectTeamDataTest(TestCase):
         self.assertIsNone(data[0]["jeopardy_solved_at"])
         self.assertIsNone(data[0]["koth_solved_at"])
 
+
 class MemberRankingAPITest(APITestCase):
 
     URL = "/api/v1/ranking/member"
@@ -298,7 +309,10 @@ class MemberRankingAPITest(APITestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="알파")
         self.user = User.objects.create_user(
-            login_id="me", password="pw", nickname="나", team=self.team,
+            login_id="me",
+            password="pw",
+            nickname="나",
+            team=self.team,
         )
 
     def make_challenge(self, name, score):
@@ -315,8 +329,11 @@ class MemberRankingAPITest(APITestCase):
     def solve(self, user, name, score):
         c = self.make_challenge(name, score)
         Solve.objects.create(
-            team=user.team, challenge=c, solved_by_user=user,
-            earned_score=Decimal(score), earned_mileage=100,
+            team=user.team,
+            challenge=c,
+            solved_by_user=user,
+            earned_score=Decimal(score),
+            earned_mileage=100,
         )
 
     def test_returns_my_rank(self):
@@ -336,7 +353,9 @@ class MemberRankingAPITest(APITestCase):
         self.assertEqual(res.data["code"], "TOKEN_MISSING")
 
     def test_user_without_team_returns_404(self):
-        admin = User.objects.create_user(login_id="admin", password="pw", nickname="관리자")
+        admin = User.objects.create_user(
+            login_id="admin", password="pw", nickname="관리자"
+        )
         auth(self.client, admin)
 
         res = self.client.get(self.URL)
@@ -365,7 +384,10 @@ class MemberRankingAPITest(APITestCase):
 
     def test_teammate_solve_is_excluded(self):
         mate = User.objects.create_user(
-            login_id="mate", password="pw", nickname="팀원", team=self.team,
+            login_id="mate",
+            password="pw",
+            nickname="팀원",
+            team=self.team,
         )
         self.solve(self.user, "내문제", "1000")
         self.solve(mate, "팀원문제", "500")
@@ -385,7 +407,13 @@ class MemberRankingAPITest(APITestCase):
         self.assertEqual(
             set(res.data["data"].keys()),
             {
-                "rank", "user_id", "nickname", "team_id", "team_name",
-                "user_score", "solved_count", "last_solved_at",
+                "rank",
+                "user_id",
+                "nickname",
+                "team_id",
+                "team_name",
+                "user_score",
+                "solved_count",
+                "last_solved_at",
             },
         )

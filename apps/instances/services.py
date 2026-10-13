@@ -87,8 +87,7 @@ def scheduler_auth_header(request=None):
 def get_active_instance(user):
     # 현재 사용자의 최신 활성 인스턴스 한 개를 조회한다
     return (
-        Instance.objects
-        .filter(user=user, status__in=ACTIVE_INSTANCE_STATUSES)
+        Instance.objects.filter(user=user, status__in=ACTIVE_INSTANCE_STATUSES)
         .select_related("challenge")
         .order_by("-created_at")
         .first()
@@ -150,7 +149,12 @@ def serialize_release_container(container):
 
 
 def validate_release_for_scheduler(release):
-    from apps.instances.releases import has_sufficient_container_resources
+    from apps.instances.releases import (
+        ReleaseValidationError,
+        has_sufficient_container_resources,
+        validate_container_image,
+        validate_healthcheck,
+    )
 
     containers = list(release.containers.all())
 
@@ -207,6 +211,16 @@ def validate_release_for_scheduler(release):
             "PWN 릴리스는 포트가 하나인 공개 컨테이너를 정확히 하나 사용해야 합니다.",
             400,
         )
+
+    try:
+        for container in containers:
+            validate_container_image(container.image_ref, release.challenge_slug, container.name)
+        validate_healthcheck(
+            release.healthcheck,
+            {container.name: release_container_ports(container) for container in containers},
+        )
+    except ReleaseValidationError as error:
+        raise SchedulerError("RELEASE_NOT_DEPLOYABLE", error.message, 400) from error
 
 
 def normalize_scheduler_endpoints(raw_endpoints):
@@ -359,7 +373,7 @@ def build_scheduler_create_body(user, team, challenge, runtime_config, release):
     # Scheduler 인스턴스 생성 요청 body를 현재 릴리스 값으로 만든다
     validate_release_for_scheduler(release)
     containers = release.containers.order_by("name")
-    return {
+    body = {
         "team_id": str(team.team_id),
         "user_id": str(user.user_id),
         "challenge_id": str(challenge.challenge_id),
@@ -378,6 +392,9 @@ def build_scheduler_create_body(user, team, challenge, runtime_config, release):
         "ttl_minutes": runtime_config.ttl_minutes,
         "hard_timeout_minutes": runtime_config.hard_timeout_minutes,
     }
+    if release.healthcheck is not None:
+        body["healthcheck"] = release.healthcheck
+    return body
 
 
 def call_scheduler_create(user, team, challenge, runtime_config, release, auth_header=None):
@@ -470,7 +487,9 @@ def update_instance_from_scheduler(instance, scheduler_data):
         update_fields.append("expires_at")
 
     if "hard_expires_at" in scheduler_data:
-        instance.hard_expires_at = parse_scheduler_datetime(scheduler_data.get("hard_expires_at"))
+        instance.hard_expires_at = parse_scheduler_datetime(
+            scheduler_data.get("hard_expires_at")
+        )
         update_fields.append("hard_expires_at")
 
     instance.save(update_fields=update_fields)

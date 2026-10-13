@@ -20,6 +20,7 @@ class NotBanned(APIError):
     code = "NOT_BANNED"
     message = "활동 정지 상태가 아닌 팀입니다"
 
+
 class InvalidAmount(APIError):
     status_code = status.HTTP_400_BAD_REQUEST
     code = "INVALID_AMOUNT"
@@ -61,15 +62,18 @@ class NotRefundable(APIError):
     code = "NOT_REFUNDABLE"
     message = "환불할 수 없는 내역입니다"
 
+
 class LoginIdTaken(APIError):
     status_code = status.HTTP_409_CONFLICT
     code = "LOGIN_ID_TAKEN"
     message = "이미 사용 중인 아이디입니다"
 
+
 class TeamAlreadyHasLeader(APIError):
     status_code = status.HTTP_409_CONFLICT
     code = "TEAM_ALREADY_HAS_LEADER"
     message = "이미 팀장이 있는 팀입니다"
+
 
 class InsufficientDice(APIError):
     status_code = status.HTTP_400_BAD_REQUEST
@@ -87,3 +91,9 @@ class ContestAlreadyStarted(APIError):
     status_code = status.HTTP_409_CONFLICT
     code = "CONTEST_ALREADY_STARTED"
     message = "이미 시작된 대회의 시작 시각은 변경할 수 없습니다"
+
+
+class ChallengeInUse(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "CHALLENGE_IN_USE"
+    message = "공개 중이거나 사용 기록이 있는 문제는 삭제할 수 없습니다"

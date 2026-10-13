@@ -4,6 +4,7 @@ from .models import MileageHistory, PaymentToken
 
 # Register your models here.
 
+
 @admin.register(MileageHistory)
 class MileageHistoryAdmin(admin.ModelAdmin):
     list_display = ("team", "type", "amount", "item_name", "is_refunded", "created_at")

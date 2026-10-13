@@ -18,17 +18,21 @@ def align_existing_board(apps, schema_editor):
         (21, "AIRPORT", "세계여행"),
     ):
         Cell.objects.using(alias).filter(cell_index=index).update(
-            type=cell_type, name=name, difficulty=None,
+            type=cell_type,
+            name=name,
+            difficulty=None,
         )
     PendingDiceRoll.objects.using(alias).filter(
-        candidate_position=16, board_event_code="QUARANTINE",
+        candidate_position=16,
+        board_event_code="QUARANTINE",
     ).update(board_event_code="ROULETTE")
 
     # Keep old draws for audit purposes without counting them as held cards.
     # Rolling the schema back must not reactivate retired cards.
     TeamChanceCard.objects.using(alias).filter(
         card_id__in=["card_quarantine_defense", "card_move_to_quarantine"],
-        used_at__isnull=True, discarded_at__isnull=True,
+        used_at__isnull=True,
+        discarded_at__isnull=True,
     ).update(discarded_at=timezone.now())
     ChanceCard.objects.using(alias).filter(card_id="card_move_offset").update(
         description="굴린 뒤 확정 전인 도착 후보에서 앞/뒤 1~3칸 추가 이동합니다.",

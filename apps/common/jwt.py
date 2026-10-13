@@ -41,7 +41,6 @@ def issue_refresh_token(user):
             "sub": str(user.user_id),
             # 같은 초에 두 번 로그인해도 토큰이 겹치지않도록하는 고유값 추가
             # 없으면 payload 가 동일해지기때문에 token_hash unique 제약에 걸림
-
             "jti": secrets.token_urlsafe(16),
             "iat": now,
             "exp": expires_at,
@@ -52,7 +51,9 @@ def issue_refresh_token(user):
 
 def decode_token(token, expected_type):
 
-    payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    payload = jwt.decode(
+        token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+    )
     if payload.get("typ") != expected_type:
         raise jwt.InvalidTokenError("token type mismatch")
     return payload

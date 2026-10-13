@@ -31,21 +31,34 @@ def migrate_opened_challenges(apps, schema_editor):
             "Do not delete or skip the existing access records."
         )
 
-    for opened in OpenedChallenge.objects.using(database).order_by("opened_at").iterator():
-        solve = Solve.objects.using(database).filter(
-            team_id=opened.team_id,
-            challenge_id=opened.challenge_id,
-        ).first()
-        existing_access = TeamChallengeAccess.objects.using(database).filter(
-            team_id=opened.team_id,
-            challenge_id=opened.challenge_id,
-        ).first()
+    for opened in (
+        OpenedChallenge.objects.using(database).order_by("opened_at").iterator()
+    ):
+        solve = (
+            Solve.objects.using(database)
+            .filter(
+                team_id=opened.team_id,
+                challenge_id=opened.challenge_id,
+            )
+            .first()
+        )
+        existing_access = (
+            TeamChallengeAccess.objects.using(database)
+            .filter(
+                team_id=opened.team_id,
+                challenge_id=opened.challenge_id,
+            )
+            .first()
+        )
         if existing_access is not None:
             # Keep the canonical board access and its opening time, but carry
             # over completed solves before removing the legacy access table.
             if solve is not None:
-                TeamChallengeAccess.objects.using(database).filter(pk=existing_access.pk).update(
-                    status="CLEARED", cleared_at=solve.solved_at,
+                TeamChallengeAccess.objects.using(database).filter(
+                    pk=existing_access.pk
+                ).update(
+                    status="CLEARED",
+                    cleared_at=solve.solved_at,
                 )
             continue
 
@@ -55,10 +68,14 @@ def migrate_opened_challenges(apps, schema_editor):
                 f"{opened.pk}: board cell {opened.cell_index} does not exist."
             )
 
-        conflicting_access = TeamChallengeAccess.objects.using(database).filter(
-            team_id=opened.team_id,
-            source_cell_id=opened.cell_index,
-        ).first()
+        conflicting_access = (
+            TeamChallengeAccess.objects.using(database)
+            .filter(
+                team_id=opened.team_id,
+                source_cell_id=opened.cell_index,
+            )
+            .first()
+        )
         if conflicting_access is not None:
             raise RuntimeError(
                 "Cannot migrate opened challenge "
@@ -83,11 +100,17 @@ def restore_opened_challenges(apps, schema_editor):
     TeamChallengeAccess = apps.get_model("board", "TeamChallengeAccess")
     database = schema_editor.connection.alias
 
-    for access in TeamChallengeAccess.objects.using(database).order_by("opened_at").iterator():
-        if OpenedChallenge.objects.using(database).filter(
-            team_id=access.team_id,
-            challenge_id=access.challenge_id,
-        ).exists():
+    for access in (
+        TeamChallengeAccess.objects.using(database).order_by("opened_at").iterator()
+    ):
+        if (
+            OpenedChallenge.objects.using(database)
+            .filter(
+                team_id=access.team_id,
+                challenge_id=access.challenge_id,
+            )
+            .exists()
+        ):
             continue
 
         opened = OpenedChallenge.objects.using(database).create(

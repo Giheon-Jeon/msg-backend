@@ -108,18 +108,19 @@ def signature_submit(request, signature_id):
         # Serialize submissions for one team so the unique solve and lock state move together.
         team = Team.objects.select_for_update().get(pk=team.pk)
         try:
-            challenge = SignatureChallenge.objects.select_for_update().get(
+            challenge = SignatureChallenge.objects.get(
                 pk=signature_id,
                 is_published=True,
             )
         except SignatureChallenge.DoesNotExist:
             raise SignatureNotFound()
 
-        submission_lock, _ = (
-            SignatureSubmissionLock.objects.select_for_update().get_or_create(
-                team=team,
-                challenge=challenge,
-            )
+        (
+            submission_lock,
+            _,
+        ) = SignatureSubmissionLock.objects.select_for_update().get_or_create(
+            team=team,
+            challenge=challenge,
         )
 
         if SignatureSolve.objects.filter(team=team, challenge=challenge).exists():

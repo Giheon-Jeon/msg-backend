@@ -39,7 +39,10 @@ class Migration(migrations.Migration):
                         max_length=20,
                     ),
                 ),
-                ("response_status", models.PositiveSmallIntegerField(blank=True, null=True)),
+                (
+                    "response_status",
+                    models.PositiveSmallIntegerField(blank=True, null=True),
+                ),
                 (
                     "response_body",
                     models.JSONField(

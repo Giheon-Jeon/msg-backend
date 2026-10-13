@@ -17,8 +17,14 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Team, User
 from apps.board.models import (
-    BoardChallenge, Cell, DiceRoll, IdempotencyRequest, PendingDiceRoll,
-    TeamBoardState, TeamCellConsumption, TeamChallengeAccess,
+    BoardChallenge,
+    Cell,
+    DiceRoll,
+    IdempotencyRequest,
+    PendingDiceRoll,
+    TeamBoardState,
+    TeamCellConsumption,
+    TeamChallengeAccess,
 )
 from apps.board.services import finalize_landing
 from apps.challenge.models import Challenge
@@ -35,23 +41,37 @@ class DiceFixtureMixin:
         self.addCleanup(cache.clear)
         self.team = Team.objects.create(team_name="dice-resilience", mileage=20)
         self.user = User.objects.create_user(
-            login_id="dice-resilience", nickname="leader", team=self.team, is_leader=True,
+            login_id="dice-resilience",
+            nickname="leader",
+            team=self.team,
+            is_leader=True,
         )
-        Cell.objects.bulk_create([
-            Cell(cell_index=index, type=Cell.CellType.START if index == 1 else Cell.CellType.ROULETTE, name=str(index))
-            for index in (1, 3, 5, 7, 35)
-        ])
+        Cell.objects.bulk_create(
+            [
+                Cell(
+                    cell_index=index,
+                    type=Cell.CellType.START if index == 1 else Cell.CellType.ROULETTE,
+                    name=str(index),
+                )
+                for index in (1, 3, 5, 7, 35)
+            ]
+        )
         self.state = TeamBoardState.objects.create(team=self.team, position_id=1)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
     def roll(self, key, client=None):
         return (client or self.client).post(
-            "/api/v1/board/dice/roll", {}, format="json", HTTP_IDEMPOTENCY_KEY=key,
+            "/api/v1/board/dice/roll",
+            {},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY=key,
         )
 
 
-@skipUnless(connection.vendor == "postgresql", "Requires actual PostgreSQL lock contention")
+@skipUnless(
+    connection.vendor == "postgresql", "Requires actual PostgreSQL lock contention"
+)
 @override_settings(CACHES=LOCMEM)
 class DiceContentionTests(DiceFixtureMixin, TransactionTestCase):
     def contend(self, actions):
@@ -97,7 +117,10 @@ class DiceContentionTests(DiceFixtureMixin, TransactionTestCase):
                             break
                         time.sleep(0.01)
                     self.assertEqual(len(blockers), len(actions))
-                    self.assertTrue(all(blockers.values()), f"Expected PostgreSQL lock waits: {blockers}")
+                    self.assertTrue(
+                        all(blockers.values()),
+                        f"Expected PostgreSQL lock waits: {blockers}",
+                    )
                 finally:
                     gate.set()
             return [future.result(timeout=25) for future in futures]
@@ -119,14 +142,34 @@ class DiceContentionTests(DiceFixtureMixin, TransactionTestCase):
 
     def test_four_distinct_requests_cannot_spend_more_than_three_rolls(self):
         now = timezone.now()
-        with patch("apps.board.services.timezone.now", return_value=now), patch("apps.board.services.random.randint", return_value=1):
-            responses = self.contend([
-                lambda client, key=f"roll-{index}": self.roll(key, client)
-                for index in range(4)
-            ])
-        self.assertEqual(sorted(response.status_code for response in responses), [200, 200, 200, 409])
-        self.assertEqual([response.json()["code"] for response in responses if response.status_code == 409], ["NO_ROLL_LEFT"])
-        self.assertEqual(sorted(response.json()["data"]["current_position"] for response in responses if response.status_code == 200), [3, 5, 7])
+        with patch("apps.board.services.timezone.now", return_value=now), patch(
+            "apps.board.services.random.randint", return_value=1
+        ):
+            responses = self.contend(
+                [
+                    lambda client, key=f"roll-{index}": self.roll(key, client)
+                    for index in range(4)
+                ]
+            )
+        self.assertEqual(
+            sorted(response.status_code for response in responses), [200, 200, 200, 409]
+        )
+        self.assertEqual(
+            [
+                response.json()["code"]
+                for response in responses
+                if response.status_code == 409
+            ],
+            ["NO_ROLL_LEFT"],
+        )
+        self.assertEqual(
+            sorted(
+                response.json()["data"]["current_position"]
+                for response in responses
+                if response.status_code == 200
+            ),
+            [3, 5, 7],
+        )
         self.state.refresh_from_db()
         self.assertEqual((self.state.position_id, self.state.dice_rolls_left), (7, 0))
         self.assertEqual(self.state.next_dice_reset_at, now + timedelta(minutes=15))
@@ -139,11 +182,15 @@ class DiceContentionTests(DiceFixtureMixin, TransactionTestCase):
         self.state.dice_rolls_left = 0
         self.state.next_dice_reset_at = now
         self.state.save(update_fields=["dice_rolls_left", "next_dice_reset_at"])
-        with patch("apps.board.services.timezone.now", return_value=now), patch("apps.board.services.random.randint", return_value=1):
-            roll, status = self.contend([
-                lambda client: self.roll("due-roll", client),
-                lambda client: client.get("/api/v1/board/dice/status"),
-            ])
+        with patch("apps.board.services.timezone.now", return_value=now), patch(
+            "apps.board.services.random.randint", return_value=1
+        ):
+            roll, status = self.contend(
+                [
+                    lambda client: self.roll("due-roll", client),
+                    lambda client: client.get("/api/v1/board/dice/status"),
+                ]
+            )
         self.assertEqual(roll.status_code, 200)
         self.assertEqual(status.status_code, 200)
         self.assertIn(status.json()["data"]["dice_rolls_left"], (0, 1))
@@ -161,17 +208,20 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
         with socket.socket() as endpoint:
             endpoint.bind(("127.0.0.1", 0))
             port = endpoint.getsockname()[1]
-            unavailable_cache = {"default": {
-                "BACKEND": "django_redis.cache.RedisCache",
-                "LOCATION": f"redis://127.0.0.1:{port}/0",
-                "OPTIONS": {
-                    "CLIENT_CLASS": "django_redis.client.DefaultClient",
-                    "SOCKET_CONNECT_TIMEOUT": 0.2,
-                    "SOCKET_TIMEOUT": 0.2,
-                },
-            }}
+            unavailable_cache = {
+                "default": {
+                    "BACKEND": "django_redis.cache.RedisCache",
+                    "LOCATION": f"redis://127.0.0.1:{port}/0",
+                    "OPTIONS": {
+                        "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                        "SOCKET_CONNECT_TIMEOUT": 0.2,
+                        "SOCKET_TIMEOUT": 0.2,
+                    },
+                }
+            }
             with override_settings(CACHES=unavailable_cache), self.assertLogs(
-                "apps.board.idempotency", level="WARNING",
+                "apps.board.idempotency",
+                level="WARNING",
             ) as logs, patch("apps.board.services.random.randint", return_value=1):
                 first = self.roll("redis-unavailable")
                 replay = self.roll("redis-unavailable")
@@ -189,11 +239,21 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
         for index, failures in enumerate((("get",), ("set",), ("get", "set")), start=1):
             with self.subTest(failures=failures), ExitStack() as stack:
                 cache.clear()
-                stack.enter_context(self.assertLogs("apps.board.idempotency", level="WARNING"))
-                faults = [stack.enter_context(patch(
-                    f"apps.board.idempotency.cache.{operation}", side_effect=RedisConnectionError("injected outage"),
-                )) for operation in failures]
-                stack.enter_context(patch("apps.board.services.random.randint", return_value=1))
+                stack.enter_context(
+                    self.assertLogs("apps.board.idempotency", level="WARNING")
+                )
+                faults = [
+                    stack.enter_context(
+                        patch(
+                            f"apps.board.idempotency.cache.{operation}",
+                            side_effect=RedisConnectionError("injected outage"),
+                        )
+                    )
+                    for operation in failures
+                ]
+                stack.enter_context(
+                    patch("apps.board.services.random.randint", return_value=1)
+                )
                 first = self.roll(f"cache-{index}")
                 replay = self.roll(f"cache-{index}")
                 self.assertEqual(first.status_code, 200)
@@ -209,22 +269,39 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
             self.assertEqual(IdempotencyRequest.objects.count(), index)
 
     def test_real_cell_open_replays_timestamps_after_cache_loss(self):
-        Cell.objects.filter(pk=3).update(type=Cell.CellType.CHALLENGE, difficulty=Cell.Difficulty.EASY)
+        Cell.objects.filter(pk=3).update(
+            type=Cell.CellType.CHALLENGE, difficulty=Cell.Difficulty.EASY
+        )
         challenge = Challenge.objects.create(
-            title="Replay timestamps", category="WEB", difficulty="EASY", score=100,
-            flag_hash="unused", is_published=True,
+            title="Replay timestamps",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="unused",
+            is_published=True,
         )
         BoardChallenge.objects.create(challenge=challenge, challenge_number=1)
         self.state.position_id = 3
         self.state.save(update_fields=["position"])
         self.assertEqual(self.client.get("/api/v1/board/cell/current").status_code, 200)
         payload = {"challenge_id": str(challenge.pk)}
-        first = self.client.post("/api/v1/board/cell/open", payload, format="json", HTTP_IDEMPOTENCY_KEY="open-replay")
+        first = self.client.post(
+            "/api/v1/board/cell/open",
+            payload,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="open-replay",
+        )
         cache.clear()
         with self.assertLogs("apps.board.idempotency", level="WARNING"), patch(
-            "apps.board.idempotency.cache.get", side_effect=RedisConnectionError("injected outage"),
+            "apps.board.idempotency.cache.get",
+            side_effect=RedisConnectionError("injected outage"),
         ):
-            replay = self.client.post("/api/v1/board/cell/open", payload, format="json", HTTP_IDEMPOTENCY_KEY="open-replay")
+            replay = self.client.post(
+                "/api/v1/board/cell/open",
+                payload,
+                format="json",
+                HTTP_IDEMPOTENCY_KEY="open-replay",
+            )
         self.assertEqual(first.status_code, 200)
         self.assertEqual(replay.status_code, 200)
         self.assertEqual(replay.json(), first.json())
@@ -237,14 +314,22 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
         self.state.position_id = 35
         self.state.save(update_fields=["position"])
         before = TeamBoardState.objects.values().get(pk=self.state.pk)
-        with self.assertLogs(level="ERROR"), failure, patch("apps.board.services.random.randint", return_value=1):
+        with self.assertLogs(level="ERROR"), failure, patch(
+            "apps.board.services.random.randint", return_value=1
+        ):
             response = self.roll("failed-roll")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["code"], "INTERNAL_ERROR")
         self.assertEqual(TeamBoardState.objects.values().get(pk=self.state.pk), before)
         self.team.refresh_from_db()
         self.assertEqual(self.team.mileage, 20)
-        for model in (DiceRoll, TeamCellConsumption, PendingDiceRoll, MileageHistory, IdempotencyRequest):
+        for model in (
+            DiceRoll,
+            TeamCellConsumption,
+            PendingDiceRoll,
+            MileageHistory,
+            IdempotencyRequest,
+        ):
             self.assertFalse(model.objects.exists(), model.__name__)
         with patch("apps.board.services.random.randint", return_value=1):
             retry = self.roll("failed-roll")
@@ -264,9 +349,13 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
         def fail_after_landing(*args, **kwargs):
             finalize_landing(*args, **kwargs)
             raise RuntimeError("injected failure after rewards")
-        self.assert_failed_roll_restores_state_and_retries(patch(
-            "apps.board.services.finalize_landing", side_effect=fail_after_landing,
-        ))
+
+        self.assert_failed_roll_restores_state_and_retries(
+            patch(
+                "apps.board.services.finalize_landing",
+                side_effect=fail_after_landing,
+            )
+        )
 
     def test_failure_saving_idempotency_result_rolls_back_every_write(self):
         original_save = IdempotencyRequest.save
@@ -276,6 +365,10 @@ class DiceFailureRecoveryTests(DiceFixtureMixin, TransactionTestCase):
                 raise RuntimeError("injected result persistence failure")
             return original_save(record, *args, **kwargs)
 
-        self.assert_failed_roll_restores_state_and_retries(patch.object(
-            IdempotencyRequest, "save", new=fail_saving_result,
-        ))
+        self.assert_failed_roll_restores_state_and_retries(
+            patch.object(
+                IdempotencyRequest,
+                "save",
+                new=fail_saving_result,
+            )
+        )

@@ -28,9 +28,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.getenv(
-        "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1"
-    ).split(",")
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if host.strip()
 ]
 
@@ -65,7 +63,6 @@ INSTALLED_APPS = [
     "apps.leaderboard",
     "apps.koth",
     "apps.signature",
-
 ]
 
 MIDDLEWARE = [
@@ -109,6 +106,9 @@ DATABASES = {
         "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
         "HOST": os.getenv("POSTGRES_HOST", "localhost"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        # Reuse one connection per WSGI worker instead of reconnecting on every request.
+        "CONN_MAX_AGE": int(os.getenv("POSTGRES_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 
@@ -227,6 +227,10 @@ REFRESH_TOKEN_HOURS = 12
 # 생성한다. 기존 개발 환경은 JWT_SECRET을 fallback으로 사용하되 운영에서는
 # 반드시 별도 값을 설정한다.
 KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
+# Shared rankings may lag score/team changes by at most this many seconds.
+KOTH_LEADERBOARD_CACHE_SECONDS = max(
+    0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
+)
 
 
 REST_FRAMEWORK = {
@@ -241,12 +245,12 @@ REST_FRAMEWORK = {
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
-    }
+    },
 }
 SCHEDULER_API_TOKEN = os.getenv("SCHEDULER_API_TOKEN", "")
-SCHEDULER_BASE_URL = os.getenv(
-    "SCHEDULER_BASE_URL", "http://127.0.0.1:8001"
-).rstrip("/")
+SCHEDULER_BASE_URL = os.getenv("SCHEDULER_BASE_URL", "http://127.0.0.1:8001").rstrip(
+    "/"
+)
 _scheduler_url = urlsplit(SCHEDULER_BASE_URL)
 try:
     _scheduler_url.port
@@ -279,3 +283,33 @@ RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
 RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+
+def _validated_base_url(name, default):
+    # 사용자 정보·query·fragment 없는 http(s) 주소만 받는다.
+    # 브로커는 프록시 뒤 /api 아래에 있을 수 있어 경로는 허용한다.
+    url = os.getenv(name, default).rstrip("/")
+    parts = urlsplit(url)
+    try:
+        parts.port
+    except ValueError as error:
+        raise ImproperlyConfigured(f"{name} 포트가 올바르지 않습니다.") from error
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+    ):
+        raise ImproperlyConfigured(
+            f"{name}은 사용자 정보, query, fragment가 없는 http 또는 https 주소여야 합니다."
+        )
+    return url
+
+
+RESOURCE_BROKER_BASE_URL = _validated_base_url(
+    "RESOURCE_BROKER_BASE_URL", "http://127.0.0.1:8002"
+)
+RESOURCE_BROKER_TIMEOUT_SECONDS = int(os.getenv("RESOURCE_BROKER_TIMEOUT_SECONDS", "5"))
+INVENTORY_API_TOKEN = os.getenv("INVENTORY_API_TOKEN", "")

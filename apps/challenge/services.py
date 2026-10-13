@@ -7,6 +7,7 @@ from django.db.models import Sum
 from apps.accounts.models import Team
 from apps.koth.models import KothSolve
 from apps.ranking.scoring import calculate_dynamic_score
+from apps.ranking.models import LineMonopoly
 from apps.signature.models import SignatureSolve
 
 from .models import Solve
@@ -41,16 +42,15 @@ def update_dynamic_score_and_team_scores(challenge):
     challenge.current_score = current_score
     challenge.save(update_fields=["current_score"])
 
-    affected_team_ids = Solve.objects.filter(challenge=challenge).order_by("team_id").values_list(
-        "team_id", flat=True
+    affected_team_ids = (
+        Solve.objects.filter(challenge=challenge)
+        .order_by("team_id")
+        .values_list("team_id", flat=True)
     )
     for team_id in affected_team_ids:
-        jeopardy_score = (
-            Solve.objects.filter(team_id=team_id).aggregate(
-                total=Sum("challenge__current_score")
-            )["total"]
-            or Decimal("0")
-        )
+        jeopardy_score = Solve.objects.filter(team_id=team_id).aggregate(
+            total=Sum("challenge__current_score")
+        )["total"] or Decimal("0")
         Team.objects.filter(pk=team_id).update(team_score=jeopardy_score)
 
     return current_score
@@ -58,22 +58,16 @@ def update_dynamic_score_and_team_scores(challenge):
 
 def get_team_total_score(team_id):
     """Return the same Jeopardy + KOTH + signature score used by ranking."""
-    jeopardy_score = (
-        Solve.objects.filter(team_id=team_id).aggregate(
-            total=Sum("challenge__current_score")
-        )["total"]
-        or Decimal("0")
-    )
-    koth_score = (
-        KothSolve.objects.filter(team_id=team_id).aggregate(total=Sum("earned_score"))[
-            "total"
-        ]
-        or Decimal("0")
-    )
-    signature_score = (
-        SignatureSolve.objects.filter(team_id=team_id).aggregate(
-            total=Sum("earned_score")
-        )["total"]
-        or Decimal("0")
-    )
-    return jeopardy_score + koth_score + signature_score
+    jeopardy_score = Solve.objects.filter(team_id=team_id).aggregate(
+        total=Sum("challenge__current_score")
+    )["total"] or Decimal("0")
+    koth_score = KothSolve.objects.filter(team_id=team_id).aggregate(
+        total=Sum("earned_score")
+    )["total"] or Decimal("0")
+    signature_score = SignatureSolve.objects.filter(team_id=team_id).aggregate(
+        total=Sum("earned_score")
+    )["total"] or Decimal("0")
+    line_score = LineMonopoly.objects.filter(team_id=team_id).aggregate(
+        total=Sum("earned_score")
+    )["total"] or Decimal("0")
+    return jeopardy_score + koth_score + signature_score + line_score

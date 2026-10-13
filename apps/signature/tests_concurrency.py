@@ -104,6 +104,57 @@ class ConcurrentSignatureSubmitTests(TransactionTestCase):
         )
         self.assertEqual(get_team_total_score(self.team.pk), Decimal("300"))
 
+    def test_different_teams_submit_same_challenge_without_serializing(self):
+        other_team = Team.objects.create(team_name="signature-race-other-team")
+        other_user = User.objects.create_user(
+            login_id="signature-race-other-user",
+            password="pw1234",
+            nickname="signature-race-other-user",
+            team=other_team,
+        )
+        ready_to_insert = Barrier(2)
+
+        def submit(user_id):
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET lock_timeout = '2s'")
+                    cursor.execute("SET statement_timeout = '10s'")
+
+                client = APIClient()
+                client.force_authenticate(user=User.objects.get(pk=user_id))
+                synchronized = False
+
+                def synchronize(execute, sql, params, many, context):
+                    nonlocal synchronized
+                    is_solve_insert = (
+                        'INSERT INTO "signature_solves"' in sql and not synchronized
+                    )
+                    if is_solve_insert:
+                        synchronized = True
+                        ready_to_insert.wait(timeout=5)
+                    return execute(sql, params, many, context)
+
+                with connection.execute_wrapper(synchronize):
+                    response = client.post(
+                        f"/api/v1/signatures/{self.challenge.pk}/submit",
+                        {"flag": "MSG{signature_race}"},
+                        format="json",
+                    )
+                return response.status_code, response.data
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(submit, [self.user.pk, other_user.pk]))
+
+        self.assertEqual([status for status, _ in results], [200, 200])
+        self.assertEqual([body["code"] for _, body in results], ["SUCCESS", "SUCCESS"])
+        self.assertEqual(
+            SignatureSolve.objects.filter(challenge=self.challenge).count(),
+            2,
+        )
+
 
 class SignatureScoreAggregationTests(TestCase):
     def setUp(self):

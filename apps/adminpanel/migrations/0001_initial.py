@@ -10,40 +10,111 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('accounts', '0001_initial'),
-        ('challenge', '0004_merge_opened_challenges_into_team_access'),
+        ("accounts", "0001_initial"),
+        ("challenge", "0004_merge_opened_challenges_into_team_access"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='AdminSetting',
+            name="AdminSetting",
             fields=[
-                ('key', models.CharField(max_length=100, primary_key=True, serialize=False)),
-                ('value', models.IntegerField()),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('updated_by', models.CharField(blank=True, default='', max_length=50)),
+                (
+                    "key",
+                    models.CharField(max_length=100, primary_key=True, serialize=False),
+                ),
+                ("value", models.IntegerField()),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("updated_by", models.CharField(blank=True, default="", max_length=50)),
             ],
             options={
-                'db_table': 'admin_settings',
+                "db_table": "admin_settings",
             },
         ),
         migrations.CreateModel(
-            name='AdminEvent',
+            name="AdminEvent",
             fields=[
-                ('event_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('type', models.CharField(choices=[('TEAM_BANNED', 'Team Banned'), ('TEAM_UNBANNED', 'Team Unbanned'), ('MILEAGE_ADJUSTED', 'Mileage Adjusted'), ('PAYMENT_REFUNDED', 'Payment Refunded'), ('INSTANCE_FAILED', 'Instance Failed'), ('INSTANCE_FORCED', 'Instance Forced'), ('CHALLENGE_VISIBILITY_CHANGED', 'Challenge Visibility Changed'), ('SETTINGS_CHANGED', 'Settings Changed')], max_length=40)),
-                ('severity', models.CharField(choices=[('INFO', 'Info'), ('WARNING', 'Warning'), ('CRITICAL', 'Critical'), ('MANUAL_REVIEW', 'Manual Review')], default='INFO', max_length=20)),
-                ('message', models.CharField(max_length=255)),
-                ('instance_id', models.UUIDField(blank=True, null=True)),
-                ('actor', models.CharField(default='system', max_length=50)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('challenge', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='admin_events', to='challenge.challenge')),
-                ('team', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='admin_events', to='accounts.team')),
+                (
+                    "event_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "type",
+                    models.CharField(
+                        choices=[
+                            ("TEAM_BANNED", "Team Banned"),
+                            ("TEAM_UNBANNED", "Team Unbanned"),
+                            ("MILEAGE_ADJUSTED", "Mileage Adjusted"),
+                            ("PAYMENT_REFUNDED", "Payment Refunded"),
+                            ("INSTANCE_FAILED", "Instance Failed"),
+                            ("INSTANCE_FORCED", "Instance Forced"),
+                            (
+                                "CHALLENGE_VISIBILITY_CHANGED",
+                                "Challenge Visibility Changed",
+                            ),
+                            ("SETTINGS_CHANGED", "Settings Changed"),
+                        ],
+                        max_length=40,
+                    ),
+                ),
+                (
+                    "severity",
+                    models.CharField(
+                        choices=[
+                            ("INFO", "Info"),
+                            ("WARNING", "Warning"),
+                            ("CRITICAL", "Critical"),
+                            ("MANUAL_REVIEW", "Manual Review"),
+                        ],
+                        default="INFO",
+                        max_length=20,
+                    ),
+                ),
+                ("message", models.CharField(max_length=255)),
+                ("instance_id", models.UUIDField(blank=True, null=True)),
+                ("actor", models.CharField(default="system", max_length=50)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "challenge",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="admin_events",
+                        to="challenge.challenge",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="admin_events",
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'admin_events',
-                'ordering': ['-created_at', '-event_id'],
-                'indexes': [models.Index(fields=['-created_at'], name='admin_event_created_65dee4_idx'), models.Index(fields=['type', '-created_at'], name='admin_event_type_b924d8_idx'), models.Index(fields=['team', '-created_at'], name='admin_event_team_id_c16654_idx')],
+                "db_table": "admin_events",
+                "ordering": ["-created_at", "-event_id"],
+                "indexes": [
+                    models.Index(
+                        fields=["-created_at"], name="admin_event_created_65dee4_idx"
+                    ),
+                    models.Index(
+                        fields=["type", "-created_at"],
+                        name="admin_event_type_b924d8_idx",
+                    ),
+                    models.Index(
+                        fields=["team", "-created_at"],
+                        name="admin_event_team_id_c16654_idx",
+                    ),
+                ],
             },
         ),
     ]

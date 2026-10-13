@@ -1,4 +1,5 @@
 """검증 결과를 콘솔 요약 + Markdown/JSON 리포트로 출력."""
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,9 @@ def print_console_summary(
     for d in specs:
         print(f"  - {d.team} ({d.title}): endpoint {len(d.endpoints)}개")
 
-    print(f"\n[1] AI 말투 의심 신호 {_severity_icon(sum(r.score for r in tone_reports))}")
+    print(
+        f"\n[1] AI 말투 의심 신호 {_severity_icon(sum(r.score for r in tone_reports))}"
+    )
     for r in sorted(tone_reports, key=lambda r: -r.score):
         if r.score == 0:
             print(f"  - {r.team}: 신호 없음")
@@ -91,7 +94,9 @@ def render_markdown(
                 lines.append("- 신호 없음\n")
                 continue
             for h in r.hits:
-                lines.append(f"- (L{h.line_no}, {h.category}) `{h.snippet}` — {h.description}")
+                lines.append(
+                    f"- (L{h.line_no}, {h.category}) `{h.snippet}` — {h.description}"
+                )
             lines.append("")
 
     lines.append("## 2. 팀간 충돌\n")
@@ -132,8 +137,12 @@ def to_json_dict(
 ) -> dict:
     return {
         "members": [
-            {"team": d.team, "title": d.title, "endpoint_count": len(d.endpoints),
-             "endpoints": [ep.key for ep in d.endpoints]}
+            {
+                "team": d.team,
+                "title": d.title,
+                "endpoint_count": len(d.endpoints),
+                "endpoints": [ep.key for ep in d.endpoints],
+            }
             for d in specs
         ],
         "ai_tone": [

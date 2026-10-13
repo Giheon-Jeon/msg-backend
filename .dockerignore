@@ -18,3 +18,14 @@ koth-template/
 docker-compose.yml
 Dockerfile
 .dockerignore
+loadtests/runtime/
+loadtests/results/
+.claude/
+.codex_tmp_*/
+.worktrees/
+_external_*/
+front-team/
+output/
+tmp/
+work/
+runserver.*.log

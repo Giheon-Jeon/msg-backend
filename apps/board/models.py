@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 
@@ -35,7 +36,9 @@ class IdempotencyRequest(models.Model):
             ),
         ]
         indexes = [
-            models.Index(fields=["status", "updated_at"], name="idem_status_updated_idx"),
+            models.Index(
+                fields=["status", "updated_at"], name="idem_status_updated_idx"
+            ),
         ]
 
 
@@ -56,12 +59,36 @@ class Cell(models.Model):
 
     cell_index = models.PositiveSmallIntegerField(primary_key=True)
     type = models.CharField(max_length=20, choices=CellType.choices)
-    difficulty = models.CharField(max_length=10, choices=Difficulty.choices, null=True, blank=True)
+    difficulty = models.CharField(
+        max_length=10, choices=Difficulty.choices, null=True, blank=True
+    )
+    line_number = models.PositiveSmallIntegerField(null=True, blank=True)
     name = models.CharField(max_length=50)
+
+    def clean(self):
+        super().clean()
+
+        if self.type == self.CellType.CHALLENGE and self.line_number is None:
+            raise ValidationError({"line_number": "문제 칸에는 라인 번호가 필요합니다."})
+        if self.type != self.CellType.CHALLENGE and self.line_number is not None:
+            raise ValidationError({"line_number": "라인 번호는 문제 칸에만 지정할 수 있습니다."})
 
     class Meta:
         db_table = "cells"
         ordering = ["cell_index"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(line_number__isnull=True)
+                | models.Q(line_number__gte=1, line_number__lte=6),
+                name="cell_line_number_between_1_and_6",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(line_number__isnull=True) | models.Q(type="CHALLENGE")
+                ),
+                name="cell_line_number_matches_type",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.cell_index}: {self.name}"
@@ -116,7 +143,9 @@ class TeamCellConsumption(models.Model):
     class Meta:
         db_table = "team_cell_consumptions"
         constraints = [
-            models.UniqueConstraint(fields=["team", "cell"], name="unique_team_cell_consumption"),
+            models.UniqueConstraint(
+                fields=["team", "cell"], name="unique_team_cell_consumption"
+            ),
         ]
         indexes = [
             models.Index(fields=["team"]),
@@ -238,7 +267,9 @@ class TeamChallengeAccess(models.Model):
         on_delete=models.CASCADE,
         related_name="challenge_accesses",
     )
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPENED)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.OPENED
+    )
     opened_at = models.DateTimeField(auto_now_add=True)
     cleared_at = models.DateTimeField(null=True, blank=True)
 
@@ -253,7 +284,7 @@ class TeamChallengeAccess(models.Model):
             models.UniqueConstraint(
                 fields=["team", "source_cell"],
                 name="unique_team_cell_challenge_access",
-            )
+            ),
         ]
         indexes = [
             models.Index(fields=["team", "status"]),
@@ -288,7 +319,9 @@ class TeamCellCandidate(models.Model):
         related_name="board_cell_candidates",
     )
     display_order = models.PositiveSmallIntegerField()
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OFFERED)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.OFFERED
+    )
     offered_at = models.DateTimeField(auto_now_add=True)
     selected_at = models.DateTimeField(null=True, blank=True)
 

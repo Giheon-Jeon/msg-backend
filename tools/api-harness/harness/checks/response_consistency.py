@@ -4,6 +4,7 @@ conflicts.py 는 '같은 endpoint를 다르게 정의'한 경우를 잡고,
 이 모듈은 endpoint가 달라도 지켜야 할 전역 컨벤션(응답 envelope 구조,
 필드 네이밍 규칙, 타임스탬프 형식, 성공 status code 관례)의 일관성을 본다.
 """
+
 from __future__ import annotations
 
 import re
@@ -57,29 +58,44 @@ def check_naming_convention(specs: list[SpecDocument]) -> list[ConsistencyIssue]
         # 팀 내부 혼용 체크: 유의미한 개수(>=2)로 2개 이상 컨벤션이 함께 쓰이는 경우
         significant = {c: n for c, n in counter.items() if n >= 2}
         if len(significant) > 1:
-            issues.append(ConsistencyIssue(
-                "naming_convention_mixed_within_team",
-                f"{doc.team} 명세 내부에서 네이밍 컨벤션 혼용: {significant}",
-                [doc.team],
-            ))
+            issues.append(
+                ConsistencyIssue(
+                    "naming_convention_mixed_within_team",
+                    f"{doc.team} 명세 내부에서 네이밍 컨벤션 혼용: {significant}",
+                    [doc.team],
+                )
+            )
 
     dominant = {
         team: counter.most_common(1)[0][0]
-        for team, counter in per_team_counter.items() if counter
+        for team, counter in per_team_counter.items()
+        if counter
     }
     distinct = set(dominant.values())
     if len(distinct) > 1:
-        issues.append(ConsistencyIssue(
-            "naming_convention_cross_team_mismatch",
-            "팀별 주력 네이밍 컨벤션이 다름: " + ", ".join(f"{t}={c}" for t, c in dominant.items()),
-            sorted(dominant.keys()),
-        ))
+        issues.append(
+            ConsistencyIssue(
+                "naming_convention_cross_team_mismatch",
+                "팀별 주력 네이밍 컨벤션이 다름: "
+                + ", ".join(f"{t}={c}" for t, c in dominant.items()),
+                sorted(dominant.keys()),
+            )
+        )
     return issues
 
 
 # data/result 등으로 감싸는 '래핑형' 응답에서 흔히 쓰이는 최상위 키 이름들.
 # endpoint마다 달라지는 실제 비즈니스 필드(예: card_id, effect...)와 구분하기 위한 기준.
-_ENVELOPE_WRAPPER_KEYS = {"code", "status", "success", "message", "data", "result", "payload", "error"}
+_ENVELOPE_WRAPPER_KEYS = {
+    "code",
+    "status",
+    "success",
+    "message",
+    "data",
+    "result",
+    "payload",
+    "error",
+}
 
 
 def _envelope_style(keys: list[str]) -> str:
@@ -120,13 +136,15 @@ def check_envelope_shapes(specs: list[SpecDocument]) -> list[ConsistencyIssue]:
 
     if wrapped_teams and flat_teams:
         wrapped_shapes = sorted({team_dominant[t] for t in wrapped_teams})
-        issues.append(ConsistencyIssue(
-            "response_envelope_wrapping_inconsistent",
-            f"일부 팀은 응답을 감싸서 반환하고({', '.join(wrapped_shapes)}) "
-            f"일부 팀은 감싸지 않고 최상위에 바로 반환함(flat) "
-            f"-> wrapped: {sorted(wrapped_teams)} / flat: {sorted(flat_teams)}",
-            sorted(wrapped_teams | flat_teams),
-        ))
+        issues.append(
+            ConsistencyIssue(
+                "response_envelope_wrapping_inconsistent",
+                f"일부 팀은 응답을 감싸서 반환하고({', '.join(wrapped_shapes)}) "
+                f"일부 팀은 감싸지 않고 최상위에 바로 반환함(flat) "
+                f"-> wrapped: {sorted(wrapped_teams)} / flat: {sorted(flat_teams)}",
+                sorted(wrapped_teams | flat_teams),
+            )
+        )
 
     distinct_wrapped_shapes = {team_dominant[t] for t in wrapped_teams}
     if len(distinct_wrapped_shapes) > 1:
@@ -134,11 +152,13 @@ def check_envelope_shapes(specs: list[SpecDocument]) -> list[ConsistencyIssue]:
             f"{shape}: {sorted(t for t in wrapped_teams if team_dominant[t] == shape)}"
             for shape in sorted(distinct_wrapped_shapes)
         )
-        issues.append(ConsistencyIssue(
-            "response_envelope_wrapper_key_mismatch",
-            f"응답을 감싸는(wrapped) 팀들 사이에서도 최상위 키 구성이 다름 -> {detail}",
-            sorted(wrapped_teams),
-        ))
+        issues.append(
+            ConsistencyIssue(
+                "response_envelope_wrapper_key_mismatch",
+                f"응답을 감싸는(wrapped) 팀들 사이에서도 최상위 키 구성이 다름 -> {detail}",
+                sorted(wrapped_teams),
+            )
+        )
 
     return issues
 
@@ -177,14 +197,18 @@ def check_timestamp_format(specs: list[SpecDocument]) -> list[ConsistencyIssue]:
     if len(format_teams) <= 1:
         return []
     detail = "; ".join(f"{fmt}: {sorted(teams)}" for fmt, teams in format_teams.items())
-    return [ConsistencyIssue(
-        "timestamp_format_inconsistent",
-        f"타임스탬프 표현 형식이 팀마다 다름 -> {detail}",
-        sorted({t for teams in format_teams.values() for t in teams}),
-    )]
+    return [
+        ConsistencyIssue(
+            "timestamp_format_inconsistent",
+            f"타임스탬프 표현 형식이 팀마다 다름 -> {detail}",
+            sorted({t for teams in format_teams.values() for t in teams}),
+        )
+    ]
 
 
-def check_success_status_convention(specs: list[SpecDocument]) -> list[ConsistencyIssue]:
+def check_success_status_convention(
+    specs: list[SpecDocument],
+) -> list[ConsistencyIssue]:
     """POST(생성성 endpoint)에서 성공 status code로 200/201 중 무엇을 쓰는지 팀별 확인."""
     team_codes: dict[str, set[str]] = {}
     for doc in specs:
@@ -206,12 +230,14 @@ def check_success_status_convention(specs: list[SpecDocument]) -> list[Consisten
     distinct = set(dominant.values())
     if len(distinct) <= 1:
         return []
-    return [ConsistencyIssue(
-        "success_status_code_convention_mismatch",
-        "POST 성공 응답 status code 관례가 팀마다 다름(200 vs 201): "
-        + ", ".join(f"{t}={c}" for t, c in dominant.items()),
-        sorted(dominant.keys()),
-    )]
+    return [
+        ConsistencyIssue(
+            "success_status_code_convention_mismatch",
+            "POST 성공 응답 status code 관례가 팀마다 다름(200 vs 201): "
+            + ", ".join(f"{t}={c}" for t, c in dominant.items()),
+            sorted(dominant.keys()),
+        )
+    ]
 
 
 def run_all(specs: list[SpecDocument]) -> list[ConsistencyIssue]:

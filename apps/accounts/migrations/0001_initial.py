@@ -10,70 +10,136 @@ class Migration(migrations.Migration):
 
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='Team',
+            name="Team",
             fields=[
-                ('team_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('team_name', models.CharField(max_length=100, unique=True)),
-                ('team_score', models.DecimalField(decimal_places=2, default=0, max_digits=12)),
-                ('mileage', models.IntegerField(default=0)),
-                ('is_banned', models.BooleanField(default=False)),
-                ('ban_reason', models.CharField(blank=True, max_length=500, null=True)),
-                ('banned_at', models.DateTimeField(blank=True, null=True)),
-                ('banned_by', models.CharField(blank=True, max_length=50, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "team_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("team_name", models.CharField(max_length=100, unique=True)),
+                (
+                    "team_score",
+                    models.DecimalField(decimal_places=2, default=0, max_digits=12),
+                ),
+                ("mileage", models.IntegerField(default=0)),
+                ("is_banned", models.BooleanField(default=False)),
+                ("ban_reason", models.CharField(blank=True, max_length=500, null=True)),
+                ("banned_at", models.DateTimeField(blank=True, null=True)),
+                ("banned_by", models.CharField(blank=True, max_length=50, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'db_table': 'teams',
+                "db_table": "teams",
             },
         ),
         migrations.CreateModel(
-            name='User',
+            name="User",
             fields=[
-                ('user_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('login_id', models.CharField(max_length=50, unique=True)),
-                ('password', models.CharField(db_column='password_hash', max_length=255)),
-                ('nickname', models.CharField(max_length=50)),
-                ('role', models.CharField(choices=[('PARTICIPANT', 'Participant'), ('ADMIN', 'Admin')], default='PARTICIPANT', max_length=20)),
-                ('is_leader', models.BooleanField(default=False)),
-                ('is_staff', models.BooleanField(default=False)),
-                ('is_superuser', models.BooleanField(default=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('team', models.ForeignKey(blank=True, db_column='team_id', null=True, on_delete=django.db.models.deletion.CASCADE, related_name='members', to='accounts.team')),
+                (
+                    "user_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("login_id", models.CharField(max_length=50, unique=True)),
+                (
+                    "password",
+                    models.CharField(db_column="password_hash", max_length=255),
+                ),
+                ("nickname", models.CharField(max_length=50)),
+                (
+                    "role",
+                    models.CharField(
+                        choices=[("PARTICIPANT", "Participant"), ("ADMIN", "Admin")],
+                        default="PARTICIPANT",
+                        max_length=20,
+                    ),
+                ),
+                ("is_leader", models.BooleanField(default=False)),
+                ("is_staff", models.BooleanField(default=False)),
+                ("is_superuser", models.BooleanField(default=False)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "team",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="team_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="members",
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'users',
+                "db_table": "users",
             },
         ),
         migrations.CreateModel(
-            name='RefreshToken',
+            name="RefreshToken",
             fields=[
-                ('token_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('token_hash', models.CharField(max_length=255, unique=True)),
-                ('expires_at', models.DateTimeField()),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('user', models.ForeignKey(db_column='user_id', on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
+                (
+                    "token_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("token_hash", models.CharField(max_length=255, unique=True)),
+                ("expires_at", models.DateTimeField()),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "user",
+                    models.ForeignKey(
+                        db_column="user_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'refresh_tokens',
-                'indexes': [models.Index(fields=['user'], name='refresh_tok_user_id_46676d_idx'), models.Index(fields=['expires_at'], name='refresh_tok_expires_a128d9_idx')],
+                "db_table": "refresh_tokens",
+                "indexes": [
+                    models.Index(
+                        fields=["user"], name="refresh_tok_user_id_46676d_idx"
+                    ),
+                    models.Index(
+                        fields=["expires_at"], name="refresh_tok_expires_a128d9_idx"
+                    ),
+                ],
             },
         ),
         migrations.AddIndex(
-            model_name='user',
-            index=models.Index(fields=['team'], name='users_team_id_76fc8d_idx'),
+            model_name="user",
+            index=models.Index(fields=["team"], name="users_team_id_76fc8d_idx"),
         ),
         migrations.AddIndex(
-            model_name='user',
-            index=models.Index(fields=['team', 'is_leader'], name='users_team_id_362606_idx'),
+            model_name="user",
+            index=models.Index(
+                fields=["team", "is_leader"], name="users_team_id_362606_idx"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='user',
-            constraint=models.UniqueConstraint(condition=models.Q(('is_leader', True)), fields=('team',), name='uq_users_one_leader_per_team'),
+            model_name="user",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("is_leader", True)),
+                fields=("team",),
+                name="uq_users_one_leader_per_team",
+            ),
         ),
     ]

@@ -12,6 +12,7 @@ from apps.koth.models import KothSolve
 from apps.ranking.pagination import parse_pagination
 from apps.ranking.ranking import build_team_ranking, build_member_ranking
 from apps.signature.models import SignatureSolve
+from apps.ranking.models import LineMonopoly
 
 
 def format_datetime(value):
@@ -21,22 +22,51 @@ def format_datetime(value):
 
 
 def collect_team_data():
-    koth_score_sq = KothSolve.objects.filter(
-        team=OuterRef("pk"),
-    ).values("team").annotate(total=Sum("earned_score")).values("total")
+    koth_score_sq = (
+        KothSolve.objects.filter(
+            team=OuterRef("pk"),
+        )
+        .values("team")
+        .annotate(total=Sum("earned_score"))
+        .values("total")
+    )
 
-    koth_first_sq = KothSolve.objects.filter(
-        team=OuterRef("pk"),
-        solved_at__isnull=False,
-    ).values("team").annotate(first=Min("solved_at")).values("first")
+    koth_first_sq = (
+        KothSolve.objects.filter(
+            team=OuterRef("pk"),
+            solved_at__isnull=False,
+        )
+        .values("team")
+        .annotate(first=Min("solved_at"))
+        .values("first")
+    )
 
-    signature_score_sq = SignatureSolve.objects.filter(
-        team=OuterRef("pk"),
-    ).values("team").annotate(total=Sum("earned_score")).values("total")
+    signature_score_sq = (
+        SignatureSolve.objects.filter(
+            team=OuterRef("pk"),
+        )
+        .values("team")
+        .annotate(total=Sum("earned_score"))
+        .values("total")
+    )
 
-    signature_last_sq = SignatureSolve.objects.filter(
-        team=OuterRef("pk"),
-    ).values("team").annotate(last=Max("solved_at")).values("last")
+    signature_last_sq = (
+        SignatureSolve.objects.filter(
+            team=OuterRef("pk"),
+        )
+        .values("team")
+        .annotate(last=Max("solved_at"))
+        .values("last")
+    )
+
+    line_score_sq = (
+        LineMonopoly.objects.filter(
+            team=OuterRef("pk"),
+        )
+        .values("team")
+        .annotate(total=Sum("earned_score"))
+        .values("total")
+    )
 
     teams = Team.objects.filter(is_banned=False).annotate(
         jeopardy_total=Sum("solves__challenge__current_score"),
@@ -45,45 +75,55 @@ def collect_team_data():
         first_koth_at=Subquery(koth_first_sq),
         signature_total=Subquery(signature_score_sq),
         last_signature_at=Subquery(signature_last_sq),
+        line_total=Subquery(line_score_sq),
     )
 
     team_data = []
     for team in teams:
-        team_data.append({
-            "team_id": str(team.team_id),
-            "team_name": team.team_name,
-            "jeopardy_score": team.jeopardy_total or Decimal("0"),
-            "mileage": team.mileage,
-            "koth_score": team.koth_total or Decimal("0"),
-            "signature_score": team.signature_total or Decimal("0"),
-            "jeopardy_solved_at": team.last_jeopardy_at,
-            "koth_solved_at": team.first_koth_at,
-            "signature_solved_at": team.last_signature_at,
-        })
+        team_data.append(
+            {
+                "team_id": str(team.team_id),
+                "team_name": team.team_name,
+                "jeopardy_score": team.jeopardy_total or Decimal("0"),
+                "mileage": team.mileage,
+                "koth_score": team.koth_total or Decimal("0"),
+                "signature_score": team.signature_total or Decimal("0"),
+                "line_score": team.line_total or Decimal("0"),
+                "jeopardy_solved_at": team.last_jeopardy_at,
+                "koth_solved_at": team.first_koth_at,
+                "signature_solved_at": team.last_signature_at,
+            }
+        )
     return team_data
 
 
 def collect_member_data():
-    users = User.objects.filter(
-        team__isnull=False,
-        team__is_banned=False,
-    ).select_related("team").annotate(
-        score_sum=Sum("solves__challenge__current_score"),
-        solve_count=Count("solves"),
-        last_at=Max("solves__solved_at"),
+    users = (
+        User.objects.filter(
+            team__isnull=False,
+            team__is_banned=False,
+        )
+        .select_related("team")
+        .annotate(
+            score_sum=Sum("solves__challenge__current_score"),
+            solve_count=Count("solves"),
+            last_at=Max("solves__solved_at"),
+        )
     )
 
     member_data = []
     for user in users:
-        member_data.append({
-            "user_id": str(user.user_id),
-            "nickname": user.nickname,
-            "team_id": str(user.team_id),
-            "team_name": user.team.team_name,
-            "user_score": user.score_sum or 0,
-            "solved_count": user.solve_count,
-            "last_solved_at": user.last_at,
-        })
+        member_data.append(
+            {
+                "user_id": str(user.user_id),
+                "nickname": user.nickname,
+                "team_id": str(user.team_id),
+                "team_name": user.team.team_name,
+                "user_score": user.score_sum or 0,
+                "solved_count": user.solve_count,
+                "last_solved_at": user.last_at,
+            }
+        )
     return member_data
 
 
@@ -103,12 +143,14 @@ def team_ranking(request):
     start = (page - 1) * size
     end = start + size
 
-    return ok({
-        "rankings": rankings[start:end],
-        "total_count": len(rankings),
-        "page": page,
-        "size": size,
-    })
+    return ok(
+        {
+            "rankings": rankings[start:end],
+            "total_count": len(rankings),
+            "page": page,
+            "size": size,
+        }
+    )
 
 
 @api_view(["GET"])

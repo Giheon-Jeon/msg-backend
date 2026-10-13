@@ -10,72 +10,174 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('accounts', '0001_initial'),
+        ("accounts", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='MileageHistory',
+            name="MileageHistory",
             fields=[
-                ('history_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('type', models.CharField(choices=[('CHALLENGE_SOLVE', 'Challenge Solve'), ('START_BONUS', 'Start Bonus'), ('ROULETTE', 'Roulette'), ('KOTH_REWARD', 'Koth Reward'), ('ADMIN_GRANT', 'Admin Grant'), ('REFUND', 'Refund'), ('PURCHASE', 'Purchase'), ('ADMIN_DEDUCT', 'Admin Deduct')], max_length=20)),
-                ('amount', models.IntegerField(help_text='획득은 양수, 사용은 음수')),
-                ('reason', models.CharField(blank=True, max_length=500, null=True)),
-                ('item_name', models.CharField(blank=True, max_length=100, null=True)),
-                ('is_refunded', models.BooleanField(default=False)),
-                ('processed_by', models.CharField(blank=True, max_length=50, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('ref_history', models.ForeignKey(blank=True, db_column='ref_history_id', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='refunds', to='teams.mileagehistory')),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, to='accounts.team')),
+                (
+                    "history_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "type",
+                    models.CharField(
+                        choices=[
+                            ("CHALLENGE_SOLVE", "Challenge Solve"),
+                            ("START_BONUS", "Start Bonus"),
+                            ("ROULETTE", "Roulette"),
+                            ("KOTH_REWARD", "Koth Reward"),
+                            ("ADMIN_GRANT", "Admin Grant"),
+                            ("REFUND", "Refund"),
+                            ("PURCHASE", "Purchase"),
+                            ("ADMIN_DEDUCT", "Admin Deduct"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("amount", models.IntegerField(help_text="획득은 양수, 사용은 음수")),
+                ("reason", models.CharField(blank=True, max_length=500, null=True)),
+                ("item_name", models.CharField(blank=True, max_length=100, null=True)),
+                ("is_refunded", models.BooleanField(default=False)),
+                (
+                    "processed_by",
+                    models.CharField(blank=True, max_length=50, null=True),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "ref_history",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="ref_history_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="refunds",
+                        to="teams.mileagehistory",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'mileage_history',
+                "db_table": "mileage_history",
             },
         ),
         migrations.CreateModel(
-            name='PaymentToken',
+            name="PaymentToken",
             fields=[
-                ('token_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('token_hash', models.CharField(max_length=255, unique=True)),
-                ('status', models.CharField(choices=[('ACTIVE', 'Active'), ('USED', 'Used'), ('INVALIDATED', 'Invalidated')], default='ACTIVE', max_length=20)),
-                ('expires_at', models.DateTimeField()),
-                ('used_at', models.DateTimeField(blank=True, null=True)),
-                ('invalidated_at', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('history', models.ForeignKey(blank=True, db_column='history_id', null=True, on_delete=django.db.models.deletion.SET_NULL, to='teams.mileagehistory')),
-                ('invalidated_by_token', models.ForeignKey(blank=True, db_column='invalidated_by_token_id', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='replaced', to='teams.paymenttoken')),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, to='accounts.team')),
+                (
+                    "token_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("token_hash", models.CharField(max_length=255, unique=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("ACTIVE", "Active"),
+                            ("USED", "Used"),
+                            ("INVALIDATED", "Invalidated"),
+                        ],
+                        default="ACTIVE",
+                        max_length=20,
+                    ),
+                ),
+                ("expires_at", models.DateTimeField()),
+                ("used_at", models.DateTimeField(blank=True, null=True)),
+                ("invalidated_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "history",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="history_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="teams.mileagehistory",
+                    ),
+                ),
+                (
+                    "invalidated_by_token",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="invalidated_by_token_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="replaced",
+                        to="teams.paymenttoken",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="accounts.team",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'payment_tokens',
+                "db_table": "payment_tokens",
             },
         ),
         migrations.AddIndex(
-            model_name='mileagehistory',
-            index=models.Index(fields=['team', '-created_at'], name='mileage_his_team_id_d0b116_idx'),
+            model_name="mileagehistory",
+            index=models.Index(
+                fields=["team", "-created_at"], name="mileage_his_team_id_d0b116_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='mileagehistory',
-            index=models.Index(fields=['type'], name='mileage_his_type_a5191b_idx'),
+            model_name="mileagehistory",
+            index=models.Index(fields=["type"], name="mileage_his_type_a5191b_idx"),
         ),
         migrations.AddIndex(
-            model_name='mileagehistory',
-            index=models.Index(fields=['ref_history'], name='mileage_his_ref_his_ffbe6f_idx'),
+            model_name="mileagehistory",
+            index=models.Index(
+                fields=["ref_history"], name="mileage_his_ref_his_ffbe6f_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='paymenttoken',
-            index=models.Index(fields=['team', 'status'], name='payment_tok_team_id_40cb19_idx'),
+            model_name="paymenttoken",
+            index=models.Index(
+                fields=["team", "status"], name="payment_tok_team_id_40cb19_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='paymenttoken',
-            index=models.Index(fields=['history'], name='payment_tok_history_bbb20f_idx'),
+            model_name="paymenttoken",
+            index=models.Index(
+                fields=["history"], name="payment_tok_history_bbb20f_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='paymenttoken',
-            index=models.Index(fields=['invalidated_by_token'], name='payment_tok_invalid_7aefac_idx'),
+            model_name="paymenttoken",
+            index=models.Index(
+                fields=["invalidated_by_token"], name="payment_tok_invalid_7aefac_idx"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='paymenttoken',
-            constraint=models.UniqueConstraint(condition=models.Q(('status', 'ACTIVE')), fields=('team',), name='uq_payment_tokens_one_active'),
+            model_name="paymenttoken",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("status", "ACTIVE")),
+                fields=("team",),
+                name="uq_payment_tokens_one_active",
+            ),
         ),
     ]

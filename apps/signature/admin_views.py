@@ -9,7 +9,7 @@ from apps.common.response import ok
 from apps.common.utils import num
 from apps.koth.models import KothClub
 
-from .exceptions import SignatureAlreadyExists, SignatureNotFound
+from .exceptions import SignatureAlreadyExists, SignatureInUse, SignatureNotFound
 from .models import SignatureChallenge, SignatureSolve
 from .serializers import (
     SignatureCreateSerializer,
@@ -96,13 +96,9 @@ def signature_collection(request):
     )
 
 
-@api_view(["PATCH"])
+@api_view(["PATCH", "DELETE"])
 @permission_classes([IsAdmin])
 def signature_detail(request, signature_id):
-    serializer = SignatureUpdateSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    values = serializer.validated_data
-
     with transaction.atomic():
         try:
             challenge = (
@@ -112,6 +108,26 @@ def signature_detail(request, signature_id):
             )
         except SignatureChallenge.DoesNotExist:
             raise SignatureNotFound()
+
+        if request.method == "DELETE":
+            has_records = (
+                challenge.solves.exists()
+                or challenge.flag_submissions.exists()
+                or challenge.submission_locks.exists()
+            )
+            if challenge.is_published or has_records:
+                raise SignatureInUse()
+
+            deleted = {
+                "signature_id": str(challenge.signature_id),
+                "club_id": str(challenge.club_id),
+            }
+            challenge.delete()
+            return ok(deleted, message="시그니처 문제 삭제 성공")
+
+        serializer = SignatureUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
 
         update_fields = ["updated_at"]
         for field in ("title", "description", "score"):

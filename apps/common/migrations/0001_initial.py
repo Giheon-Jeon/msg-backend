@@ -17,21 +17,51 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='IdempotencyRecord',
+            name="IdempotencyRecord",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('endpoint', models.CharField(max_length=200)),
-                ('key', models.CharField(max_length=200)),
-                ('request_hash', models.CharField(max_length=64)),
-                ('response_status', models.IntegerField(blank=True, null=True)),
-                ('response_message', models.CharField(blank=True, default='', max_length=255)),
-                ('response_body', models.JSONField(blank=True, encoder=django.core.serializers.json.DjangoJSONEncoder, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='idempotency_records', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("endpoint", models.CharField(max_length=200)),
+                ("key", models.CharField(max_length=200)),
+                ("request_hash", models.CharField(max_length=64)),
+                ("response_status", models.IntegerField(blank=True, null=True)),
+                (
+                    "response_message",
+                    models.CharField(blank=True, default="", max_length=255),
+                ),
+                (
+                    "response_body",
+                    models.JSONField(
+                        blank=True,
+                        encoder=django.core.serializers.json.DjangoJSONEncoder,
+                        null=True,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="idempotency_records",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'idempotency_records',
-                'constraints': [models.UniqueConstraint(fields=('user', 'endpoint', 'key'), name='uq_idempotency_user_endpoint_key')],
+                "db_table": "idempotency_records",
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("user", "endpoint", "key"),
+                        name="uq_idempotency_user_endpoint_key",
+                    )
+                ],
             },
         ),
     ]

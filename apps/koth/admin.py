@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import KothChallenge, KothClub, KothScorePeriod, KothSolve, KothTeamToken, KothTokenVerificationAttempt
+from .models import (
+    KothChallenge,
+    KothClub,
+    KothScorePeriod,
+    KothSolve,
+    KothTeamToken,
+    KothTokenVerificationAttempt,
+)
 
 
 @admin.register(KothClub)

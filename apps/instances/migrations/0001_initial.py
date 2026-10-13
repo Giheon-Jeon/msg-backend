@@ -11,52 +11,162 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('accounts', '0001_initial'),
-        ('challenge', '0001_initial'),
+        ("accounts", "0001_initial"),
+        ("challenge", "0001_initial"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='ChallengeRuntimeConfig',
+            name="ChallengeRuntimeConfig",
             fields=[
-                ('challenge', models.OneToOneField(db_column='challenge_id', on_delete=django.db.models.deletion.CASCADE, primary_key=True, related_name='runtime_config', serialize=False, to='challenge.challenge')),
-                ('container_image', models.CharField(max_length=255)),
-                ('container_port', models.IntegerField()),
-                ('architecture', models.CharField(choices=[('AMD64', 'Amd64'), ('ARM64', 'Arm64')], default='AMD64', max_length=20)),
-                ('cpu_millicores', models.IntegerField(default=500)),
-                ('memory_mib', models.IntegerField(default=512)),
-                ('ephemeral_storage_mib', models.IntegerField(default=1024)),
-                ('ttl_minutes', models.IntegerField(default=120)),
-                ('hard_timeout_minutes', models.IntegerField(default=180)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "challenge",
+                    models.OneToOneField(
+                        db_column="challenge_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        primary_key=True,
+                        related_name="runtime_config",
+                        serialize=False,
+                        to="challenge.challenge",
+                    ),
+                ),
+                ("container_image", models.CharField(max_length=255)),
+                ("container_port", models.IntegerField()),
+                (
+                    "architecture",
+                    models.CharField(
+                        choices=[("AMD64", "Amd64"), ("ARM64", "Arm64")],
+                        default="AMD64",
+                        max_length=20,
+                    ),
+                ),
+                ("cpu_millicores", models.IntegerField(default=500)),
+                ("memory_mib", models.IntegerField(default=512)),
+                ("ephemeral_storage_mib", models.IntegerField(default=1024)),
+                ("ttl_minutes", models.IntegerField(default=120)),
+                ("hard_timeout_minutes", models.IntegerField(default=180)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'db_table': 'challenge_runtime_configs',
+                "db_table": "challenge_runtime_configs",
             },
         ),
         migrations.CreateModel(
-            name='Instance',
+            name="Instance",
             fields=[
-                ('instance_id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('status', models.CharField(choices=[('REQUESTED', 'Requested'), ('SCHEDULING', 'Scheduling'), ('PROVISIONING', 'Provisioning'), ('RUNNING', 'Running'), ('RESTARTING', 'Restarting'), ('RESETTING', 'Resetting'), ('STOPPING', 'Stopping'), ('STOPPED', 'Stopped'), ('FAILED', 'Failed'), ('EXPIRED', 'Expired'), ('CLEANUP_PENDING', 'Cleanup Pending'), ('CLEANED', 'Cleaned')], default='REQUESTED', max_length=30)),
-                ('host', models.CharField(blank=True, max_length=255, null=True)),
-                ('ports', models.JSONField(blank=True, default=list)),
-                ('expires_at', models.DateTimeField(blank=True, null=True)),
-                ('hard_expires_at', models.DateTimeField(blank=True, null=True)),
-                ('extend_count', models.IntegerField(default=0)),
-                ('delete_reason', models.CharField(blank=True, choices=[('USER_REQUESTED', 'User Requested'), ('REPLACED_BY_NEW_INSTANCE', 'Replaced By New Instance'), ('TTL_EXPIRED', 'Ttl Expired'), ('IDLE_EXPIRED', 'Idle Expired'), ('HARD_TIMEOUT', 'Hard Timeout'), ('ADMIN_FORCED', 'Admin Forced')], max_length=40, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('challenge', models.ForeignKey(db_column='challenge_id', on_delete=django.db.models.deletion.CASCADE, related_name='instances', to='challenge.challenge')),
-                ('replaced_instance', models.ForeignKey(blank=True, db_column='replaced_instance_id', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='replacement_instances', to='instances.instance')),
-                ('team', models.ForeignKey(db_column='team_id', on_delete=django.db.models.deletion.CASCADE, related_name='instances', to='accounts.team')),
-                ('user', models.ForeignKey(db_column='user_id', on_delete=django.db.models.deletion.CASCADE, related_name='instances', to=settings.AUTH_USER_MODEL)),
+                (
+                    "instance_id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("REQUESTED", "Requested"),
+                            ("SCHEDULING", "Scheduling"),
+                            ("PROVISIONING", "Provisioning"),
+                            ("RUNNING", "Running"),
+                            ("RESTARTING", "Restarting"),
+                            ("RESETTING", "Resetting"),
+                            ("STOPPING", "Stopping"),
+                            ("STOPPED", "Stopped"),
+                            ("FAILED", "Failed"),
+                            ("EXPIRED", "Expired"),
+                            ("CLEANUP_PENDING", "Cleanup Pending"),
+                            ("CLEANED", "Cleaned"),
+                        ],
+                        default="REQUESTED",
+                        max_length=30,
+                    ),
+                ),
+                ("host", models.CharField(blank=True, max_length=255, null=True)),
+                ("ports", models.JSONField(blank=True, default=list)),
+                ("expires_at", models.DateTimeField(blank=True, null=True)),
+                ("hard_expires_at", models.DateTimeField(blank=True, null=True)),
+                ("extend_count", models.IntegerField(default=0)),
+                (
+                    "delete_reason",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("USER_REQUESTED", "User Requested"),
+                            ("REPLACED_BY_NEW_INSTANCE", "Replaced By New Instance"),
+                            ("TTL_EXPIRED", "Ttl Expired"),
+                            ("IDLE_EXPIRED", "Idle Expired"),
+                            ("HARD_TIMEOUT", "Hard Timeout"),
+                            ("ADMIN_FORCED", "Admin Forced"),
+                        ],
+                        max_length=40,
+                        null=True,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "challenge",
+                    models.ForeignKey(
+                        db_column="challenge_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="instances",
+                        to="challenge.challenge",
+                    ),
+                ),
+                (
+                    "replaced_instance",
+                    models.ForeignKey(
+                        blank=True,
+                        db_column="replaced_instance_id",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="replacement_instances",
+                        to="instances.instance",
+                    ),
+                ),
+                (
+                    "team",
+                    models.ForeignKey(
+                        db_column="team_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="instances",
+                        to="accounts.team",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        db_column="user_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="instances",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'instances',
-                'indexes': [models.Index(fields=['user', 'status', 'created_at'], name='instances_user_id_07d5f4_idx'), models.Index(fields=['team', 'status', 'created_at'], name='instances_team_id_87ccde_idx'), models.Index(fields=['challenge'], name='instances_challen_88ab17_idx'), models.Index(fields=['replaced_instance'], name='instances_replace_9e74c9_idx')],
+                "db_table": "instances",
+                "indexes": [
+                    models.Index(
+                        fields=["user", "status", "created_at"],
+                        name="instances_user_id_07d5f4_idx",
+                    ),
+                    models.Index(
+                        fields=["team", "status", "created_at"],
+                        name="instances_team_id_87ccde_idx",
+                    ),
+                    models.Index(
+                        fields=["challenge"], name="instances_challen_88ab17_idx"
+                    ),
+                    models.Index(
+                        fields=["replaced_instance"],
+                        name="instances_replace_9e74c9_idx",
+                    ),
+                ],
             },
         ),
     ]
