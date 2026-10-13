@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MSG CTF repository dotenv templates",
-    "version": "1.0.0",
-    "description": "Read only the explicit env/<container>.env.example file at a pinned commit. Admin preview is read-only. Import creates an inactive derived release and preserves existing secret pins."
+    "title": "MSG CTF author environment import",
+    "version": "1.1.0",
+    "description": "Read author-provided environment values from the declared container's source at a pinned commit. Secret source values remain on the server and are encrypted on import. No generated template is required."
   },
   "paths": {
     "/api/v1/admin/challenges/{challenge_id}/releases/{release_id}/repository_environment": {
@@ -506,9 +506,10 @@
               "source_revision",
               "source_url",
               "source_token",
-              "template_path",
               "entries",
-              "warnings"
+              "warnings",
+              "build_context",
+              "source_files"
             ],
             "properties": {
               "container": {
@@ -529,9 +530,6 @@
               "source_token": {
                 "type": "string"
               },
-              "template_path": {
-                "type": "string"
-              },
               "entries": {
                 "type": "array",
                 "items": {
@@ -547,7 +545,8 @@
                     "locked_secret",
                     "use_existing",
                     "secret_name",
-                    "sources"
+                    "sources",
+                    "resolution"
                   ],
                   "properties": {
                     "name": {
@@ -610,19 +609,48 @@
                             "type": "string"
                           },
                           "line": {
-                            "type": "integer",
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
                             "minimum": 1
                           },
                           "origin": {
-                            "const": "dotenv_template"
+                            "type": "string",
+                            "enum": [
+                              "dockerfile",
+                              "compose",
+                              "env_file",
+                              "env_example",
+                              "source"
+                            ]
                           }
                         }
                       }
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "configured",
+                        "code_default",
+                        "author_example",
+                        "needs_value",
+                        "conflict"
+                      ]
                     }
                   }
                 }
               },
               "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "build_context": {
+                "type": "string"
+              },
+              "source_files": {
                 "type": "array",
                 "items": {
                   "type": "string"

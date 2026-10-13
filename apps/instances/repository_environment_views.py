@@ -18,7 +18,7 @@ from apps.instances.repository_environment import discover_environment
 from apps.instances.repository_source import RepositorySnapshot, RepositorySourceUnavailable
 from apps.instances.runtime_secrets import RuntimeSecretUnavailable
 
-TOKEN_SALT = "repository.environment.v1"
+TOKEN_SALT = "repository.environment.v2"
 
 
 def _source(challenge_id, release_id):
@@ -101,13 +101,15 @@ class RepositoryEnvironmentView(APIView):
                 name = item["name"]
                 previous = records.get(target.secret_env.get(name))
                 kind = "secret" if previous or item["sensitive"] else target.env_rules.get(name, {}).get("kind", item["kind"])
-                row = {key: item[key] for key in ("name", "sources", "needs_value")}
-                row.update(kind=kind, required=target.env_rules.get(name, {}).get("required", True),
-                           selected=previous is not None or item["value"] not in (None, ""),
-                           has_value=item["value"] is not None and item["value"] != "",
+                row = {key: item[key] for key in ("name", "sources", "needs_value", "resolution")}
+                has_value = item["value"] is not None and (kind == "env" or item["value"] != "")
+                use_existing = previous is not None and not has_value
+                row.update(kind=kind, required=target.env_rules.get(name, {}).get("required", item["value"] != ""),
+                           selected=use_existing or (has_value and item["resolution"] != "author_example"),
+                           has_value=has_value,
                            locked_secret=bool(previous or item["sensitive"] or target.env_rules.get(name, {}).get("kind") == "secret"),
                            secret_name=previous.name if previous else default_secret_name(container_name, name),
-                           use_existing=previous is not None)
+                           use_existing=use_existing)
                 if previous:
                     row.update(secret_id=str(previous.pk), version=previous.version)
                 if kind == "env":
@@ -118,7 +120,8 @@ class RepositoryEnvironmentView(APIView):
             return ok({"container": container_name, "source_revision": snapshot.revision,
                        "source_url": f"https://github.com/{snapshot.repository}/tree/{snapshot.revision}/{snapshot.slug}" if getattr(snapshot, "published", True) else None,
                        "source_token": signing.dumps(evidence, salt=TOKEN_SALT, compress=True), "entries": rows,
-                       "warnings": discovery["warnings"], "template_path": discovery["template_path"]})
+                       "warnings": discovery["warnings"], "build_context": discovery["build_context"],
+                       "source_files": discovery["source_files"]})
         except ReleaseValidationError as error:
             return fail("REPOSITORY_ENV_INVALID", error.message, 400)
         except RepositorySourceUnavailable as error:

@@ -9,7 +9,7 @@ from django.test import SimpleTestCase, override_settings
 
 from apps.instances.models import ChallengeRelease, RuntimeSecret
 from apps.instances.releases import ReleaseValidationError
-from apps.instances.repository_environment import discover_environment, parse_environment_template
+from apps.instances.repository_environment import discover_environment, _dotenv, _expand
 from apps.instances.repository_source import RepositorySnapshot, RepositorySourceUnavailable
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
@@ -40,38 +40,83 @@ class MemorySnapshot:
 
 
 class RepositoryDiscoveryTests(SimpleTestCase):
-    def test_only_the_declared_container_template_is_read(self):
+    def test_author_values_are_read_without_generated_templates(self):
         snapshot = MemorySnapshot()
         with patch.object(snapshot, "read", wraps=snapshot.read) as read:
             result = discover_environment(snapshot, "app")
-        self.assertEqual([call.args[0] for call in read.call_args_list], ["info.yaml", "env/app.env.example"])
+        paths = [call.args[0] for call in read.call_args_list]
+        self.assertNotIn("env/app.env.example", paths)
+        self.assertNotIn("app/tests/test_fake.py", paths)
         rows = {item["name"]: item for item in result["candidates"]}
         self.assertEqual(set(rows), {"PORT", "FLAG", "DB_PASS"})
         self.assertEqual(rows["PORT"]["value"], "9090")
         self.assertEqual(rows["PORT"]["kind"], "env")
         self.assertTrue(rows["FLAG"]["sensitive"])
         self.assertTrue(rows["DB_PASS"]["sensitive"])
+        self.assertEqual(rows["DB_PASS"]["value"], "private-source-value")
+        self.assertEqual(rows["FLAG"]["value"], "MSG{flag}")
+        self.assertEqual(rows["PORT"]["resolution"], "configured")
+        self.assertEqual(rows["DB_PASS"]["resolution"], "code_default")
         helper = discover_environment(MemorySnapshot(), "helper")["candidates"]
         self.assertEqual([item["name"] for item in helper], ["HELPER_TOKEN"])
 
-    def test_missing_template_does_not_fall_back_to_docker_or_code(self):
+    def test_no_template_is_required(self):
         files = dict(FILES)
         del files["env/app.env.example"]
-        with self.assertRaises(ReleaseValidationError) as raised:
-            discover_environment(MemorySnapshot(files=files), "app")
-        self.assertIn("env/app.env.example", str(raised.exception))
+        result = discover_environment(MemorySnapshot(files=files), "app")
+        self.assertEqual(len(result["candidates"]), 3)
 
-    def test_dotenv_is_literal_and_preserves_line_numbers_and_blank_slots(self):
-        rows = parse_environment_template('\ufeff# comment\r\nPORT=8080\r\nPASSWORD=\r\nTEXT=" a # $VALUE = b "\r\n', "env/app.env.example")
-        self.assertEqual(rows[1]["value"], "")
-        self.assertTrue(rows[1]["needs_value"])
-        self.assertEqual(rows[2]["value"], " a # $VALUE = b ")
-        self.assertEqual(rows[2]["sources"][0]["line"], 4)
+    def test_dotenv_preserves_literal_secret_characters_and_empty_values(self):
+        rows = _dotenv("\ufeff# comment\r\nPORT=8080\r\nPASSWORD=\r\nTEXT=' a # $VALUE = b '\r\n", "app/.env")
+        self.assertEqual(rows[1][1], "")
+        self.assertEqual(rows[2][1], " a # $VALUE = b ")
+        self.assertEqual(rows[2][2], 4)
+        self.assertEqual(_dotenv("PASSWORD=literal$dollar=value", "app/.env")[0][1], "literal$dollar=value")
+
+    def test_actual_env_file_and_compose_precedence_keep_values(self):
+        files = dict(FILES)
+        files[".env"] = "AUTHOR_PORT=9191\nAUTHOR_PASSWORD='original$secret=value'\nUNRELATED=do-not-inject\n"
+        files["app/runtime.env"] = "PORT=8181\nDB_PASS='file$secret=value'\n"
+        files["app/final.env"] = "DB_PASS='last$secret=value'\n"
+        files["docker-compose.yml"] = "services:\n  app:\n    build: ./app\n    env_file: [app/runtime.env, app/final.env]\n    environment:\n      PORT: ${AUTHOR_PORT}\n      API_PASSWORD: ${AUTHOR_PASSWORD}\n"
+        result = discover_environment(MemorySnapshot(files=files), "app")
+        rows = {row["name"]: row for row in result["candidates"]}
+        self.assertEqual(rows["PORT"]["value"], "9191")
+        self.assertEqual(rows["DB_PASS"]["value"], "last$secret=value")
+        self.assertEqual(rows["API_PASSWORD"]["value"], "original$secret=value")
+        self.assertNotIn("UNRELATED", rows)
+        self.assertEqual(rows["DB_PASS"]["sources"][0]["path"], "app/final.env")
+
+    def test_local_dotenv_is_imported_without_any_value_redaction(self):
+        files = dict(FILES)
+        del files["docker-compose.yml"]
+        files["app/.env"] = "PORT=8181\nDB_PASS='original$secret=value'\n"
+        rows = {row["name"]: row for row in discover_environment(MemorySnapshot(files=files), "app")["candidates"]}
+        self.assertEqual(rows["DB_PASS"]["value"], "original$secret=value")
+        self.assertEqual(rows["PORT"]["value"], "8181")
+
+    def test_unresolved_source_is_not_replaced_by_an_example_or_host_value(self):
+        files = dict(FILES)
+        files["docker-compose.yml"] = "services:\n  app:\n    build: ./app\n    environment:\n      DB_PASS: ${MISSING}\n"
+        files[".env.example"] = "DB_PASS=example-only\n"
+        with patch.dict("os.environ", {"MISSING": "server-value"}):
+            rows = {row["name"]: row for row in discover_environment(MemorySnapshot(files=files), "app")["candidates"]}
+        self.assertIsNone(rows["DB_PASS"]["value"])
+        self.assertEqual(rows["DB_PASS"]["resolution"], "needs_value")
+
+    def test_compose_defaults_nested_values_and_dollars(self):
+        self.assertEqual(_expand("${PORT:-8080}", {}), "8080")
+        self.assertEqual(_expand("${PORT-8080}", {"PORT": ""}), "")
+        self.assertEqual(_expand("${A:-${B:-8080}}", {}), "8080")
+        self.assertEqual(_expand("$$LITERAL", {}), "$LITERAL")
+        self.assertEqual(_expand("${A:+yes}", {"A": "1"}), "yes")
+        self.assertIsNone(_expand("${PASSWORD:?required}", {}))
 
     def test_more_than_32_declarations_warn_without_silently_dropping_entries(self):
-        files = dict(FILES, **{"env/app.env.example": "\n".join(f"PORT_{index}=1234" for index in range(33))})
+        files = dict(FILES, **{"app/.env": "\n".join(f"PORT_{index}=1234" for index in range(33))})
+        del files["docker-compose.yml"]
         result = discover_environment(MemorySnapshot(files=files), "app")
-        self.assertEqual(len(result["candidates"]), 33)
+        self.assertEqual(len(result["candidates"]), 36)
         self.assertTrue(result["warnings"])
 
     def test_invalid_yaml_and_duplicate_entries_do_not_echo_source_values(self):
@@ -79,9 +124,9 @@ class RepositoryDiscoveryTests(SimpleTestCase):
         with self.assertRaises(ReleaseValidationError) as raised:
             discover_environment(MemorySnapshot(files=files), "app")
         self.assertNotIn("private-source", str(raised.exception))
-        for text in ("PASSWORD=private-first\nPASSWORD=private-second", "export PASSWORD=private-first", 'PASSWORD="private-first'):
+        for text in ("PASSWORD=private-first\nPASSWORD=private-second", 'PASSWORD="private-first'):
             with self.assertRaises(ReleaseValidationError) as raised:
-                parse_environment_template(text, "env/app.env.example")
+                _dotenv(text, "app/.env")
             self.assertNotIn("private", str(raised.exception))
 
     @override_settings(REPOSITORY_ENV_EXCLUDED_SLUGS={"pwn-msgdriver"})
@@ -147,7 +192,8 @@ class RepositoryEnvironmentApiTests(ReleaseTestBase):
         self.assertNotIn("MSG{flag}", data)
         self.assertEqual(before, (RuntimeSecret.objects.count(), ChallengeRelease.objects.count()))
         flag = next(row for row in response.data["data"]["entries"] if row["name"] == "FLAG")
-        self.assertTrue(flag["use_existing"])
+        self.assertFalse(flag["use_existing"])
+        self.assertTrue(flag["has_value"])
         self.assertEqual(flag["secret_id"], str(self.flag.pk))
 
     def test_preview_and_import_encrypt_values_preserve_other_containers_and_are_idempotent(self):
@@ -160,7 +206,8 @@ class RepositoryEnvironmentApiTests(ReleaseTestBase):
         release = ChallengeRelease.objects.get(pk=saved.data["data"]["release_id"])
         app = release.containers.get(name="app")
         self.assertEqual(app.env, {"PORT": "9090", "KEEP": "keep"})
-        self.assertEqual(app.secret_env["FLAG"], str(self.flag.pk))
+        imported_flag = RuntimeSecret.objects.get(pk=app.secret_env["FLAG"])
+        self.assertEqual(decrypt_runtime_secret(imported_flag), "MSG{flag}")
         secret = RuntimeSecret.objects.get(pk=app.secret_env["DB_PASS"])
         self.assertEqual(decrypt_runtime_secret(secret), "private-source-value")
         self.assertNotIn("private-source-value", secret.encrypted_value)
@@ -174,6 +221,26 @@ class RepositoryEnvironmentApiTests(ReleaseTestBase):
         changed = copy.deepcopy(body)
         changed["overrides"] = {"PORT": "9191"}
         self.assertEqual(self.client.post(self.url + "/import", changed, format="json").status_code, 409)
+
+    def test_admin_can_explicitly_keep_an_existing_secret_version(self):
+        body = self.body()
+        next(row for row in body["entries"] if row["name"] == "FLAG")["use_existing"] = True
+        response = self.client.post(self.url + "/import", body, format="json")
+        self.assertEqual(response.status_code, 200)
+        release = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        self.assertEqual(release.containers.get(name="app").secret_env["FLAG"], str(self.flag.pk))
+
+    def test_repository_file_password_is_imported_without_retyping(self):
+        with patch.dict(FILES, {"docker-compose.yml": "services:\n  app:\n    build: ./app\n    env_file: app/runtime.env\n",
+                               "app/runtime.env": "DB_PASS='literal$author=value'\n"}):
+            body = self.body()
+            loaded = self.loaded()
+            self.assertNotIn("literal$author=value", json.dumps(loaded.data))
+            response = self.client.post(self.url + "/import", body, format="json")
+        self.assertEqual(response.status_code, 200)
+        release = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        secret = RuntimeSecret.objects.get(pk=release.containers.get(name="app").secret_env["DB_PASS"])
+        self.assertEqual(decrypt_runtime_secret(secret), "literal$author=value")
 
     def test_secret_downgrade_cross_container_and_unknown_fields_are_rejected(self):
         body = self.body()
