@@ -33,7 +33,7 @@ class EnvironmentFileParserTests(SimpleTestCase):
     def test_size_and_entry_limits_use_utf8_bytes(self):
         self.assertEqual(parse_environment_file("A=" + "한" * 1365)["A"], "한" * 1365)
         for content in ("A=" + "한" * 1366, "#" + "x" * 65536,
-                        "\n".join(f"KEY_{i}=x" for i in range(33)),
+                        "\n".join(f"KEY_{i}=x" for i in range(129)),
                         "\n".join(f"KEY_{i}=" + "a" * 4096 for i in range(4))):
             with self.assertRaises(ReleaseValidationError):
                 parse_environment_file(content)

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MSG CTF admin environment file import",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Per-container import on existing Kubernetes releases. Preserves image, ports, untouched values and pinned secret versions. Saves without activation."
   },
   "paths": {
@@ -373,7 +373,7 @@
           "entries": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 32,
+            "maxItems": 128,
             "items": {
               "$ref": "#/components/schemas/Entry"
             }
@@ -406,7 +406,7 @@
           "entries": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 32,
+            "maxItems": 128,
             "items": {
               "$ref": "#/components/schemas/Entry"
             }

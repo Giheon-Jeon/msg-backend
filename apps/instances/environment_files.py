@@ -51,7 +51,7 @@ def parse_environment_file(content):
     if not values:
         raise ReleaseValidationError("가져올 환경변수가 없습니다")
     if len(values) > MAX_ENV_COUNT:
-        raise ReleaseValidationError("환경변수는 32개까지 등록할 수 있습니다")
+        raise ReleaseValidationError("환경변수는 128개까지 등록할 수 있습니다")
     if sum(len(name) + len(value.encode("utf-8")) for name, value in values.items()) > MAX_ENV_BYTES:
         raise ReleaseValidationError("환경변수의 전체 크기는 16384바이트 이하여야 합니다")
     return values

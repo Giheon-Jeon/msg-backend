@@ -75,6 +75,22 @@ class ExecutionSettingsTests(ReleaseTestBase):
         self.assertNotIn("secret_env", body["containers"][0])
         self.assertEqual(body["isolation_profile"], "WEB")
 
+    def test_large_container_environment_preserves_all_values_at_the_boundary(self):
+        from apps.instances.execution_settings import validate_env, validate_secret_env
+        self.secret()
+        env = {f"SETTING_{index}": str(index) for index in range(127)}
+        release = self.release(env=env)
+        self.activate(release.pk)
+        self.challenge.refresh_from_db()
+        body = build_scheduler_create_body(self.player, self.team, self.challenge, self.challenge.runtime_config, release)
+        self.assertEqual(body["containers"][0]["env"], env)
+        self.assertEqual(len(self.resolve(release.containers.get()).data["data"]["env"]), 1)
+        self.assertEqual(len(validate_env({f"V{i}": "x" for i in range(128)})), 128)
+        with self.assertRaises(ValueError):
+            validate_env({f"V{i}": "x" for i in range(129)})
+        with self.assertRaises(ValueError):
+            validate_secret_env({"FLAG": "flag"}, {f"V{i}": "x" for i in range(128)})
+
     def test_secret_rotation_preserves_previous_release_binding(self):
         self.secret("internal_token", "first-test-value")
         self.secret()

@@ -6,14 +6,14 @@ SENSITIVE_NAME = re.compile(
     r"SECRET|TOKEN|PASSWORD|PASSWD|(?:^|_)PASS(?:_|$)|PRIVATE_KEY|API_KEY|"
     r"CREDENTIAL|SIGNING_KEY|CARTRIDGE_KEY|(?:^|_)FLAG$"
 )
-MAX_ENV_COUNT = 32
+MAX_ENV_COUNT = 128
 MAX_ENV_BYTES = 16384
 MAX_VALUE_BYTES = 4096
 
 
 def validate_env(raw):
     if not isinstance(raw, dict) or len(raw) > MAX_ENV_COUNT:
-        raise ValueError("env must be an object with at most 32 entries")
+        raise ValueError("env must be an object with at most 128 entries")
     total = 0
     result = {}
     for name, value in raw.items():
@@ -38,7 +38,7 @@ def validate_env(raw):
 
 def validate_secret_env(raw, env):
     if not isinstance(raw, dict) or len(raw) > MAX_ENV_COUNT:
-        raise ValueError("secret_env must be an object with at most 32 entries")
+        raise ValueError("secret_env must be an object with at most 128 entries")
     result = {}
     for name, alias in raw.items():
         if not isinstance(name, str) or not ENV_NAME.fullmatch(name):
@@ -51,13 +51,13 @@ def validate_secret_env(raw, env):
             raise ValueError("FLAG must reference the backend secret named flag")
         result[name] = alias
     if len(env) + len(result) > MAX_ENV_COUNT:
-        raise ValueError("env and secret_env must contain at most 32 entries in total")
+        raise ValueError("env and secret_env must contain at most 128 entries in total")
     return result
 
 
 def validate_env_rules(raw, env, secret_env):
     if not isinstance(raw, dict) or len(raw) > MAX_ENV_COUNT:
-        raise ValueError("환경변수 규칙은 32개까지 등록할 수 있습니다")
+        raise ValueError("환경변수 규칙은 128개까지 등록할 수 있습니다")
     rules = {}
     for name, rule in raw.items():
         if not isinstance(name, str) or not ENV_NAME.fullmatch(name):

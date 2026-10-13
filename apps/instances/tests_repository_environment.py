@@ -40,6 +40,35 @@ class MemorySnapshot:
 
 
 class RepositoryDiscoveryTests(SimpleTestCase):
+    def test_canonical_file_is_the_only_runtime_source_after_migration(self):
+        files = dict(FILES, **{"env/app.env": "PORT=8181\nDB_PASS='source$literal#value'\n"})
+        snapshot = MemorySnapshot(files=files)
+        with patch.object(snapshot, "read", wraps=snapshot.read) as read:
+            data = discover_environment(snapshot, "app")
+        self.assertEqual([call.args[0] for call in read.call_args_list], ["info.yaml", "env/app.env"])
+        self.assertEqual(data["source_files"], ["env/app.env"])
+        self.assertEqual({row["name"]: row["value"] for row in data["candidates"]},
+                         {"PORT": "8181", "DB_PASS": "source$literal#value"})
+        self.assertTrue(all(row["resolution"] == "configured" for row in data["candidates"]))
+
+    def test_canonical_missing_values_do_not_use_host_or_old_defaults(self):
+        files = dict(FILES, **{"env/app.env": "DB_PASS=${DB_PASS:?set DB_PASS}\nOPTIONAL_VALUE\n"})
+        with patch.dict("os.environ", {"DB_PASS": "host-value", "OPTIONAL_VALUE": "host-value"}):
+            data = discover_environment(MemorySnapshot(files=files), "app")
+        self.assertEqual([row["value"] for row in data["candidates"]], [None, None])
+        self.assertTrue(data["warnings"])
+
+    def test_empty_canonical_file_does_not_reintroduce_image_or_code_values(self):
+        files = dict(FILES, **{"env/app.env": "# No configured variables\n"})
+        data = discover_environment(MemorySnapshot(files=files), "app")
+        self.assertEqual(data["candidates"], [])
+        self.assertEqual(data["source_files"], ["env/app.env"])
+
+    def test_canonical_file_rejects_duplicates_and_invalid_names(self):
+        for content in ("PORT=8080\nPORT=9090", "bad-name=value"):
+            with self.assertRaises(ReleaseValidationError):
+                discover_environment(MemorySnapshot(files=dict(FILES, **{"env/app.env": content})), "app")
+
     def test_author_values_are_read_without_generated_templates(self):
         snapshot = MemorySnapshot()
         with patch.object(snapshot, "read", wraps=snapshot.read) as read:
@@ -112,11 +141,11 @@ class RepositoryDiscoveryTests(SimpleTestCase):
         self.assertEqual(_expand("${A:+yes}", {"A": "1"}), "yes")
         self.assertIsNone(_expand("${PASSWORD:?required}", {}))
 
-    def test_more_than_32_declarations_warn_without_silently_dropping_entries(self):
-        files = dict(FILES, **{"app/.env": "\n".join(f"PORT_{index}=1234" for index in range(33))})
+    def test_more_than_128_declarations_warn_without_silently_dropping_entries(self):
+        files = dict(FILES, **{"app/.env": "\n".join(f"PORT_{index}=1234" for index in range(129))})
         del files["docker-compose.yml"]
         result = discover_environment(MemorySnapshot(files=files), "app")
-        self.assertEqual(len(result["candidates"]), 36)
+        self.assertEqual(len(result["candidates"]), 132)
         self.assertTrue(result["warnings"])
 
     def test_invalid_yaml_and_duplicate_entries_do_not_echo_source_values(self):

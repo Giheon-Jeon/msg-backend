@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 import yaml
 from dotenv.parser import parse_stream
 
-from apps.instances.execution_settings import ENV_NAME, SENSITIVE_NAME
+from apps.instances.execution_settings import ENV_NAME, SENSITIVE_NAME, MAX_ENV_COUNT
 from apps.instances.releases import ReleaseValidationError
 from apps.instances.repository_source import MAX_FILE_BYTES
 from django.views.decorators.debug import sensitive_variables
@@ -168,6 +168,26 @@ def discover_environment(snapshot, container_name):
     if not spec or not isinstance(spec.get("build"), str):
         raise ReleaseValidationError("저장소에서 이 컨테이너의 빌드 경로를 찾지 못했습니다")
     context = _path("", spec["build"])
+    canonical_path = f"env/{container_name}.env"
+    if canonical_path in snapshot.files:
+        # A migrated challenge has exactly one runtime source. Do not merge old
+        # image defaults, unrelated service code or example files back into it.
+        entries = _dotenv(snapshot.read(canonical_path), canonical_path, interpolate=True)
+        result, warnings = [], []
+        for name, value, line in entries:
+            if not ENV_NAME.fullmatch(name):
+                raise ReleaseValidationError(f"{canonical_path}:{line} 환경변수 이름을 확인해주세요")
+            kind, sensitive = environment_kind(name, value)
+            result.append({"name": name, "value": value, "kind": kind, "sensitive": sensitive,
+                           "needs_value": value is None,
+                           "resolution": "needs_value" if value is None else "configured",
+                           "sources": [{"path": canonical_path, "line": line, "origin": "env_file"}]})
+        if any(row["needs_value"] for row in result):
+            warnings.append("저장소에 값이 없는 항목은 관리자에서 입력하거나 기존 비밀값을 연결해주세요")
+        if len(result) > MAX_ENV_COUNT:
+            warnings.append(f"컨테이너당 {MAX_ENV_COUNT}개까지 주입할 수 있습니다")
+        return {"candidates": result, "warnings": warnings, "build_context": context,
+                "source_files": [canonical_path]}
     candidates, warnings, source_files = {}, set(), set()
     read_count = 0
 
@@ -345,7 +365,7 @@ def discover_environment(snapshot, container_name):
         result.append({"name": name, "value": value, "sensitive": sensitive, "kind": kind,
                        "needs_value": value is None, "resolution": resolution,
                        "sources": [{key: item[key] for key in ("path", "line", "origin")} for item in chosen]})
-    if len(result) > 32:
-        warnings.add("현재 실행 계약은 컨테이너당 32개까지 주입할 수 있습니다")
+    if len(result) > MAX_ENV_COUNT:
+        warnings.add(f"현재 실행 계약은 컨테이너당 {MAX_ENV_COUNT}개까지 주입할 수 있습니다")
     return {"candidates": result, "warnings": sorted(warnings), "build_context": context,
             "source_files": sorted(source_files)}

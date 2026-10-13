@@ -17,6 +17,7 @@ from apps.instances.releases import ReleaseValidationError, is_deployable, seria
 from apps.instances.repository_environment import discover_environment
 from apps.instances.repository_source import RepositorySnapshot, RepositorySourceUnavailable
 from apps.instances.runtime_secrets import RuntimeSecretUnavailable
+from apps.instances.execution_settings import MAX_ENV_COUNT
 
 TOKEN_SALT = "repository.environment.v2"
 
@@ -52,8 +53,8 @@ def _repository_request(source, body):
     discovery = discover_environment(snapshot, body["container"])
     candidates = {item["name"]: item for item in discovery["candidates"]}
     entries = body.get("entries")
-    if not isinstance(entries, list) or not 1 <= len(entries) <= 32:
-        raise ReleaseValidationError("가져올 항목을 1개 이상, 32개 이하로 선택해주세요")
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENV_COUNT:
+        raise ReleaseValidationError(f"가져올 항목을 1개 이상, {MAX_ENV_COUNT}개 이하로 선택해주세요")
     names = [item.get("name") for item in entries if isinstance(item, dict)]
     if len(names) != len(entries) or any(not isinstance(name, str) for name in names) or len(set(names)) != len(names) or not set(names) <= candidates.keys():
         raise ReleaseValidationError("저장소에서 확인한 항목만 선택해주세요")
