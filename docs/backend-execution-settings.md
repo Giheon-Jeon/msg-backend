@@ -121,3 +121,40 @@ FLAG, DB_PASS, 비밀번호·토큰·키 이름과 기존 비밀값 연결은 �
 참가자 ZIP도 배포 버전별로 연결할 수 있습니다
 환경변수를 수정한 새 버전은 원본의 파일 선택을 유지합니다
 자세한 동작과 API는 [배포 버전별 참가자 파일](release-files.md)에 정리했습니다
+
+## 관리자 배포 테스트
+
+배포 설정에서 버전을 고른 뒤 배포 테스트를 실행합니다
+선택한 버전의 이미지·환경변수·비밀값 참조를 사용하며 현재 적용 버전은 바꾸지 않습니다
+실행되면 접속 주소가 나오고 관리자가 직접 문제 화면과 기능을 확인합니다
+RUNNING은 컨테이너 실행 상태이며 문제 기능 검수의 합격 판정은 아닙니다
+
+| API | 처리 |
+| --- | --- |
+| GET /api/v1/admin/challenges/{challenge_id}/deployment_tests | 이 문제의 내 테스트 최근 10건과 진행 중인 테스트 조회 |
+| POST /api/v1/admin/challenges/{challenge_id}/releases/{release_id}/deployment_tests | 선택한 버전으로 테스트 접수, body는 UUID request_id만 허용 |
+| GET /api/v1/admin/challenges/{challenge_id}/deployment_tests/{test_id} | 상태와 접속 주소 조회 |
+| DELETE /api/v1/admin/challenges/{challenge_id}/deployment_tests/{test_id} | 실행 중인 테스트 종료 |
+
+관리자 권한이 필요하고 각 관리자는 본인 테스트만 조회·종료할 수 있습니다
+관리자당 테스트 하나를 실행할 수 있으며 TTL과 hard timeout은 모두 15분입니다
+준비 중에는 스케줄러가 종료 요청을 지원하지 않으므로 준비 완료 후 종료합니다
+화면을 닫아도 만료와 자원 정리는 스케줄러가 처리합니다
+정리가 끝나기 전에는 다음 테스트를 접수하지 않습니다
+
+생성 실패 뒤 런타임에 binding이 없으면 현재 스케줄러는 정리를 계속 기다릴 수 있습니다
+이 경우 화면에도 정리 중으로 남습니다 운영자가 생성 작업의 종료와 잔여 자원 여부를 확인해야 합니다
+백엔드가 임의로 종료 완료를 표시하거나 중복 실행을 허용하지 않습니다
+
+테스트마다 별도 scheduler user_id를 사용하고 참가자 계정·팀·Instance 행을 만들거나 바꾸지 않습니다
+같은 request_id를 재전송하면 기존 테스트를 반환합니다 다른 버전에 재사용하면 409입니다
+접수 응답이 유실되면 테스트 user_id로 상태를 복구하며 생성 요청을 다시 전송하지 않습니다
+
+미승인 릴리스는 테스트가 유효한 동안에만 런타임의 비밀값 조회를 허용합니다
+approved_at과 current_release는 그대로 유지하며 종료·만료 뒤에는 이 임시 허용이 사라집니다
+요청 시 테스트 예약을 먼저 커밋한 뒤 스케줄러를 호출해야 하므로 생성 뷰는 ATOMIC_REQUESTS에서 제외합니다
+상태 응답에는 환경변수, 비밀값, 런타임 원문 로그를 포함하지 않습니다
+실패 사유는 허용된 오류 코드로 표시하며 배포 실패 뒤 정리가 완료되어도 원인을 유지합니다
+
+현재 테스트 실행은 Kubernetes 릴리스만 지원합니다 VM·Windows 및 Docker 릴리스는 이 경로에서 거절합니다
+검사: [배포 테스트 API](../apps/instances/tests_deployment_tests.py)

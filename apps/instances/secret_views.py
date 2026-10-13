@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import transaction
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
 from rest_framework.permissions import AllowAny
@@ -83,9 +84,13 @@ class RuntimeSecretResolveView(APIView):
             return fail("RUNTIME_SECRET_INVALID", "비밀값 참조 형식이 올바르지 않습니다", 400)
         container = ReleaseContainer.objects.select_related("release__challenge").filter(
             id=reference, name=body["container"], image_ref=body["image"],
-            release__approved_at__isnull=False,
         ).first()
         if container is None or not container.secret_env:
+            return fail("RUNTIME_SECRET_NOT_FOUND", "사용할 수 없는 비밀값 참조입니다", 404)
+        if container.release.approved_at is None and not container.release.deployment_tests.filter(
+            finished_at__isnull=True, expires_at__gt=timezone.now(),
+            status__in=["REQUESTED", "SCHEDULING", "PROVISIONING", "RUNNING"],
+        ).exists():
             return fail("RUNTIME_SECRET_NOT_FOUND", "사용할 수 없는 비밀값 참조입니다", 404)
         records = RuntimeSecret.objects.filter(
             secret_id__in=container.secret_env.values(), challenge_id=container.release.challenge_id,

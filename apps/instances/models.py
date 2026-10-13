@@ -256,6 +256,32 @@ class RuntimeSecret(models.Model):
         return f"{self.challenge_id} {self.name} v{self.version}"
 
 
+class DeploymentTest(models.Model):
+    # 별도 scheduler user_id를 사용해 참가자의 인스턴스를 교체하지 않는다
+    test_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    request_id = models.UUIDField()
+    release = models.ForeignKey(ChallengeRelease, on_delete=models.PROTECT, related_name="deployment_tests")
+    instance_id = models.UUIDField(null=True, blank=True, unique=True)
+    status = models.CharField(max_length=30, choices=InstanceStatus.choices, default=InstanceStatus.REQUESTED)
+    endpoints = models.JSONField(default=list)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    running_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "admin_deployment_tests"
+        constraints = [
+            models.UniqueConstraint(fields=["requested_by", "request_id"], name="uq_deployment_test_request"),
+            models.UniqueConstraint(fields=["requested_by"], condition=models.Q(finished_at__isnull=True),
+                                    name="uq_admin_active_deployment_test"),
+        ]
+        indexes = [models.Index(fields=["release", "-created_at"])]
+
+
 class PollerArtifact(models.Model):
     class Kind(models.TextChoices):
         RELEASE = "RELEASE"

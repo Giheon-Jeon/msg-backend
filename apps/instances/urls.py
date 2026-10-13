@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.instances.admin_views import ReleaseActivateView, ReleaseDeriveView, ReleaseListCreateView
+from apps.instances.deployment_test_views import DeploymentTestCreateView, DeploymentTestDetailView, DeploymentTestListView
 from apps.instances.secret_views import RuntimeSecretListCreateView
 from apps.instances.release_file_views import ReleaseFilesConfigureView
 from apps.instances.environment_file_views import EnvironmentFileImportView, EnvironmentFilePreviewView
@@ -14,6 +15,9 @@ from apps.instances.views import (
 )
 
 urlpatterns = [
+    path("admin/challenges/<uuid:challenge_id>/deployment_tests", DeploymentTestListView.as_view(), name="admin-deployment-tests"),
+    path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/deployment_tests", DeploymentTestCreateView.as_view(), name="admin-deployment-test-create"),
+    path("admin/challenges/<uuid:challenge_id>/deployment_tests/<uuid:test_id>", DeploymentTestDetailView.as_view(), name="admin-deployment-test-detail"),
     path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/files",
          ReleaseFilesConfigureView.as_view(), name="admin-release-files-configure"),
     path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/repository_environment",
