@@ -1289,9 +1289,17 @@ def _challenge_create(request):
     return ok(_serialize_challenge(challenge), message="문제가 등록되었습니다.")
 
 
-@api_view(["PATCH", "DELETE"])
+@api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsAdmin])
 def challenge_detail(request, challenge_id):
+    if request.method == "GET":
+        challenge = Challenge.objects.filter(pk=challenge_id).first()
+        if challenge is None:
+            return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
+        response = ok(_serialize_challenge(challenge))
+        response["Cache-Control"] = "private, no-store"
+        return response
+
     with transaction.atomic():
         try:
             challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
