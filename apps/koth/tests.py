@@ -86,6 +86,7 @@ class KothApiTests(TestCase):
         )
 
     def test_clubs_and_detail_expose_current_owner(self):
+        self.auth()
         solved_at = timezone.now()
         KothSolve.objects.create(
             team=self.team,
@@ -135,6 +136,7 @@ class KothApiTests(TestCase):
                 )
 
     def test_clubs_fetch_only_owner_fields_with_constant_query_count(self):
+        self.auth()
         teams = Team.objects.bulk_create(
             [Team(team_name=f"bulk-{i:03}") for i in range(100)]
         )
@@ -150,7 +152,7 @@ class KothApiTests(TestCase):
             ]
         )
         KothClub.objects.create(name="Empty club")
-        with self.assertNumQueries(2), patch.object(
+        with self.assertNumQueries(3), patch.object(
             KothSolve,
             "from_db",
             side_effect=AssertionError("Loading all solve objects is unnecessary"),
@@ -173,6 +175,7 @@ class KothApiTests(TestCase):
         self.assertEqual(unowned["current_score"], 0)
 
     def test_owner_ties_and_updates_remain_visible_immediately(self):
+        self.auth()
         first_at = datetime(2026, 9, 3, 7, 0, tzinfo=dt_timezone.utc)
         later_at = datetime(2026, 9, 3, 7, 15, tzinfo=dt_timezone.utc)
         self.team.team_name = "A"
@@ -192,7 +195,7 @@ class KothApiTests(TestCase):
             solved_at=first_at,
         )
         url = f"/api/v1/koth/clubs/{self.club.pk}"
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.get(url)
         self.assertEqual(
             response.data["data"]["challenges"][0]["current_owner_team_id"],
@@ -257,10 +260,9 @@ class KothApiTests(TestCase):
             with self.subTest(challenge_url=challenge_url):
                 self.challenge.challenge_url = challenge_url
                 self.challenge.save(update_fields=["challenge_url"])
-                self.client.credentials()
+                self.auth()
                 clubs = self.client.get("/api/v1/koth/clubs")
                 detail = self.client.get(f"/api/v1/koth/clubs/{self.club.club_id}")
-                self.auth()
                 progress = self.client.get("/api/v1/koth/me")
                 for response in (clubs, detail, progress):
                     self.assertEqual(response.status_code, 200)

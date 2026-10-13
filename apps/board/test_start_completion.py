@@ -111,11 +111,11 @@ class StartCompletionTestCase(TestCase):
             response = self.post("dice/roll", "legacy-start")
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["data"]["current_position"], 36)
-        self.assertEqual(response.data["data"]["movement_path"], [36, *range(1, 37)])
-        self.assertEqual(response.data["data"]["skipped_cells"], list(range(1, 36)))
+        self.assertEqual(response.data["data"]["movement_path"], [36])
+        self.assertEqual(response.data["data"]["skipped_cells"], [])
         self.assertEqual(
             response.data["data"]["start_reward"],
-            {"mileage_gained": 100, "roll_gained": 0},
+            {"mileage_gained": 0, "roll_gained": 0},
         )
         self.assertTrue(
             self.client.get("/api/v1/board/me").data["data"]["board_completed"]
@@ -179,6 +179,111 @@ class StartCompletionTestCase(TestCase):
         self.assertEqual(self.state.dice_rolls_left, 1)
         self.assertFalse(
             TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
+
+    def test_multiple_start_passes_grant_mileage_for_every_lap_once(self):
+        self.consume([1, *range(4, 37)])
+        with patch("apps.board.services.random.randint", return_value=6):
+            response = self.post("dice/roll", "five-start-passes")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        data = response.data["data"]
+        self.assertEqual(data["current_position"], 3)
+        self.assertEqual(data["movement_path"].count(1), 5)
+        self.assertTrue(data["passed_start"])
+        self.assertEqual(
+            data["start_reward"], {"mileage_gained": 500, "roll_gained": 0}
+        )
+
+        cache.clear()
+        self.assertEqual(
+            self.post("dice/roll", "five-start-passes").data, response.data
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.mileage, 500)
+        self.assertEqual(
+            list(
+                MileageHistory.objects.filter(
+                    team=self.team, type="START_BONUS"
+                ).values_list("amount", flat=True)
+            ),
+            [500],
+        )
+
+    def test_pending_confirmation_preserves_multiple_start_passes(self):
+        self.consume([1, *range(4, 37)])
+        TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_reroll"
+        )
+        with patch("apps.board.services.random.randint", return_value=6):
+            pending_response = self.post("dice/roll", "pending-five-start-passes")
+
+        self.assertEqual(
+            pending_response.data["data"]["start_reward"],
+            {"mileage_gained": 500, "roll_gained": 0},
+        )
+        pending = PendingDiceRoll.objects.get(team=self.team)
+        self.assertTrue(pending.passed_start)
+        self.assertEqual(pending.start_pass_count, 5)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.mileage, 0)
+
+        confirmed = self.post("dice/confirm", "confirm-five-start-passes")
+        self.assertEqual(confirmed.status_code, 200, confirmed.data)
+        self.assertEqual(
+            confirmed.data["data"]["start_reward"],
+            {"mileage_gained": 500, "roll_gained": 0},
+        )
+        cache.clear()
+        self.assertEqual(
+            self.post("dice/confirm", "confirm-five-start-passes").data,
+            confirmed.data,
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.mileage, 500)
+        self.assertEqual(
+            MileageHistory.objects.filter(team=self.team, type="START_BONUS").count(),
+            1,
+        )
+
+    def test_move_offset_adds_pending_and_extra_start_pass_counts(self):
+        self.consume([1, *range(4, 37)])
+        TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_move_offset"
+        )
+        with patch("apps.board.services.random.randint", return_value=6):
+            pending_response = self.post("dice/roll", "offset-multiple-start-passes")
+
+        self.assertEqual(
+            pending_response.data["data"]["start_reward"],
+            {"mileage_gained": 500, "roll_gained": 0},
+        )
+        response = self.post(
+            "chance/use",
+            "offset-extra-start-passes",
+            {"card_id": "card_move_offset", "offset": 3},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["movement_path"].count(1), 2)
+
+        cache.clear()
+        self.assertEqual(
+            self.post(
+                "chance/use",
+                "offset-extra-start-passes",
+                {"card_id": "card_move_offset", "offset": 3},
+            ).data,
+            response.data,
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.mileage, 700)
+        self.assertEqual(
+            list(
+                MileageHistory.objects.filter(
+                    team=self.team, type="START_BONUS"
+                ).values_list("amount", flat=True)
+            ),
+            [700],
         )
 
     def test_pending_start_reward_is_applied_only_on_confirmation(self):

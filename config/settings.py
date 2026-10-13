@@ -205,7 +205,7 @@ REST_FRAMEWORK = {
         "apps.common.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "apps.common.permissions.IsAuthenticated",
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,

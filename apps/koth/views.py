@@ -1,3 +1,4 @@
+import logging
 import uuid
 from decimal import Decimal
 
@@ -19,6 +20,7 @@ from apps.common.exceptions import (
     InvalidRequest,
     KothChallengeIdRequired,
     KothChallengeNotFound,
+    KothVerifyThrottled,
     UserHasNoTeam,
 )
 from apps.common.jwt import hash_token
@@ -28,11 +30,20 @@ from apps.common.utils import num
 
 from .models import (
     KothChallenge,
+    KothChallengeStatus,
     KothSolve,
     KothTeamToken,
     KothTokenVerificationAttempt,
 )
 from .tokens import build_team_token, matches_token
+
+
+def _public_challenge_url(challenge):
+    # 문제가 ACTIVE(진행 중)일 때만 접속 주소를 공개한다. SCHEDULED/CLOSED 상태의
+    # challenge_url을 노출하면 오픈 전 정찰·선점 준비가 가능하다(BK-03).
+    if challenge.status != KothChallengeStatus.ACTIVE:
+        return None
+    return challenge.challenge_url or None
 
 
 def _challenges_with_owner():
@@ -51,7 +62,7 @@ def _challenge_payload(challenge, include_times=True):
     data = {
         "koth_challenge_id": str(challenge.koth_challenge_id),
         "title": challenge.title,
-        "challenge_url": challenge.challenge_url or None,
+        "challenge_url": _public_challenge_url(challenge),
         "status": challenge.status,
         "open_group": challenge.open_group,
         "current_owner_team_id": (
@@ -72,7 +83,7 @@ def _challenge_payload(challenge, include_times=True):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def clubs(request):
     from .models import KothClub
 
@@ -103,7 +114,7 @@ def clubs(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def club_detail(request, club_id):
     try:
         uuid.UUID(str(club_id))
@@ -171,7 +182,7 @@ def me(request):
                 "koth_challenge_id": str(challenge.koth_challenge_id),
                 "club_id": str(challenge.club_id),
                 "title": challenge.title,
-                "challenge_url": challenge.challenge_url or None,
+                "challenge_url": _public_challenge_url(challenge),
                 "status": challenge.status,
                 "earned_score": num(score),
                 "rank": rank,
@@ -284,7 +295,7 @@ def team_token(request):
             # 비밀값이 교체됐을 때는 운영자가 토큰을 의도적으로 재발급할 수 있게 갱신한다.
             stored.token_hash = hash_token(raw_token)
             stored.save(update_fields=["token_hash"])
-    return ok(
+    response = ok(
         {
             "team_id": str(team.team_id),
             "team_name": team.team_name,
@@ -292,6 +303,10 @@ def team_token(request):
             "issued_at": stored.issued_at,
         }
     )
+    # 팀 토큰은 민감값이므로 브라우저·프록시 캐시에 저장되지 않게 명시한다(F08).
+    response["Cache-Control"] = "no-store, private"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 def _internal_challenge(request):
@@ -316,6 +331,40 @@ def _internal_challenge(request):
     return challenge
 
 
+# 문제별 실패 검증을 창(초)당 이 횟수까지만 허용·기록한다. 초과하면 429로 막아
+# 무제한 반복 검증과 실패 로그(KothTokenVerificationAttempt) 무한 증가를 방지한다(BK-08).
+# 유효한 검증은 세지 않으므로 정상 문제 서버의 처리량에는 영향이 없다.
+VERIFY_FAIL_WINDOW_SECONDS = 60
+VERIFY_FAIL_MAX_PER_WINDOW = 20
+
+logger = logging.getLogger(__name__)
+
+
+def _register_verify_failure(challenge):
+    """실패 1건을 창 안에서 집계한다. 반환값이 True면 한도 초과(차단)."""
+    key = f"koth_verify_fail:{challenge.koth_challenge_id}"
+    try:
+        # ``add`` creates the counter and its expiry atomically (Redis SET NX EX),
+        # while ``incr`` is atomic across workers. If the key expires between the
+        # two operations, retry creation once instead of dropping this failure.
+        for _ in range(2):
+            if cache.add(key, 1, VERIFY_FAIL_WINDOW_SECONDS):
+                count = 1
+                break
+            try:
+                count = cache.incr(key)
+                break
+            except ValueError:
+                continue
+        else:
+            raise RuntimeError("verify failure counter could not be initialized")
+    except Exception:
+        # 캐시 장애 시 검증 가용성을 우선해 기존 동작(기록 후 통과)으로 떨어진다.
+        logger.warning("koth verify throttle cache unavailable", exc_info=True)
+        return False
+    return count > VERIFY_FAIL_MAX_PER_WINDOW
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def verify_team_token(request):
@@ -332,6 +381,8 @@ def verify_team_token(request):
     )
     valid = token is not None and not token.team.is_banned
     if not valid:
+        if _register_verify_failure(challenge):
+            raise KothVerifyThrottled()
         KothTokenVerificationAttempt.objects.create(challenge=challenge)
     return ok(
         {

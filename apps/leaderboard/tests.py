@@ -3,7 +3,8 @@ from decimal import Decimal
 from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
-from apps.accounts.models import Team
+from apps.accounts.models import Team, User
+from rest_framework.test import APIClient
 from apps.challenge.models import Challenge, Solve
 from apps.koth.models import KothChallenge, KothClub, KothSolve
 from apps.ranking.models import LineMonopoly
@@ -12,6 +13,9 @@ from apps.leaderboard import views
 
 class LeaderboardAPITest(TestCase):
     def setUp(self):
+        user = User.objects.create_user(login_id="leaderboard-reader", password="pw1234", nickname="순위 참가자")
+        self.client = APIClient()
+        self.client.force_authenticate(user=user)
         self.challenge = Challenge.objects.create(
             title="테스트문제",
             category="WEB",
