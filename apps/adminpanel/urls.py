@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, challenge_settings, challenge_files
+from . import views, challenge_settings, challenge_files, challenge_solves
 
 urlpatterns = [
     path("admin/teams", views.team_list),
@@ -10,6 +10,7 @@ urlpatterns = [
     path("admin/dashboard", views.dashboard),
     path("admin/challenges", views.challenge_list),
     path("admin/challenges/<uuid:challenge_id>", views.challenge_detail),
+    path("admin/challenges/<uuid:challenge_id>/solves", challenge_solves.challenge_solves),
     path("admin/challenges/<uuid:challenge_id>/flag", challenge_settings.challenge_flag),
     path("admin/challenges/<uuid:challenge_id>/flag/reveal", challenge_settings.challenge_flag_reveal),
     path("admin/challenges/<uuid:challenge_id>/repository-files", challenge_settings.challenge_repository_files),
