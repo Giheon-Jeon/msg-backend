@@ -112,7 +112,7 @@ class RepositoryEnvironmentView(APIView):
                            use_existing=use_existing)
                 if previous:
                     row.update(secret_id=str(previous.pk), version=previous.version)
-                if kind == "env":
+                if kind == "env" and item["value"] is not None:
                     row["value"] = item["value"]
                 rows.append(row)
             evidence = {"release_id": str(source.pk), "slug": source.challenge_slug, "container": container_name,

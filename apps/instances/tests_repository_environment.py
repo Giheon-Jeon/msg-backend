@@ -230,6 +230,15 @@ class RepositoryEnvironmentApiTests(ReleaseTestBase):
         release = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
         self.assertEqual(release.containers.get(name="app").secret_env["FLAG"], str(self.flag.pk))
 
+    def test_unknown_ordinary_value_is_not_returned_as_a_fake_empty_value(self):
+        with patch.dict(FILES, {"docker-compose.yml": "services:\n  app:\n    build: ./app\n    environment:\n      PORT: ${MISSING}\n"}):
+            loaded = self.loaded().data['data']
+        port = next(row for row in loaded['entries'] if row['name'] == 'PORT')
+        self.assertFalse(port['has_value'])
+        self.assertFalse(port['selected'])
+        self.assertNotIn('value', port)
+        self.assertEqual(port['resolution'], 'needs_value')
+
     def test_repository_file_password_is_imported_without_retyping(self):
         with patch.dict(FILES, {"docker-compose.yml": "services:\n  app:\n    build: ./app\n    env_file: app/runtime.env\n",
                                "app/runtime.env": "DB_PASS='literal$author=value'\n"}):
