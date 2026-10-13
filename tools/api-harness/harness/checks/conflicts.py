@@ -11,6 +11,7 @@
     '/api/v1/auth/me' vs '/api/v1/koth/me' -> 뒤쪽 세그먼트 개수가 서로 다르게 맞아떨어지지
     않으므로(둘 다 2세그먼트지만 꼬리 부분 부분집합 관계가 아님) 의심하지 않음.
 """
+
 from __future__ import annotations
 
 import re
@@ -55,54 +56,88 @@ def find_conflicts(specs: list[SpecDocument]) -> list[Conflict]:
             continue  # 동일 팀원이 중복 작성한 경우는 충돌 대상 아님
 
         # 1) request 필드 존재 여부 불일치
-        req_sets = {e.team: set(e.request_fields.keys()) for e in eps if e.request_fields}
+        req_sets = {
+            e.team: set(e.request_fields.keys()) for e in eps if e.request_fields
+        }
         if len(req_sets) >= 2:
             union = set().union(*req_sets.values())
             for team, fields in req_sets.items():
                 missing = union - fields
                 if missing:
-                    conflicts.append(Conflict(
-                        "request_field_mismatch", key, teams,
-                        f"{team}의 request 명세에 {sorted(missing)} 필드가 없음 (다른 팀원 명세에는 존재)",
-                    ))
+                    conflicts.append(
+                        Conflict(
+                            "request_field_mismatch",
+                            key,
+                            teams,
+                            f"{team}의 request 명세에 {sorted(missing)} 필드가 없음 (다른 팀원 명세에는 존재)",
+                        )
+                    )
 
             # 2) 공통 필드의 타입 불일치
             common = set.intersection(*req_sets.values())
             for f in common:
-                types = {e.team: e.request_fields.get(f, "") for e in eps if f in e.request_fields}
+                types = {
+                    e.team: e.request_fields.get(f, "")
+                    for e in eps
+                    if f in e.request_fields
+                }
                 distinct_types = {t for t in types.values() if t}
                 if len(distinct_types) > 1:
-                    conflicts.append(Conflict(
-                        "request_field_type_mismatch", key, teams,
-                        f"필드 '{f}' 타입 불일치: " + ", ".join(f"{t}={ty}" for t, ty in types.items()),
-                    ))
+                    conflicts.append(
+                        Conflict(
+                            "request_field_type_mismatch",
+                            key,
+                            teams,
+                            f"필드 '{f}' 타입 불일치: "
+                            + ", ".join(f"{t}={ty}" for t, ty in types.items()),
+                        )
+                    )
 
         # 3) response envelope(최상위 키 구성) 불일치
-        env_map = {e.team: tuple(e.response_envelope_keys) for e in eps if e.response_envelope_keys}
+        env_map = {
+            e.team: tuple(e.response_envelope_keys)
+            for e in eps
+            if e.response_envelope_keys
+        }
         if len(env_map) >= 2 and len(set(env_map.values())) > 1:
-            conflicts.append(Conflict(
-                "response_envelope_mismatch", key, teams,
-                "; ".join(f"{t}={list(v)}" for t, v in env_map.items()),
-            ))
+            conflicts.append(
+                Conflict(
+                    "response_envelope_mismatch",
+                    key,
+                    teams,
+                    "; ".join(f"{t}={list(v)}" for t, v in env_map.items()),
+                )
+            )
 
         # 4) status code 커버리지 불일치
         status_map = {e.team: set(e.status_codes) for e in eps if e.status_codes}
         if len(status_map) >= 2:
             union_status = set().union(*status_map.values())
             if any(s != union_status for s in status_map.values()):
-                conflicts.append(Conflict(
-                    "status_code_mismatch", key, teams,
-                    "; ".join(f"{t}={sorted(s)}" for t, s in status_map.items())
-                    + f" (전체합집합={sorted(union_status)})",
-                ))
+                conflicts.append(
+                    Conflict(
+                        "status_code_mismatch",
+                        key,
+                        teams,
+                        "; ".join(f"{t}={sorted(s)}" for t, s in status_map.items())
+                        + f" (전체합집합={sorted(union_status)})",
+                    )
+                )
 
         # 5) 인증 필요 여부 언급 불일치
         auth_map = {e.team: bool(e.auth_notes) for e in eps}
         if len(set(auth_map.values())) > 1:
-            conflicts.append(Conflict(
-                "auth_mismatch", key, teams,
-                "; ".join(f"{t}: {'인증 언급 있음' if v else '인증 언급 없음'}" for t, v in auth_map.items()),
-            ))
+            conflicts.append(
+                Conflict(
+                    "auth_mismatch",
+                    key,
+                    teams,
+                    "; ".join(
+                        f"{t}: {'인증 언급 있음' if v else '인증 언급 없음'}"
+                        for t, v in auth_map.items()
+                    ),
+                )
+            )
 
     # 6) 경로 꼬리 세그먼트 완전 일치 기반 '사실상 같은 엔드포인트를 다른 상위 경로로 중복 정의' 의심
     #    (짧은 경로의 세그먼트 전체가 긴 경로의 마지막 부분과 정확히 겹칠 때만 - 예: /login <-> /api/auth/login)
@@ -123,14 +158,16 @@ def find_conflicts(specs: list[SpecDocument]) -> list[Conflict]:
             if seg1 == seg2 or not seg1 or not seg2:
                 continue
             shorter, longer = (seg1, seg2) if len(seg1) < len(seg2) else (seg2, seg1)
-            if longer[len(longer) - len(shorter):] == shorter:
-                conflicts.append(Conflict(
-                    "possible_duplicate_endpoint",
-                    f"{k1}  <->  {k2}",
-                    sorted(teams1 | teams2),
-                    f"경로 뒤쪽 {len(shorter)}개 세그먼트('/{'/'.join(shorter)}')가 완전히 동일함"
-                    " - 같은 기능을 서로 다른 상위 경로로 각자 정의했을 가능성",
-                ))
+            if longer[len(longer) - len(shorter) :] == shorter:
+                conflicts.append(
+                    Conflict(
+                        "possible_duplicate_endpoint",
+                        f"{k1}  <->  {k2}",
+                        sorted(teams1 | teams2),
+                        f"경로 뒤쪽 {len(shorter)}개 세그먼트('/{'/'.join(shorter)}')가 완전히 동일함"
+                        " - 같은 기능을 서로 다른 상위 경로로 각자 정의했을 가능성",
+                    )
+                )
 
     # 7) 명세 본문에 남긴 '폐기/대체' 메모 (팀원이 스스로 표시한 충돌·변경 신호)
     for doc in specs:
@@ -142,6 +179,8 @@ def find_conflicts(specs: list[SpecDocument]) -> list[Conflict]:
                 detail = f"'{line.strip()}'"
                 if mentioned:
                     detail += f" (언급된 경로: {mentioned})"
-                conflicts.append(Conflict("deprecation_note_detected", ep.key, [doc.team], detail))
+                conflicts.append(
+                    Conflict("deprecation_note_detected", ep.key, [doc.team], detail)
+                )
 
     return conflicts

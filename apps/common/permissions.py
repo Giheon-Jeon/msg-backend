@@ -9,6 +9,7 @@ class IsAuthenticated(BasePermission):
             raise TokenMissing()
         return True
 
+
 class IsAdmin(BasePermission):
     def has_permission(self, request, view):
         user = request.user

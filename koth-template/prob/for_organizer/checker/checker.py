@@ -12,22 +12,32 @@ DNS_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$")
 
 
 def result(team_id, koth_challenge_id, score):
-    print(json.dumps({
-        "team_id": team_id,
-        "koth_challenge_id": koth_challenge_id,
-        "metric_score": score,
-        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }))
+    print(
+        json.dumps(
+            {
+                "team_id": team_id,
+                "koth_challenge_id": koth_challenge_id,
+                "metric_score": score,
+                "captured_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+        )
+    )
 
 
 def target_url(host, port):
     try:
         address = ipaddress.ip_address(host)
-        safe_host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+        safe_host = (
+            f"[{address.compressed}]" if address.version == 6 else address.compressed
+        )
     except ValueError:
         hostname = host.rstrip(".")
         labels = hostname.split(".")
-        if len(hostname) > 253 or not all(DNS_LABEL.fullmatch(label) for label in labels):
+        if len(hostname) > 253 or not all(
+            DNS_LABEL.fullmatch(label) for label in labels
+        ):
             return None
         safe_host = hostname
 

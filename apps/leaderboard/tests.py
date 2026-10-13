@@ -6,11 +6,11 @@ from django.utils import timezone
 from apps.accounts.models import Team
 from apps.challenge.models import Challenge, Solve
 from apps.koth.models import KothChallenge, KothClub, KothSolve
+from apps.ranking.models import LineMonopoly
 from apps.leaderboard import views
 
 
 class LeaderboardAPITest(TestCase):
-
     def setUp(self):
         self.challenge = Challenge.objects.create(
             title="테스트문제",
@@ -30,8 +30,10 @@ class LeaderboardAPITest(TestCase):
             inbound_internal_token_hash=f"hash_{name}",
         )
         return KothSolve.objects.create(
-            team=team, challenge=kc,
-            earned_score=Decimal(score), solved_at=at,
+            team=team,
+            challenge=kc,
+            earned_score=Decimal(score),
+            solved_at=at,
         )
 
     def make_team_with_solve(self, name, score, solved_at=None):
@@ -168,6 +170,24 @@ class LeaderboardAPITest(TestCase):
 
         types = {s["source_type"] for s in data["teams"][0]["solves"]}
         self.assertEqual(types, {"JEOPARDY", "KOTH"})
+
+    def test_line_bonus_increases_score_without_increasing_solved_count(self):
+        team = self.make_team_with_solve("팀", 0)
+        LineMonopoly.objects.create(
+            team=team,
+            line_number=1,
+            earned_score=Decimal("225"),
+            is_category_bonus=True,
+        )
+
+        row = self.client.get("/api/v1/leaderboard").data["data"]["teams"][0]
+
+        self.assertEqual(row["team_score"], 1225)
+        self.assertEqual(row["solved_count"], 1)
+        line_event = next(
+            event for event in row["solves"] if event["source_type"] == "LINE"
+        )
+        self.assertFalse(line_event["counts_as_solve"])
 
     def test_stored_team_score_is_ignored(self):
         self.make_team_with_score("저장9999", stored="9999", actual="100")

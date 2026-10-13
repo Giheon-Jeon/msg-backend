@@ -92,7 +92,15 @@ def _validate_ports(raw_ports, container_name):
     return ports
 
 
-def _validate_containers(raw_containers):
+def validate_container_image(image_ref, challenge_slug, container_name):
+    if not isinstance(image_ref, str) or not IMAGE_REF_PATTERN.fullmatch(image_ref):
+        raise ReleaseValidationError("컨테이너 image가 digest 고정 GHCR 형식이 아닙니다")
+    expected = f"ghcr.io/msg-ctf/challenges/{challenge_slug}/{container_name}@sha256:"
+    if not image_ref.startswith(expected):
+        raise ReleaseValidationError("image 경로가 문제 slug 및 컨테이너 이름과 일치하지 않습니다")
+
+
+def _validate_containers(raw_containers, challenge_slug):
     if not isinstance(raw_containers, list) or not raw_containers:
         raise ReleaseValidationError("workload.containers 값이 올바르지 않습니다")
     if len(raw_containers) > MAX_CONTAINERS:
@@ -115,10 +123,7 @@ def _validate_containers(raw_containers):
         names.add(name)
 
         image_ref = _require_string(raw.get("image"), f"{name}.image")
-        if not IMAGE_REF_PATTERN.fullmatch(image_ref):
-            raise ReleaseValidationError(
-                f"{name} 컨테이너의 image가 digest 고정 GHCR 형식이 아닙니다"
-            )
+        validate_container_image(image_ref, challenge_slug, name)
 
         try:
             env = validate_env(raw.get("env", {}))
@@ -135,6 +140,33 @@ def _validate_containers(raw_containers):
             }
         )
     return containers
+
+
+def validate_healthcheck(healthcheck, container_ports):
+    if healthcheck is None:
+        return
+    if not isinstance(healthcheck, dict):
+        raise ReleaseValidationError("healthcheck 값이 올바르지 않습니다")
+    container = healthcheck.get("container")
+    port = healthcheck.get("port")
+    path = healthcheck.get("path")
+    if not isinstance(container, str) or container not in container_ports:
+        raise ReleaseValidationError("healthcheck.container가 선언된 컨테이너와 일치하지 않습니다")
+    if (
+        isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+        or port not in container_ports[container]
+    ):
+        raise ReleaseValidationError("healthcheck.port가 컨테이너의 선언된 포트와 일치하지 않습니다")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/")
+        # Kotlin/JVM String.length counts UTF-16 code units.
+        or len(path.encode("utf-16-le", errors="surrogatepass")) // 2 > 1024
+        or any(char.isspace() or ord(char) < 32 or 127 <= ord(char) <= 159 for char in path)
+    ):
+        raise ReleaseValidationError("healthcheck.path 값이 올바르지 않습니다")
 
 
 def validate_release_payload(body):
@@ -177,9 +209,6 @@ def validate_release_payload(body):
         workload = artifact.get("workload")
         if isinstance(workload, dict):
             healthcheck = workload.get("healthcheck")
-    if healthcheck is not None and not isinstance(healthcheck, dict):
-        raise ReleaseValidationError("healthcheck 값이 올바르지 않습니다")
-
     workload = artifact.get("workload")
     if not isinstance(workload, dict):
         raise ReleaseValidationError("workload 값이 올바르지 않습니다")
@@ -189,6 +218,12 @@ def validate_release_payload(body):
         for container in raw_containers
     ):
         raise ReleaseValidationError("환경변수와 비밀값 참조에는 schema_version 2.1이 필요합니다")
+    challenge_slug = _require_string(artifact.get("challenge_slug"), "challenge_slug")
+    containers = _validate_containers(workload.get("containers"), challenge_slug)
+    validate_healthcheck(
+        healthcheck,
+        {container["name"]: [entry["port"] for entry in container["ports"]] for container in containers},
+    )
 
     registry_revision = _require_positive_int(
         artifact.get("registry_revision"), "registry_revision"
@@ -202,7 +237,7 @@ def validate_release_payload(body):
             )
 
     return {
-        "challenge_slug": _require_string(artifact.get("challenge_slug"), "challenge_slug"),
+        "challenge_slug": challenge_slug,
         "registry_revision": registry_revision,
         "runtime_type": runtime_type,
         "architecture": architecture,
@@ -221,7 +256,7 @@ def validate_release_payload(body):
         ),
         "healthcheck": healthcheck,
         "source_ref": _require_string(artifact.get("source_ref"), "source_ref"),
-        "containers": _validate_containers(workload.get("containers")),
+        "containers": containers,
         "note": note,
     }
 
@@ -365,6 +400,16 @@ def is_deployable(release):
     if not 1 <= len(containers) <= 8:
         return False
     if not has_sufficient_container_resources(release, len(containers)):
+        return False
+
+    try:
+        for container in containers:
+            validate_container_image(container.image_ref, release.challenge_slug, container.name)
+        validate_healthcheck(
+            release.healthcheck,
+            {container.name: [entry["port"] for entry in container.ports] for container in containers},
+        )
+    except ReleaseValidationError:
         return False
 
     exposed_port_count = 0

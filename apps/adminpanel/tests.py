@@ -48,19 +48,28 @@ class AdminTests(TestCase):
             login_id="player", password="pw1234", nickname="참가자", team=self.team
         )
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def mileage(self, body, key=None):
         return self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/mileage",
-            body, format="json",
+            body,
+            format="json",
             HTTP_IDEMPOTENCY_KEY=key or uuid.uuid4().hex,
         )
 
@@ -71,8 +80,10 @@ class AdminTests(TestCase):
         second = self.mileage({"amount": 100, "reason": "보상"}, key=k)
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.data["data"]["current_mileage"],
-                         first.data["data"]["current_mileage"])
+        self.assertEqual(
+            second.data["data"]["current_mileage"],
+            first.data["data"]["current_mileage"],
+        )
         self.team.refresh_from_db()
         self.assertEqual(self.team.mileage, 100)
         self.assertEqual(MileageHistory.objects.filter(team=self.team).count(), 1)
@@ -91,7 +102,8 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/mileage",
-            {"amount": 100, "reason": "보상"}, format="json",
+            {"amount": 100, "reason": "보상"},
+            format="json",
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["code"], "IDEMPOTENCY_KEY_REQUIRED")
@@ -100,7 +112,8 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/mileage",
-            {"amount": 100, "reason": "보상"}, format="json",
+            {"amount": 100, "reason": "보상"},
+            format="json",
             HTTP_IDEMPOTENCY_KEY="x" * 201,
         )
         self.assertEqual(res.status_code, 400)
@@ -108,6 +121,7 @@ class AdminTests(TestCase):
 
     def test_mileage_failed_request_still_binds_key(self):
         from apps.accounts.models import Team
+
         Team.objects.filter(pk=self.team.pk).update(mileage=20)
         self.auth("root")
         k = "deduct-fail-1"
@@ -169,14 +183,18 @@ class AdminTests(TestCase):
         self.auth("root")
         url = f"/api/v1/admin/teams/{self.team.team_id}/ban"
         for body in [{}, {"ban_reason": "   "}, {"ban_reason": {"a": 1}}]:
-            self.assertEqual(self.client.post(url, body, format="json").status_code, 400)
+            self.assertEqual(
+                self.client.post(url, body, format="json").status_code, 400
+            )
 
     def test_team_not_found(self):
         self.auth("root")
         for tid in ["00000000-0000-0000-0000-000000000000", "hello"]:
-            res = self.client.post(f"/api/v1/admin/teams/{tid}/ban",
-                                   {"ban_reason": "x"}, format="json")
+            res = self.client.post(
+                f"/api/v1/admin/teams/{tid}/ban", {"ban_reason": "x"}, format="json"
+            )
             self.assertEqual(res.data["code"], "TEAM_NOT_FOUND")
+
     def test_mileage_grant(self):
         """양수 지급 → ADMIN_GRANT, 잔액 증가."""
         self.auth("root")
@@ -192,6 +210,7 @@ class AdminTests(TestCase):
         self.assertEqual(self.team.mileage, before + 50)
 
         from apps.teams.models import MileageHistory, MileageType
+
         row = MileageHistory.objects.filter(team=self.team).latest("created_at")
         self.assertEqual(row.type, MileageType.ADMIN_GRANT)
         self.assertEqual(row.amount, 50)
@@ -199,6 +218,7 @@ class AdminTests(TestCase):
     def test_mileage_deduct(self):
         """음수 회수 → ADMIN_DEDUCT."""
         from apps.accounts.models import Team
+
         Team.objects.filter(pk=self.team.pk).update(mileage=100)
         self.auth("root")
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
@@ -208,6 +228,7 @@ class AdminTests(TestCase):
         self.assertEqual(res.data["data"]["current_mileage"], 70)
 
         from apps.teams.models import MileageHistory, MileageType
+
         row = MileageHistory.objects.filter(team=self.team).latest("created_at")
         self.assertEqual(row.type, MileageType.ADMIN_DEDUCT)
 
@@ -216,6 +237,7 @@ class AdminTests(TestCase):
         from django.db.models import Sum
         from apps.accounts.models import Team
         from apps.teams.models import MileageHistory
+
         Team.objects.filter(pk=self.team.pk).update(mileage=0)
         self.auth("root")
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
@@ -225,7 +247,9 @@ class AdminTests(TestCase):
         self.mileage({"amount": 50, "reason": "c"})
 
         self.team.refresh_from_db()
-        total = MileageHistory.objects.filter(team=self.team).aggregate(s=Sum("amount"))["s"]
+        total = MileageHistory.objects.filter(team=self.team).aggregate(
+            s=Sum("amount")
+        )["s"]
         self.assertEqual(total, self.team.mileage)
         self.assertEqual(self.team.mileage, 120)
 
@@ -239,6 +263,7 @@ class AdminTests(TestCase):
     def test_mileage_insufficient(self):
         """회수액이 잔액보다 크면 거부, 잔액 불변."""
         from apps.accounts.models import Team
+
         Team.objects.filter(pk=self.team.pk).update(mileage=20)
         self.auth("root")
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
@@ -250,13 +275,20 @@ class AdminTests(TestCase):
         self.assertEqual(res.data["data"]["requested_amount"], 50)
 
         self.team.refresh_from_db()
-        self.assertEqual(self.team.mileage, 20)   # 안 바뀌어야 함
+        self.assertEqual(self.team.mileage, 20)  # 안 바뀌어야 함
 
     def test_mileage_missing_fields(self):
         self.auth("root")
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
-        for body in [{}, {"amount": 50}, {"reason": "x"}, {"amount": 50, "reason": "  "}]:
-            self.assertEqual(self.client.post(url, body, format="json").status_code, 400)
+        for body in [
+            {},
+            {"amount": 50},
+            {"reason": "x"},
+            {"amount": 50, "reason": "  "},
+        ]:
+            self.assertEqual(
+                self.client.post(url, body, format="json").status_code, 400
+            )
 
     def test_mileage_participant_blocked(self):
         self.auth("player")
@@ -268,33 +300,57 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/teams/00000000-0000-0000-0000-000000000000/mileage",
-            {"amount": 50, "reason": "x"}, format="json",
+            {"amount": 50, "reason": "x"},
+            format="json",
             HTTP_IDEMPOTENCY_KEY=uuid.uuid4().hex,
         )
         self.assertEqual(res.data["code"], "TEAM_NOT_FOUND")
 
     def test_team_detail_success(self):
         from apps.teams.models import MileageHistory, MileageType
+
         self.auth("root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.ADMIN_GRANT,
-                                      amount=100, reason="지급", processed_by="root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.PURCHASE,
-                                      amount=-30, reason="음료", processed_by="root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.REFUND,
-                                      amount=30, reason="환불", processed_by="root")
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.ADMIN_GRANT,
+            amount=100,
+            reason="지급",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.PURCHASE,
+            amount=-30,
+            reason="음료",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.REFUND,
+            amount=30,
+            reason="환불",
+            processed_by="root",
+        )
         res = self.client.get(f"/api/v1/admin/teams/{self.team.team_id}")
         self.assertEqual(res.data["code"], "SUCCESS")
         d = res.data["data"]
         self.assertEqual(d["team_id"], str(self.team.team_id))
         self.assertEqual(d["member_count"], 1)
         self.assertEqual(d["members"][0]["login_id"], "player")
-        self.assertEqual(d["mileage_summary"],
-                         {"total_earned": 130, "total_spent": 30,
-                          "purchase_count": 1, "refund_count": 1})
+        self.assertEqual(
+            d["mileage_summary"],
+            {
+                "total_earned": 130,
+                "total_spent": 30,
+                "purchase_count": 1,
+                "refund_count": 1,
+            },
+        )
         self.assertEqual(len(d["recent_mileage_history"]), 3)
 
     def test_team_detail_not_found(self):
         import uuid
+
         self.auth("root")
         res = self.client.get(f"/api/v1/admin/teams/{uuid.uuid4()}")
         self.assertEqual(res.status_code, 404)
@@ -307,15 +363,24 @@ class AdminTests(TestCase):
 
     def test_team_detail_history_limit(self):
         from apps.teams.models import MileageHistory, MileageType
+
         self.auth("root")
         for i in range(15):
-            MileageHistory.objects.create(team=self.team, type=MileageType.ADMIN_GRANT,
-                                          amount=1, reason=f"r{i}", processed_by="root")
-        res = self.client.get(f"/api/v1/admin/teams/{self.team.team_id}?history_limit=5")
+            MileageHistory.objects.create(
+                team=self.team,
+                type=MileageType.ADMIN_GRANT,
+                amount=1,
+                reason=f"r{i}",
+                processed_by="root",
+            )
+        res = self.client.get(
+            f"/api/v1/admin/teams/{self.team.team_id}?history_limit=5"
+        )
         self.assertEqual(len(res.data["data"]["recent_mileage_history"]), 5)
 
     def test_team_detail_board_position(self):
         from apps.board.models import Cell, TeamBoardState
+
         self.auth("root")
         cell = Cell.objects.create(cell_index=12, type="CHALLENGE", name="12번칸")
         TeamBoardState.objects.create(team=self.team, position=cell)
@@ -326,40 +391,81 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.get(f"/api/v1/admin/teams/{self.team.team_id}")
         self.assertIsNone(res.data["data"]["board_position_states"])
+
     def test_mileage_history_lists_all(self):
         self.auth("root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.ADMIN_GRANT,
-                                      amount=100, reason="a", processed_by="root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.PURCHASE,
-                                      amount=-30, reason="b", processed_by="root")
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.ADMIN_GRANT,
+            amount=100,
+            reason="a",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.PURCHASE,
+            amount=-30,
+            reason="b",
+            processed_by="root",
+        )
         res = self.client.get("/api/v1/admin/mileage_history")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["data"]["total_count"], 2)
         row = res.data["data"]["history"][0]
         self.assertEqual(
             set(row),
-            {"history_id", "team_id", "team_name", "type", "amount",
-             "reason", "processed_by", "created_at"},
+            {
+                "history_id",
+                "team_id",
+                "team_name",
+                "type",
+                "amount",
+                "reason",
+                "processed_by",
+                "created_at",
+            },
         )
 
     def test_mileage_history_filter_by_type(self):
         self.auth("root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.ADMIN_GRANT,
-                                      amount=100, reason="a", processed_by="root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.PURCHASE,
-                                      amount=-30, reason="b", processed_by="root")
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.ADMIN_GRANT,
+            amount=100,
+            reason="a",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.PURCHASE,
+            amount=-30,
+            reason="b",
+            processed_by="root",
+        )
         res = self.client.get("/api/v1/admin/mileage_history?type=PURCHASE")
         self.assertEqual(res.data["data"]["total_count"], 1)
         self.assertEqual(res.data["data"]["history"][0]["type"], "PURCHASE")
 
     def test_mileage_history_filter_by_team(self):
         other = Team.objects.create(team_name="다른팀")
-        MileageHistory.objects.create(team=self.team, type=MileageType.ADMIN_GRANT,
-                                      amount=100, reason="a", processed_by="root")
-        MileageHistory.objects.create(team=other, type=MileageType.ADMIN_GRANT,
-                                      amount=50, reason="c", processed_by="root")
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.ADMIN_GRANT,
+            amount=100,
+            reason="a",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=other,
+            type=MileageType.ADMIN_GRANT,
+            amount=50,
+            reason="c",
+            processed_by="root",
+        )
         self.auth("root")
-        res = self.client.get(f"/api/v1/admin/mileage_history?team_id={self.team.team_id}")
+        res = self.client.get(
+            f"/api/v1/admin/mileage_history?team_id={self.team.team_id}"
+        )
         self.assertEqual(res.data["data"]["total_count"], 1)
 
     def test_mileage_history_invalid_type(self):
@@ -382,16 +488,29 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "newbie", "password": "pw12345678", "nickname": "새사람",
-             "team_id": str(self.team.team_id), "is_leader": True},
+            {
+                "login_id": "newbie",
+                "password": "pw12345678",
+                "nickname": "새사람",
+                "team_id": str(self.team.team_id),
+                "is_leader": True,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 200)
         d = res.data["data"]
         self.assertEqual(
             set(d),
-            {"user_id", "login_id", "nickname", "role", "is_leader",
-             "team_id", "team_name", "created_at"},
+            {
+                "user_id",
+                "login_id",
+                "nickname",
+                "role",
+                "is_leader",
+                "team_id",
+                "team_name",
+                "created_at",
+            },
         )
         self.assertNotIn("password", d)
         self.assertEqual(d["team_id"], str(self.team.team_id))
@@ -413,7 +532,12 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "op2", "password": "pw12345678", "nickname": "운영2", "role": "ADMIN"},
+            {
+                "login_id": "op2",
+                "password": "pw12345678",
+                "nickname": "운영2",
+                "role": "ADMIN",
+            },
             format="json",
         )
         self.assertEqual(res.data["data"]["role"], "ADMIN")
@@ -437,13 +561,22 @@ class AdminTests(TestCase):
             {"login_id": "a", "password": "short", "nickname": "x"},
         ]:
             self.assertEqual(
-                self.client.post("/api/v1/admin/accounts", body, format="json").status_code, 400)
+                self.client.post(
+                    "/api/v1/admin/accounts", body, format="json"
+                ).status_code,
+                400,
+            )
 
     def test_account_create_invalid_role(self):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "b", "password": "pw12345678", "nickname": "x", "role": "SUPER"},
+            {
+                "login_id": "b",
+                "password": "pw12345678",
+                "nickname": "x",
+                "role": "SUPER",
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 400)
@@ -452,8 +585,12 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "c", "password": "pw12345678", "nickname": "x",
-             "team_id": str(uuid.uuid4())},
+            {
+                "login_id": "c",
+                "password": "pw12345678",
+                "nickname": "x",
+                "team_id": str(uuid.uuid4()),
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 404)
@@ -461,12 +598,18 @@ class AdminTests(TestCase):
 
     def test_board_dice_grant(self):
         from apps.board.models import Cell, TeamBoardState
+
         self.auth("root")
-        cell, _ = Cell.objects.get_or_create(cell_index=1, defaults={"type": "START", "name": "출발"})
-        state = TeamBoardState.objects.create(team=self.team, position=cell, dice_rolls_left=0)
+        cell, _ = Cell.objects.get_or_create(
+            cell_index=1, defaults={"type": "START", "name": "출발"}
+        )
+        state = TeamBoardState.objects.create(
+            team=self.team, position=cell, dice_rolls_left=0
+        )
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": 2, "reason": "주사위 소실 보정"}, format="json",
+            {"amount": 2, "reason": "주사위 소실 보정"},
+            format="json",
         )
         self.assertEqual(res.status_code, 200)
         d = res.data["data"]
@@ -478,23 +621,31 @@ class AdminTests(TestCase):
 
     def test_board_dice_deduct(self):
         from apps.board.models import Cell, TeamBoardState
+
         self.auth("root")
-        cell, _ = Cell.objects.get_or_create(cell_index=1, defaults={"type": "START", "name": "출발"})
+        cell, _ = Cell.objects.get_or_create(
+            cell_index=1, defaults={"type": "START", "name": "출발"}
+        )
         TeamBoardState.objects.create(team=self.team, position=cell, dice_rolls_left=3)
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": -2, "reason": "회수"}, format="json",
+            {"amount": -2, "reason": "회수"},
+            format="json",
         )
         self.assertEqual(res.data["data"]["dice_rolls_left"], 1)
 
     def test_board_dice_insufficient(self):
         from apps.board.models import Cell, TeamBoardState
+
         self.auth("root")
-        cell, _ = Cell.objects.get_or_create(cell_index=1, defaults={"type": "START", "name": "출발"})
+        cell, _ = Cell.objects.get_or_create(
+            cell_index=1, defaults={"type": "START", "name": "출발"}
+        )
         TeamBoardState.objects.create(team=self.team, position=cell, dice_rolls_left=1)
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": -5, "reason": "x"}, format="json",
+            {"amount": -5, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["code"], "INSUFFICIENT_DICE")
@@ -503,6 +654,7 @@ class AdminTests(TestCase):
 
     def _dice_state(self, rolls, next_reset_at=None):
         from apps.board.models import Cell, TeamBoardState
+
         cell, _ = Cell.objects.get_or_create(
             cell_index=1, defaults={"type": "START", "name": "출발"}
         )
@@ -519,12 +671,14 @@ class AdminTests(TestCase):
         self.auth("root")
         return self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": amount, "reason": "운영 보정"}, format="json",
+            {"amount": amount, "reason": "운영 보정"},
+            format="json",
         )
 
     def test_board_dice_deduct_restarts_recharge(self):
         """상한이던 팀에서 회수하면 충전이 다시 시작된다."""
         from apps.board.models import TeamBoardState
+
         self._dice_state(3, None)
         res = self._adjust(-1)
         self.assertEqual(res.status_code, 200)
@@ -535,6 +689,7 @@ class AdminTests(TestCase):
     def test_board_dice_grant_to_cap_stops_recharge(self):
         """지급으로 상한에 닿으면 충전이 멈춘다."""
         from apps.board.models import TeamBoardState
+
         self._dice_state(2, timezone.now() + timedelta(minutes=10))
         res = self._adjust(1)
         self.assertEqual(res.status_code, 200)
@@ -546,6 +701,7 @@ class AdminTests(TestCase):
         """보드 보상과 같이 보유 상한을 넘겨 지급하지 않는다."""
         from apps.board.models import TeamBoardState
         from apps.board.services import MAX_DICE_ROLLS
+
         self._dice_state(2, timezone.now() + timedelta(minutes=10))
         res = self._adjust(5)
         self.assertEqual(res.status_code, 200)
@@ -559,6 +715,7 @@ class AdminTests(TestCase):
     def test_board_dice_grant_keeps_existing_recharge_deadline(self):
         """충전 대기 중 지급을 받아도 남은 시간이 늘어나지 않는다."""
         from apps.board.models import TeamBoardState
+
         deadline = (timezone.now() + timedelta(minutes=10)).replace(microsecond=0)
         self._dice_state(0, deadline)
         res = self._adjust(1)
@@ -570,6 +727,7 @@ class AdminTests(TestCase):
     def test_board_dice_applies_pending_recharge_before_adjusting(self):
         """밀린 자동 충전을 먼저 반영한 뒤 조정한다."""
         from apps.board.models import TeamBoardState
+
         self._dice_state(0, timezone.now() - timedelta(minutes=1))
         res = self._adjust(1)
         self.assertEqual(res.status_code, 200)
@@ -582,7 +740,8 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": 0, "reason": "x"}, format="json",
+            {"amount": 0, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["code"], "INVALID_AMOUNT")
@@ -591,7 +750,8 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": 21, "reason": "x"}, format="json",
+            {"amount": 21, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["code"], "INVALID_REQUEST")
@@ -600,7 +760,8 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             f"/api/v1/admin/teams/{uuid.uuid4()}/board/dice",
-            {"amount": 1, "reason": "x"}, format="json",
+            {"amount": 1, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 404)
         self.assertEqual(res.data["code"], "TEAM_NOT_FOUND")
@@ -660,13 +821,21 @@ class AdminTests(TestCase):
     def test_account_create_leader_conflict_not_login_id(self):
         self.auth("root")
         User.objects.create_user(
-            login_id="leader1", password="pw12345678", nickname="팀장1",
-            team=self.team, is_leader=True,
+            login_id="leader1",
+            password="pw12345678",
+            nickname="팀장1",
+            team=self.team,
+            is_leader=True,
         )
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "leader2", "password": "pw12345678", "nickname": "팀장2",
-             "team_id": str(self.team.team_id), "is_leader": True},
+            {
+                "login_id": "leader2",
+                "password": "pw12345678",
+                "nickname": "팀장2",
+                "team_id": str(self.team.team_id),
+                "is_leader": True,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 409)
@@ -677,8 +846,14 @@ class AdminTests(TestCase):
         self.auth("root")
         rejected = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "admin_leader", "password": "pw12345678", "nickname": "관리자팀장",
-             "team_id": str(self.team.team_id), "role": "ADMIN", "is_leader": True},
+            {
+                "login_id": "admin_leader",
+                "password": "pw12345678",
+                "nickname": "관리자팀장",
+                "team_id": str(self.team.team_id),
+                "role": "ADMIN",
+                "is_leader": True,
+            },
             format="json",
         )
         self.assertEqual(rejected.status_code, 400)
@@ -686,7 +861,12 @@ class AdminTests(TestCase):
 
         created = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "admin1", "password": "pw12345678", "nickname": "관리자", "role": "ADMIN"},
+            {
+                "login_id": "admin1",
+                "password": "pw12345678",
+                "nickname": "관리자",
+                "role": "ADMIN",
+            },
             format="json",
         )
         self.assertEqual(created.status_code, 200)
@@ -704,11 +884,18 @@ class AdminTests(TestCase):
 
     def test_challenge_visibility_toggle(self):
         self.auth("root")
-        ch = Challenge.objects.create(title="웹1", category="WEB", difficulty="EASY",
-                                      score=100, flag_hash="x", is_published=True)
+        ch = Challenge.objects.create(
+            title="웹1",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
         res = self.client.patch(
             f"/api/v1/admin/challenges/{ch.challenge_id}/visibility",
-            {"is_published": False, "reason": "서버 오류로 비공개"}, format="json",
+            {"is_published": False, "reason": "서버 오류로 비공개"},
+            format="json",
         )
         self.assertEqual(res.status_code, 200)
         d = res.data["data"]
@@ -717,8 +904,15 @@ class AdminTests(TestCase):
         self.assertEqual(d["changed_by"], "root")
         self.assertEqual(
             set(d),
-            {"challenge_id", "title", "previous_is_published", "is_published",
-             "affected_team_count", "changed_at", "changed_by"},
+            {
+                "challenge_id",
+                "title",
+                "previous_is_published",
+                "is_published",
+                "affected_team_count",
+                "changed_at",
+                "changed_by",
+            },
         )
         ch.refresh_from_db()
         self.assertFalse(ch.is_published)
@@ -728,6 +922,7 @@ class AdminTests(TestCase):
             get_current_cell_candidates,
             open_current_cell_challenge,
         )
+
         ch, _ = self._board_challenge_setup()
         get_current_cell_candidates(self.team)
         open_current_cell_challenge(self.team, ch.challenge_id)
@@ -737,14 +932,25 @@ class AdminTests(TestCase):
 
     def _board_challenge_setup(self, published=True, cell_index=2, number=1):
         from apps.board.models import BoardChallenge, Cell, TeamBoardState
+
         Cell.objects.get_or_create(
             cell_index=1, defaults={"type": "START", "name": "출발"}
         )
-        ch = Challenge.objects.create(title=f"보드{number}", category="WEB", difficulty="EASY",
-                                      score=100, flag_hash="x", is_published=published)
+        ch = Challenge.objects.create(
+            title=f"보드{number}",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=published,
+        )
         BoardChallenge.objects.create(challenge=ch, challenge_number=number)
-        cell = Cell.objects.create(cell_index=cell_index, type="CHALLENGE",
-                                   difficulty="EASY", name=f"{cell_index}번칸")
+        cell = Cell.objects.create(
+            cell_index=cell_index,
+            type="CHALLENGE",
+            difficulty="EASY",
+            name=f"{cell_index}번칸",
+        )
         TeamBoardState.objects.create(team=self.team, position=cell)
         return ch, cell
 
@@ -752,7 +958,8 @@ class AdminTests(TestCase):
         self.auth("root")
         return self.client.patch(
             f"/api/v1/admin/challenges/{ch.challenge_id}/visibility",
-            {"is_published": False, "reason": "출제 오류"}, format="json",
+            {"is_published": False, "reason": "출제 오류"},
+            format="json",
         )
 
     def test_opened_team_keeps_access_after_unpublish(self):
@@ -761,6 +968,7 @@ class AdminTests(TestCase):
             get_current_cell_candidates,
             open_current_cell_challenge,
         )
+
         ch, _ = self._board_challenge_setup()
         get_current_cell_candidates(self.team)
         open_current_cell_challenge(self.team, ch.challenge_id)
@@ -773,38 +981,58 @@ class AdminTests(TestCase):
 
     def test_challenge_visibility_invalid_body(self):
         self.auth("root")
-        ch = Challenge.objects.create(title="웹3", category="WEB", difficulty="EASY",
-                                      score=100, flag_hash="x", is_published=True)
+        ch = Challenge.objects.create(
+            title="웹3",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
         url = f"/api/v1/admin/challenges/{ch.challenge_id}/visibility"
-        for body in [{}, {"is_published": True}, {"reason": "x"},
-                     {"is_published": "yes", "reason": "x"}]:
-            self.assertEqual(self.client.patch(url, body, format="json").status_code, 400)
+        for body in [
+            {},
+            {"is_published": True},
+            {"reason": "x"},
+            {"is_published": "yes", "reason": "x"},
+        ]:
+            self.assertEqual(
+                self.client.patch(url, body, format="json").status_code, 400
+            )
 
     def test_challenge_visibility_not_found(self):
         self.auth("root")
         res = self.client.patch(
             f"/api/v1/admin/challenges/{uuid.uuid4()}/visibility",
-            {"is_published": False, "reason": "x"}, format="json",
+            {"is_published": False, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 404)
         self.assertEqual(res.data["code"], "CHALLENGE_NOT_FOUND")
 
     def test_challenge_visibility_participant_blocked(self):
         self.auth("player")
-        ch = Challenge.objects.create(title="웹4", category="WEB", difficulty="EASY",
-                                      score=100, flag_hash="x", is_published=True)
+        ch = Challenge.objects.create(
+            title="웹4",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
         res = self.client.patch(
             f"/api/v1/admin/challenges/{ch.challenge_id}/visibility",
-            {"is_published": False, "reason": "x"}, format="json",
+            {"is_published": False, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 403)
-
 
     def test_board_dice_participant_blocked(self):
         self.auth("player")
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": 1, "reason": "x"}, format="json",
+            {"amount": 1, "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 403)
 
@@ -812,8 +1040,13 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "newteam", "password": "pw12345678", "nickname": "새팀장",
-             "team_name": "새로운팀", "is_leader": True},
+            {
+                "login_id": "newteam",
+                "password": "pw12345678",
+                "nickname": "새팀장",
+                "team_name": "새로운팀",
+                "is_leader": True,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 200)
@@ -829,8 +1062,12 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "dup", "password": "pw12345678", "nickname": "x",
-             "team_name": self.team.team_name},
+            {
+                "login_id": "dup",
+                "password": "pw12345678",
+                "nickname": "x",
+                "team_name": self.team.team_name,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 409)
@@ -841,8 +1078,13 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "both", "password": "pw12345678", "nickname": "x",
-             "team_id": str(self.team.team_id), "team_name": "또다른팀"},
+            {
+                "login_id": "both",
+                "password": "pw12345678",
+                "nickname": "x",
+                "team_id": str(self.team.team_id),
+                "team_name": "또다른팀",
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 400)
@@ -854,8 +1096,13 @@ class AdminTests(TestCase):
             with self.subTest(name=name):
                 res = self.client.post(
                     "/api/v1/admin/accounts",
-                    {"login_id": "blankpair", "password": "pw12345678", "nickname": "x",
-                     "team_id": str(self.team.team_id), "team_name": name},
+                    {
+                        "login_id": "blankpair",
+                        "password": "pw12345678",
+                        "nickname": "x",
+                        "team_id": str(self.team.team_id),
+                        "team_name": name,
+                    },
                     format="json",
                 )
                 self.assertEqual(res.status_code, 400)
@@ -867,8 +1114,12 @@ class AdminTests(TestCase):
             with self.subTest(name=name):
                 res = self.client.post(
                     "/api/v1/admin/accounts",
-                    {"login_id": "blank", "password": "pw12345678", "nickname": "x",
-                     "team_name": name},
+                    {
+                        "login_id": "blank",
+                        "password": "pw12345678",
+                        "nickname": "x",
+                        "team_name": name,
+                    },
                     format="json",
                 )
                 self.assertEqual(res.status_code, 400)
@@ -878,12 +1129,17 @@ class AdminTests(TestCase):
         self.auth("root")
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "player", "password": "pw12345678", "nickname": "x",
-             "team_name": "롤백될팀"},
+            {
+                "login_id": "player",
+                "password": "pw12345678",
+                "nickname": "x",
+                "team_name": "롤백될팀",
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 409)
         self.assertFalse(Team.objects.filter(team_name="롤백될팀").exists())
+
 
 @override_settings(CACHES=LOCMEM)
 class AdminDashboardTests(TestCase):
@@ -892,8 +1148,11 @@ class AdminDashboardTests(TestCase):
         self.client = APIClient()
         self.team = Team.objects.create(team_name="팀A", team_score=100, mileage=200)
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
@@ -901,8 +1160,11 @@ class AdminDashboardTests(TestCase):
         self.auth("root")
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
         )
@@ -911,40 +1173,80 @@ class AdminDashboardTests(TestCase):
         from apps.teams.models import MileageHistory, MileageType
         from apps.challenge.models import Challenge, Solve
         from apps.instances.models import Instance, InstanceStatus
-        MileageHistory.objects.create(team=self.team, type=MileageType.PURCHASE,
-                                      amount=-100, reason="x", processed_by="root")
-        MileageHistory.objects.create(team=self.team, type=MileageType.REFUND,
-                                      amount=30, reason="x", processed_by="root")
-        ch = Challenge.objects.create(title="c1", category="WEB", difficulty="EASY",
-                                      score=500, flag_hash="x", is_published=True)
-        Challenge.objects.create(title="c2", category="WEB", difficulty="EASY",
-                                 score=500, flag_hash="x", is_published=False)
-        Instance.objects.create(user=self.player, team=self.team, challenge=ch,
-                                status=InstanceStatus.RUNNING)
-        Instance.objects.create(user=self.player, team=self.team, challenge=ch,
-                                status=InstanceStatus.FAILED)
-        Solve.objects.create(team=self.team, challenge=ch, solved_by_user=self.player,
-                             earned_score=500, earned_mileage=100)
+
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.PURCHASE,
+            amount=-100,
+            reason="x",
+            processed_by="root",
+        )
+        MileageHistory.objects.create(
+            team=self.team,
+            type=MileageType.REFUND,
+            amount=30,
+            reason="x",
+            processed_by="root",
+        )
+        ch = Challenge.objects.create(
+            title="c1",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            is_published=True,
+        )
+        Challenge.objects.create(
+            title="c2",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            is_published=False,
+        )
+        Instance.objects.create(
+            user=self.player,
+            team=self.team,
+            challenge=ch,
+            status=InstanceStatus.RUNNING,
+        )
+        Instance.objects.create(
+            user=self.player, team=self.team, challenge=ch, status=InstanceStatus.FAILED
+        )
+        Solve.objects.create(
+            team=self.team,
+            challenge=ch,
+            solved_by_user=self.player,
+            earned_score=500,
+            earned_mileage=100,
+        )
 
         res = self.client.get("/api/v1/admin/dashboard")
         self.assertEqual(res.data["code"], "SUCCESS")
         d = res.data["data"]
         self.assertEqual(d["teams"]["total_count"], 1)
         self.assertEqual(d["teams"]["total_mileage"], 200)
-        self.assertEqual(d["payment"],
-                         {"purchase_count": 1, "refund_count": 1, "net_spent": 70})
+        self.assertEqual(
+            d["payment"], {"purchase_count": 1, "refund_count": 1, "net_spent": 70}
+        )
         self.assertEqual(d["instances"], {"running": 1, "failed": 1, "total": 2})
-        self.assertEqual(d["challenges"], {"total": 2, "published": 1, "solved_total": 1})
+        self.assertEqual(
+            d["challenges"], {"total": 2, "published": 1, "solved_total": 1}
+        )
         self.assertIsNone(d["contest"])
 
     def test_dashboard_with_active_contest(self):
         import datetime
         from django.utils import timezone
         from apps.timer.models import Contest
+
         now = timezone.now()
-        Contest.objects.create(name="대회", is_active=True,
-                               start_time=now - datetime.timedelta(hours=1),
-                               end_time=now + datetime.timedelta(hours=1))
+        Contest.objects.create(
+            name="대회",
+            is_active=True,
+            start_time=now - datetime.timedelta(hours=1),
+            end_time=now + datetime.timedelta(hours=1),
+        )
         res = self.client.get("/api/v1/admin/dashboard")
         self.assertEqual(res.data["data"]["contest"]["status"], "RUNNING")
         self.assertGreater(res.data["data"]["contest"]["remaining_seconds"], 0)
@@ -954,6 +1256,7 @@ class AdminDashboardTests(TestCase):
         res = self.client.get("/api/v1/admin/dashboard")
         self.assertEqual(res.status_code, 403)
 
+
 @override_settings(CACHES=LOCMEM)
 class AdminChallengeTests(TestCase):
     def setUp(self):
@@ -962,8 +1265,11 @@ class AdminChallengeTests(TestCase):
         self.team = Team.objects.create(team_name="팀A", team_score=0)
         self.team2 = Team.objects.create(team_name="팀B", team_score=0)
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
@@ -971,8 +1277,11 @@ class AdminChallengeTests(TestCase):
         self.auth("root")
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
         )
@@ -996,9 +1305,7 @@ class AdminChallengeTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 200)
-        return Challenge.objects.get(
-            challenge_id=response.data["data"]["challenge_id"]
-        )
+        return Challenge.objects.get(challenge_id=response.data["data"]["challenge_id"])
 
     def test_challenge_create_uses_defaults_and_hashes_flag(self):
         from apps.challenge.services import is_correct_flag
@@ -1270,9 +1577,7 @@ class AdminChallengeTests(TestCase):
                 self.assertTrue(Challenge.objects.filter(pk=challenge.pk).exists())
 
     def test_challenge_delete_returns_not_found(self):
-        response = self.client.delete(
-            f"/api/v1/admin/challenges/{uuid.uuid4()}"
-        )
+        response = self.client.delete(f"/api/v1/admin/challenges/{uuid.uuid4()}")
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.data["code"], "CHALLENGE_NOT_FOUND")
@@ -1424,7 +1729,9 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(duplicate.status_code, 400)
         self.assertEqual(duplicate.data["code"], "INVALID_REQUEST")
-        self.assertEqual(Challenge.objects.filter(challenge_slug="web-notebook").count(), 1)
+        self.assertEqual(
+            Challenge.objects.filter(challenge_slug="web-notebook").count(), 1
+        )
 
     def test_challenge_create_rejects_missing_and_unknown_fields(self):
         missing = self.client.post(
@@ -1456,18 +1763,44 @@ class AdminChallengeTests(TestCase):
     def test_challenge_list_counts(self):
         from apps.challenge.models import Challenge, Solve
         from apps.instances.models import Instance, InstanceStatus
-        ch = Challenge.objects.create(title="웹1", category="WEB", difficulty="EASY",
-                                      score=500, flag_hash="x", is_published=True)
-        Instance.objects.create(user=self.player, team=self.team, challenge=ch,
-                                status=InstanceStatus.RUNNING)
-        Instance.objects.create(user=self.player, team=self.team, challenge=ch,
-                                status=InstanceStatus.RUNNING)
-        Instance.objects.create(user=self.player, team=self.team, challenge=ch,
-                                status=InstanceStatus.FAILED)
-        Solve.objects.create(team=self.team, challenge=ch, solved_by_user=self.player,
-                             earned_score=500, earned_mileage=100)
-        Solve.objects.create(team=self.team2, challenge=ch, solved_by_user=None,
-                             earned_score=500, earned_mileage=100)
+
+        ch = Challenge.objects.create(
+            title="웹1",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            is_published=True,
+        )
+        Instance.objects.create(
+            user=self.player,
+            team=self.team,
+            challenge=ch,
+            status=InstanceStatus.RUNNING,
+        )
+        Instance.objects.create(
+            user=self.player,
+            team=self.team,
+            challenge=ch,
+            status=InstanceStatus.RUNNING,
+        )
+        Instance.objects.create(
+            user=self.player, team=self.team, challenge=ch, status=InstanceStatus.FAILED
+        )
+        Solve.objects.create(
+            team=self.team,
+            challenge=ch,
+            solved_by_user=self.player,
+            earned_score=500,
+            earned_mileage=100,
+        )
+        Solve.objects.create(
+            team=self.team2,
+            challenge=ch,
+            solved_by_user=None,
+            earned_score=500,
+            earned_mileage=100,
+        )
         res = self.client.get("/api/v1/admin/challenges")
         self.assertEqual(res.data["code"], "SUCCESS")
         self.assertEqual(res.data["data"]["total_count"], 1)
@@ -1479,10 +1812,23 @@ class AdminChallengeTests(TestCase):
 
     def test_challenge_list_filters(self):
         from apps.challenge.models import Challenge
-        Challenge.objects.create(title="웹", category="WEB", difficulty="EASY",
-                                 score=100, flag_hash="x", is_published=True)
-        Challenge.objects.create(title="크립토", category="CRYPTO", difficulty="HARD",
-                                 score=100, flag_hash="x", is_published=False)
+
+        Challenge.objects.create(
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
+        Challenge.objects.create(
+            title="크립토",
+            category="CRYPTO",
+            difficulty="HARD",
+            score=100,
+            flag_hash="x",
+            is_published=False,
+        )
         res = self.client.get("/api/v1/admin/challenges?category=WEB")
         self.assertEqual(res.data["data"]["total_count"], 1)
         res = self.client.get("/api/v1/admin/challenges?is_published=false")
@@ -1501,15 +1847,32 @@ class AdminChallengeTests(TestCase):
 
     def test_challenge_list_new_categories(self):
         from apps.challenge.models import Challenge
-        Challenge.objects.create(title="web3챌", category="WEB3", difficulty="EASY",
-                                 score=100, flag_hash="x", is_published=True)
-        Challenge.objects.create(title="osint챌", category="OSINT", difficulty="EASY",
-                                 score=100, flag_hash="x", is_published=True)
+
+        Challenge.objects.create(
+            title="web3챌",
+            category="WEB3",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
+        Challenge.objects.create(
+            title="osint챌",
+            category="OSINT",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
+        )
         res = self.client.get("/api/v1/admin/challenges?category=WEB3")
         self.assertEqual(res.data["data"]["total_count"], 1)
         self.assertEqual(res.data["data"]["challenges"][0]["category"], "WEB3")
         self.assertEqual(
-            self.client.get("/api/v1/admin/challenges?category=OSINT").data["data"]["total_count"], 1)
+            self.client.get("/api/v1/admin/challenges?category=OSINT").data["data"][
+                "total_count"
+            ],
+            1,
+        )
 
     def test_challenge_list_invalid_is_published(self):
         res = self.client.get("/api/v1/admin/challenges?is_published=maybe")
@@ -1531,8 +1894,11 @@ class PaymentTests(TestCase):
             team_name="감자는외로워", team_score=0, mileage=200
         )
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
@@ -1540,14 +1906,18 @@ class PaymentTests(TestCase):
         self.auth("root")
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
         )
 
-    def mint_token(self, raw="tok-abc", team=None, hours=1,
-                   status=PaymentTokenStatus.ACTIVE):
+    def mint_token(
+        self, raw="tok-abc", team=None, hours=1, status=PaymentTokenStatus.ACTIVE
+    ):
         return PaymentToken.objects.create(
             team=team or self.team,
             token_hash=hash_token(raw),
@@ -1655,17 +2025,23 @@ class PaymentTests(TestCase):
         other = Team.objects.create(team_name="다른팀", team_score=0, mileage=100)
         self.mint_token("tok-a", team=self.team)
         self.mint_token("tok-b", team=other)
-        self.client.post("/api/v1/admin/payment/checkout",
-                         {"payment_token": "tok-a", "amount": 10, "item_name": "a"},
-                         format="json")
-        self.client.post("/api/v1/admin/payment/checkout",
-                         {"payment_token": "tok-b", "amount": 20, "item_name": "b"},
-                         format="json")
+        self.client.post(
+            "/api/v1/admin/payment/checkout",
+            {"payment_token": "tok-a", "amount": 10, "item_name": "a"},
+            format="json",
+        )
+        self.client.post(
+            "/api/v1/admin/payment/checkout",
+            {"payment_token": "tok-b", "amount": 20, "item_name": "b"},
+            format="json",
+        )
         res = self.client.get(
             f"/api/v1/admin/payment/history?team_id={self.team.team_id}"
         )
         self.assertEqual(res.data["data"]["total_count"], 1)
-        self.assertEqual(res.data["data"]["history"][0]["team_id"], str(self.team.team_id))
+        self.assertEqual(
+            res.data["data"]["history"][0]["team_id"], str(self.team.team_id)
+        )
 
     # ---------- refund ----------
     def test_refund_success(self):
@@ -1704,8 +2080,11 @@ class PaymentTests(TestCase):
     def test_refund_not_refundable(self):
         # ADMIN_GRANT 행은 환불 대상이 아니다
         h = MileageHistory.objects.create(
-            team=self.team, type=MileageType.ADMIN_GRANT, amount=50,
-            reason="지급", processed_by="root",
+            team=self.team,
+            type=MileageType.ADMIN_GRANT,
+            amount=50,
+            reason="지급",
+            processed_by="root",
         )
         res = self.client.delete(f"/api/v1/admin/payment/{h.history_id}/refund")
         self.assertEqual(res.status_code, 409)
@@ -1716,7 +2095,7 @@ class PaymentTests(TestCase):
         self.auth("player")
         res = self.client.delete(f"/api/v1/admin/payment/{hid}/refund")
         self.assertEqual(res.status_code, 403)
-        
+
     def test_refund_reflected_in_participant_history(self):
         hid = self._purchase(amount=30)
         self.client.delete(f"/api/v1/admin/payment/{hid}/refund")
@@ -1745,6 +2124,7 @@ class PaymentTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["code"], "INVALID_REQUEST")
 
+
 @override_settings(CACHES=LOCMEM, SCHEDULER_API_TOKEN="test-scheduler-token")
 class AdminInstanceTests(TestCase):
     def setUp(self):
@@ -1752,15 +2132,22 @@ class AdminInstanceTests(TestCase):
         self.client = APIClient()
         self.team = Team.objects.create(team_name="인스턴스팀", team_score=0)
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
         )
         self.challenge = Challenge.objects.create(
-            title="웹 문제", category="WEB", difficulty="EASY",
-            score=500, flag_hash="x", is_published=True,
+            title="웹 문제",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            is_published=True,
         )
         self.release = ChallengeRelease.objects.create(
             challenge=self.challenge,
@@ -1789,16 +2176,22 @@ class AdminInstanceTests(TestCase):
         self.auth("root")
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
         )
 
     def _instance(self, status=InstanceStatus.RUNNING, user=None):
         return Instance.objects.create(
-            user=user or self.player, team=self.team, challenge=self.challenge,
-            status=status, release=self.release,
+            user=user or self.player,
+            team=self.team,
+            challenge=self.challenge,
+            status=status,
+            release=self.release,
         )
 
     def test_list_returns_instances_and_summary(self):
@@ -1915,8 +2308,11 @@ class MileageIdempotencyRaceTest(TransactionTestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="레이스팀", mileage=0)
         self.admin = User.objects.create_user(
-            login_id="root2", password="pw1234", nickname="운영자2",
-            team=None, role=Role.ADMIN,
+            login_id="root2",
+            password="pw1234",
+            nickname="운영자2",
+            team=None,
+            role=Role.ADMIN,
         )
 
     def test_concurrent_same_key_applies_once(self):
@@ -1932,8 +2328,10 @@ class MileageIdempotencyRaceTest(TransactionTestCase):
             start.wait()
             try:
                 res = client.post(
-                    url, {"amount": 100, "reason": "보상"},
-                    format="json", HTTP_IDEMPOTENCY_KEY="race-1",
+                    url,
+                    {"amount": 100, "reason": "보상"},
+                    format="json",
+                    HTTP_IDEMPOTENCY_KEY="race-1",
                 )
                 results[tag] = res.status_code
             except Exception as exc:  # noqa: BLE001
@@ -1955,6 +2353,7 @@ class MileageIdempotencyRaceTest(TransactionTestCase):
         # 한 요청이 반영하고 나머지는 저장된 응답을 재생하므로 둘 다 200.
         self.assertEqual(sorted(results.values()), [200, 200])
 
+
 @override_settings(CACHES=LOCMEM)
 class AdminSettingsTests(TestCase):
     def setUp(self):
@@ -1965,21 +2364,31 @@ class AdminSettingsTests(TestCase):
             login_id="player", password="pw1234", nickname="참가자", team=self.team
         )
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.url = "/api/v1/admin/settings"
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def _contest(self, start_offset_hours=-1, end_offset_hours=5):
         from apps.timer.models import Contest
+
         now = timezone.now()
         return Contest.objects.create(
-            name="본선", is_active=True,
+            name="본선",
+            is_active=True,
             start_time=now + timedelta(hours=start_offset_hours),
             end_time=now + timedelta(hours=end_offset_hours),
         )
@@ -1990,7 +2399,9 @@ class AdminSettingsTests(TestCase):
         res = self.client.get(self.url)
         self.assertEqual(res.status_code, 200)
         d = res.data["data"]
-        self.assertEqual(set(d), {"contest", "board", "flag", "updated_at", "updated_by"})
+        self.assertEqual(
+            set(d), {"contest", "board", "flag", "updated_at", "updated_by"}
+        )
         self.assertEqual(d["board"]["dice_rolls_per_reset"], 3)
         self.assertEqual(d["board"]["dice_reset_interval_minutes"], 15)
         self.assertEqual(d["board"]["solve_deadline_minutes"], 15)
@@ -2016,7 +2427,9 @@ class AdminSettingsTests(TestCase):
         self.auth("player")
         self.assertEqual(self.client.get(self.url).status_code, 403)
         self.assertEqual(
-            self.client.patch(self.url, {"flag": {"max_attempts": 5}}, format="json").status_code,
+            self.client.patch(
+                self.url, {"flag": {"max_attempts": 5}}, format="json"
+            ).status_code,
             403,
         )
 
@@ -2037,7 +2450,9 @@ class AdminSettingsTests(TestCase):
 
     def test_patch_persists(self):
         self.auth("root")
-        self.client.patch(self.url, {"board": {"dice_rolls_per_reset": 4}}, format="json")
+        self.client.patch(
+            self.url, {"board": {"dice_rolls_per_reset": 4}}, format="json"
+        )
         d = self.client.get(self.url).data["data"]
         self.assertEqual(d["board"]["dice_rolls_per_reset"], 4)
 
@@ -2101,7 +2516,9 @@ class AdminSettingsTests(TestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(self.client.get(self.url).data["data"]["flag"]["lock_seconds"], 30)
+        self.assertEqual(
+            self.client.get(self.url).data["data"]["flag"]["lock_seconds"], 30
+        )
 
     # ---- 대회 시각 ----
     def test_patch_contest_end_time(self):
@@ -2120,7 +2537,9 @@ class AdminSettingsTests(TestCase):
     def test_patch_started_contest_start_time_rejected(self):
         self._contest(start_offset_hours=-1)
         self.auth("root")
-        new_start = (timezone.now() + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        new_start = (
+            (timezone.now() + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        )
         res = self.client.patch(
             self.url, {"contest": {"started_at": new_start}}, format="json"
         )
@@ -2180,8 +2599,12 @@ class AdminSettingsTests(TestCase):
         """대회 시각만 바꿔도 수정자와 수정 시각이 남는다."""
         self._contest()
         self.auth("root")
-        new_end = (timezone.now() + timedelta(hours=9)).isoformat().replace("+00:00", "Z")
-        res = self.client.patch(self.url, {"contest": {"ends_at": new_end}}, format="json")
+        new_end = (
+            (timezone.now() + timedelta(hours=9)).isoformat().replace("+00:00", "Z")
+        )
+        res = self.client.patch(
+            self.url, {"contest": {"ends_at": new_end}}, format="json"
+        )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["data"]["updated_by"], "root")
         self.assertIsNotNone(res.data["data"]["updated_at"])
@@ -2193,15 +2616,20 @@ class AdminSettingsTests(TestCase):
     def test_contest_change_overwrites_previous_updater(self):
         """이전 관리자 정보가 남지 않는다."""
         User.objects.create_user(
-            login_id="root2", password="pw1234", nickname="운영자2",
-            team=None, role=Role.ADMIN,
+            login_id="root2",
+            password="pw1234",
+            nickname="운영자2",
+            team=None,
+            role=Role.ADMIN,
         )
         self._contest()
         self.auth("root")
         self.client.patch(self.url, {"flag": {"lock_seconds": 60}}, format="json")
 
         self.auth("root2")
-        new_end = (timezone.now() + timedelta(hours=9)).isoformat().replace("+00:00", "Z")
+        new_end = (
+            (timezone.now() + timedelta(hours=9)).isoformat().replace("+00:00", "Z")
+        )
         self.client.patch(self.url, {"contest": {"ends_at": new_end}}, format="json")
         self.assertEqual(self.client.get(self.url).data["data"]["updated_by"], "root2")
 
@@ -2230,9 +2658,14 @@ class AdminSettingsTests(TestCase):
         self.auth("root")
         self.client.patch(self.url, {"flag": {"lock_seconds": 60}}, format="json")
         d = self.client.get(self.url).data["data"]
-        self.assertEqual(set(d["board"]), {
-            "dice_rolls_per_reset", "dice_reset_interval_minutes", "solve_deadline_minutes",
-        })
+        self.assertEqual(
+            set(d["board"]),
+            {
+                "dice_rolls_per_reset",
+                "dice_reset_interval_minutes",
+                "solve_deadline_minutes",
+            },
+        )
         self.assertEqual(set(d["flag"]), {"max_attempts", "lock_seconds"})
 
 
@@ -2247,18 +2680,27 @@ class AdminEventTests(TestCase):
             login_id="player", password="pw1234", nickname="참가자", team=self.team
         )
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.url = "/api/v1/admin/events"
 
     def auth(self, login_id):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": login_id, "password": "pw1234"}, format="json")
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def _event(self, **kwargs):
         from apps.adminpanel.models import AdminEvent
+
         defaults = {
             "type": AdminEvent.EventType.TEAM_BANNED,
             "severity": AdminEvent.Severity.WARNING,
@@ -2278,21 +2720,37 @@ class AdminEventTests(TestCase):
 
     def test_list_fields(self):
         from apps.adminpanel.models import AdminEvent
-        ch = Challenge.objects.create(title="웹1", category="WEB", difficulty="EASY",
-                                      score=100, flag_hash="x")
+
+        ch = Challenge.objects.create(
+            title="웹1", category="WEB", difficulty="EASY", score=100, flag_hash="x"
+        )
         instance_id = uuid.uuid4()
         self._event(
             type=AdminEvent.EventType.INSTANCE_FAILED,
             severity=AdminEvent.Severity.CRITICAL,
             message="인스턴스 생성에 실패했습니다.",
-            team=self.team, challenge=ch, instance_id=instance_id, actor="system",
+            team=self.team,
+            challenge=ch,
+            instance_id=instance_id,
+            actor="system",
         )
         self.auth("root")
         row = self.client.get(self.url).data["data"]["events"][0]
         self.assertEqual(
             set(row),
-            {"event_id", "type", "severity", "message", "team_id", "team_name",
-             "challenge_id", "challenge_title", "instance_id", "actor", "created_at"},
+            {
+                "event_id",
+                "type",
+                "severity",
+                "message",
+                "team_id",
+                "team_name",
+                "challenge_id",
+                "challenge_title",
+                "instance_id",
+                "actor",
+                "created_at",
+            },
         )
         self.assertEqual(row["type"], "INSTANCE_FAILED")
         self.assertEqual(row["severity"], "CRITICAL")
@@ -2304,7 +2762,13 @@ class AdminEventTests(TestCase):
         self._event(team=None)
         self.auth("root")
         row = self.client.get(self.url).data["data"]["events"][0]
-        for key in ("team_id", "team_name", "challenge_id", "challenge_title", "instance_id"):
+        for key in (
+            "team_id",
+            "team_name",
+            "challenge_id",
+            "challenge_title",
+            "instance_id",
+        ):
             self.assertIsNone(row[key])
 
     def test_newest_first(self):
@@ -2316,11 +2780,14 @@ class AdminEventTests(TestCase):
         )
         second.__class__.objects.filter(pk=second.pk).update(created_at=now)
         self.auth("root")
-        messages = [e["message"] for e in self.client.get(self.url).data["data"]["events"]]
+        messages = [
+            e["message"] for e in self.client.get(self.url).data["data"]["events"]
+        ]
         self.assertEqual(messages, ["나중", "먼저"])
 
     def test_filter_by_type(self):
         from apps.adminpanel.models import AdminEvent
+
         self._event(type=AdminEvent.EventType.TEAM_BANNED)
         self._event(type=AdminEvent.EventType.SETTINGS_CHANGED)
         self.auth("root")
@@ -2345,7 +2812,9 @@ class AdminEventTests(TestCase):
 
     def test_invalid_team_id(self):
         self.auth("root")
-        self.assertEqual(self.client.get(f"{self.url}?team_id=not-a-uuid").status_code, 400)
+        self.assertEqual(
+            self.client.get(f"{self.url}?team_id=not-a-uuid").status_code, 400
+        )
 
     def test_pagination(self):
         for i in range(7):
@@ -2361,7 +2830,9 @@ class AdminEventTests(TestCase):
         self.auth("root")
         for query in ["page=0", "size=0", "page=abc"]:
             with self.subTest(query=query):
-                self.assertEqual(self.client.get(f"{self.url}?{query}").status_code, 400)
+                self.assertEqual(
+                    self.client.get(f"{self.url}?{query}").status_code, 400
+                )
 
     def test_participant_blocked(self):
         self.auth("player")
@@ -2378,13 +2849,18 @@ class SettingsLockOrderTest(TransactionTestCase):
 
     def setUp(self):
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
 
     def _client(self):
         client = APIClient()
-        client.credentials(HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.admin)}")
+        client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.admin)}"
+        )
         return client
 
     def _seed(self):
@@ -2458,7 +2934,9 @@ class SettingsLockOrderTest(TransactionTestCase):
                 connections.close_all()
 
         with patch.object(AdminSetting.objects, "update_or_create", hooked):
-            threads = [threading.Thread(target=send, args=(i,)) for i in range(len(bodies))]
+            threads = [
+                threading.Thread(target=send, args=(i,)) for i in range(len(bodies))
+            ]
             for thread in threads:
                 thread.start()
             for thread in threads:
@@ -2539,14 +3017,18 @@ class AdminTeamLockCoverageTests(TestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="잠금 경로 확인", mileage=200)
         self.admin = User.objects.create_user(
-            login_id="lock-admin", password="pw1234", nickname="운영자", role=Role.ADMIN,
+            login_id="lock-admin",
+            password="pw1234",
+            nickname="운영자",
+            role=Role.ADMIN,
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.admin)
 
     def assert_team_no_key_lock(self, queries):
         team_locks = [
-            query["sql"] for query in queries
+            query["sql"]
+            for query in queries
             if 'FROM "teams"' in query["sql"] and "FOR " in query["sql"]
         ]
         self.assertEqual(len(team_locks), 1, team_locks)
@@ -2559,7 +3041,8 @@ class AdminTeamLockCoverageTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             response = self.client.post(
                 f"/api/v1/admin/teams/{self.team.pk}/ban",
-                {"ban_reason": "운영 조정"}, format="json",
+                {"ban_reason": "운영 조정"},
+                format="json",
             )
 
         self.assertEqual(response.status_code, 200)
@@ -2570,7 +3053,8 @@ class AdminTeamLockCoverageTests(TestCase):
         from django.test.utils import CaptureQueriesContext
 
         PaymentToken.objects.create(
-            team=self.team, token_hash=hash_token("lock-checkout"),
+            team=self.team,
+            token_hash=hash_token("lock-checkout"),
             expires_at=timezone.now() + timedelta(minutes=5),
         )
         with CaptureQueriesContext(connection) as queries:
@@ -2590,7 +3074,10 @@ class AdminTeamLockCoverageTests(TestCase):
         from django.test.utils import CaptureQueriesContext
 
         purchase = MileageHistory.objects.create(
-            team=self.team, type=MileageType.PURCHASE, amount=-30, item_name="굿즈",
+            team=self.team,
+            type=MileageType.PURCHASE,
+            amount=-30,
+            item_name="굿즈",
         )
         with CaptureQueriesContext(connection) as queries:
             response = self.client.delete(f"/api/v1/admin/payment/{purchase.pk}/refund")
@@ -2608,24 +3095,34 @@ class AdminEventRecordingTests(TestCase):
     def setUp(self):
         cache.clear()
         self.client = APIClient()
-        self.team = Team.objects.create(team_name="감자는외로워", team_score=0, mileage=200)
+        self.team = Team.objects.create(
+            team_name="감자는외로워", team_score=0, mileage=200
+        )
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
         )
         self.challenge = Challenge.objects.create(
-            title="웹 문제", category="WEB", difficulty="EASY",
-            score=500, flag_hash="x", is_published=True,
+            title="웹 문제",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            is_published=True,
         )
         self.auth("root")
 
     def auth(self, login_id):
         res = self.client.post(
             "/api/v1/auth/login",
-            {"login_id": login_id, "password": "pw1234"}, format="json",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
         )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
@@ -2633,6 +3130,7 @@ class AdminEventRecordingTests(TestCase):
 
     def events(self, event_type=None):
         from apps.adminpanel.models import AdminEvent
+
         queryset = AdminEvent.objects.all()
         if event_type:
             queryset = queryset.filter(type=event_type)
@@ -2646,13 +3144,15 @@ class AdminEventRecordingTests(TestCase):
     def mileage(self, body, key=None):
         return self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/mileage",
-            body, format="json",
+            body,
+            format="json",
             HTTP_IDEMPOTENCY_KEY=key or uuid.uuid4().hex,
         )
 
     def purchase(self, amount=30):
         PaymentToken.objects.create(
-            team=self.team, token_hash=hash_token("tok-p"),
+            team=self.team,
+            token_hash=hash_token("tok-p"),
             status=PaymentTokenStatus.ACTIVE,
             expires_at=timezone.now() + timedelta(hours=1),
         )
@@ -2665,7 +3165,10 @@ class AdminEventRecordingTests(TestCase):
 
     def instance(self, status=InstanceStatus.RUNNING):
         return Instance.objects.create(
-            user=self.player, team=self.team, challenge=self.challenge, status=status,
+            user=self.player,
+            team=self.team,
+            challenge=self.challenge,
+            status=status,
         )
 
     # ---- 팀 제재 ----
@@ -2675,7 +3178,8 @@ class AdminEventRecordingTests(TestCase):
 
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/ban",
-            {"ban_reason": "플래그 공유"}, format="json",
+            {"ban_reason": "플래그 공유"},
+            format="json",
         )
 
         self.assertEqual(res.status_code, 200)
@@ -2753,7 +3257,8 @@ class AdminEventRecordingTests(TestCase):
 
         res = self.client.patch(
             f"/api/v1/admin/challenges/{self.challenge.challenge_id}/visibility",
-            {"is_published": False, "reason": "출제 오류"}, format="json",
+            {"is_published": False, "reason": "출제 오류"},
+            format="json",
         )
 
         self.assertEqual(res.status_code, 200)
@@ -2884,8 +3389,10 @@ class AdminEventRecordingTests(TestCase):
 
         now = timezone.now()
         Contest.objects.create(
-            name="본선", is_active=True,
-            start_time=now - timedelta(hours=1), end_time=now + timedelta(hours=5),
+            name="본선",
+            is_active=True,
+            start_time=now - timedelta(hours=1),
+            end_time=now + timedelta(hours=5),
         )
         ends_at = (now + timedelta(hours=8)).replace(microsecond=0)
 
@@ -2910,7 +3417,10 @@ class AdminEventRecordingTests(TestCase):
         """활성 대회가 없어 트랜잭션 안에서 거절되면 설정과 이벤트가 함께 롤백된다."""
         res = self.client.patch(
             "/api/v1/admin/settings",
-            {"board": {"dice_rolls_per_reset": 4}, "contest": {"ends_at": "2030-01-01T00:00:00Z"}},
+            {
+                "board": {"dice_rolls_per_reset": 4},
+                "contest": {"ends_at": "2030-01-01T00:00:00Z"},
+            },
             format="json",
         )
 
@@ -2929,7 +3439,8 @@ class AdminEventRecordingTests(TestCase):
 
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": 5, "reason": "주사위 소실 보정"}, format="json",
+            {"amount": 5, "reason": "주사위 소실 보정"},
+            format="json",
         )
 
         self.assertEqual(res.status_code, 200)
@@ -2947,7 +3458,8 @@ class AdminEventRecordingTests(TestCase):
 
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/board/dice",
-            {"amount": -5, "reason": "회수"}, format="json",
+            {"amount": -5, "reason": "회수"},
+            format="json",
         )
 
         self.assertEqual(res.status_code, 400)
@@ -2963,7 +3475,8 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(len(reason), 500)
         res = self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/ban",
-            {"ban_reason": reason}, format="json",
+            {"ban_reason": reason},
+            format="json",
         )
 
         self.assertEqual(res.status_code, 200)
@@ -2993,7 +3506,8 @@ class AdminEventRecordingTests(TestCase):
         reason = "가" * 500
         response = self.client.patch(
             f"/api/v1/admin/challenges/{self.challenge.pk}/visibility",
-            {"is_published": False, "reason": reason}, format="json",
+            {"is_published": False, "reason": reason},
+            format="json",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -3003,10 +3517,14 @@ class AdminEventRecordingTests(TestCase):
     def test_event_write_failure_rolls_back_ban(self):
         from django.db import DatabaseError
 
-        with patch("apps.adminpanel.views._record_event", side_effect=DatabaseError("audit unavailable")):
+        with patch(
+            "apps.adminpanel.views._record_event",
+            side_effect=DatabaseError("audit unavailable"),
+        ):
             response = self.client.post(
                 f"/api/v1/admin/teams/{self.team.team_id}/ban",
-                {"ban_reason": "운영 보정"}, format="json",
+                {"ban_reason": "운영 보정"},
+                format="json",
             )
 
         self.assertEqual(response.status_code, 500)
@@ -3019,7 +3537,8 @@ class AdminEventRecordingTests(TestCase):
 
         self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/ban",
-            {"ban_reason": "플래그 공유"}, format="json",
+            {"ban_reason": "플래그 공유"},
+            format="json",
         )
         self.mileage({"amount": 10, "reason": "보상"})
 
@@ -3050,8 +3569,11 @@ class AdminBoardTestBase(TestCase):
         self.client = APIClient()
         self.team = Team.objects.create(team_name="감자는외로워", team_score=350)
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자",
-            team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.player = User.objects.create_user(
             login_id="player", password="pw1234", nickname="참가자", team=self.team
@@ -3065,7 +3587,8 @@ class AdminBoardTestBase(TestCase):
     def auth(self, login_id):
         res = self.client.post(
             "/api/v1/auth/login",
-            {"login_id": login_id, "password": "pw1234"}, format="json",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
         )
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
@@ -3081,8 +3604,12 @@ class AdminBoardTestBase(TestCase):
         )
 
         challenge = Challenge.objects.create(
-            title="보드1", category="WEB", difficulty="EASY",
-            score=100, flag_hash="x", is_published=True,
+            title="보드1",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
         )
         BoardChallenge.objects.create(challenge=challenge, challenge_number=1)
         TeamBoardState.objects.update_or_create(
@@ -3105,7 +3632,8 @@ class AdminBoardAuditTests(AdminBoardTestBase):
 
         response = self.client.patch(
             f"/api/v1/admin/teams/{self.team.pk}/board/position",
-            {"position": 7, "consume_cell": True, "reason": reason}, format="json",
+            {"position": 7, "consume_cell": True, "reason": reason},
+            format="json",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -3126,7 +3654,8 @@ class AdminBoardAuditTests(AdminBoardTestBase):
 
         response = self.client.patch(
             f"/api/v1/admin/teams/{self.team.pk}/board/cells/2",
-            {"status": "CLEARED", "reason": "풀이 판정 보정"}, format="json",
+            {"status": "CLEARED", "reason": "풀이 판정 보정"},
+            format="json",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -3145,7 +3674,8 @@ class AdminBoardAuditTests(AdminBoardTestBase):
 
         response = self.client.patch(
             f"/api/v1/admin/teams/{self.team.pk}/board/cells/2",
-            {"status": "UNVISITED", "reason": "잘못된 문제 배정 취소"}, format="json",
+            {"status": "UNVISITED", "reason": "잘못된 문제 배정 취소"},
+            format="json",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -3159,7 +3689,8 @@ class AdminBoardAuditTests(AdminBoardTestBase):
         self.auth("root")
         response = self.client.patch(
             f"/api/v1/admin/teams/{self.team.pk}/board/cells/2",
-            {"status": "CLEARED", "reason": "개방 기록 없음"}, format="json",
+            {"status": "CLEARED", "reason": "개방 기록 없음"},
+            format="json",
         )
 
         self.assertEqual(response.status_code, 400)
@@ -3171,16 +3702,22 @@ class AdminBoardAuditTests(AdminBoardTestBase):
 
         self.auth("root")
         state = TeamBoardState.objects.create(team=self.team, position=self.start)
-        with patch("apps.adminpanel.views._record_event", side_effect=DatabaseError("audit unavailable")):
+        with patch(
+            "apps.adminpanel.views._record_event",
+            side_effect=DatabaseError("audit unavailable"),
+        ):
             response = self.client.patch(
                 f"/api/v1/admin/teams/{self.team.pk}/board/position",
-                {"position": 7, "consume_cell": True, "reason": "이동 보정"}, format="json",
+                {"position": 7, "consume_cell": True, "reason": "이동 보정"},
+                format="json",
             )
 
         self.assertEqual(response.status_code, 500)
         state.refresh_from_db()
         self.assertEqual(state.position_id, 1)
-        self.assertFalse(TeamCellConsumption.objects.filter(team=self.team, cell=7).exists())
+        self.assertFalse(
+            TeamCellConsumption.objects.filter(team=self.team, cell=7).exists()
+        )
 
     def test_cell_event_failure_rolls_back_status_and_active_link(self):
         from django.db import DatabaseError
@@ -3189,17 +3726,22 @@ class AdminBoardAuditTests(AdminBoardTestBase):
         self.auth("root")
         self.open_challenge_on_cell()
         access = TeamChallengeAccess.objects.get(team=self.team)
-        with patch("apps.adminpanel.views._record_event", side_effect=DatabaseError("audit unavailable")):
+        with patch(
+            "apps.adminpanel.views._record_event",
+            side_effect=DatabaseError("audit unavailable"),
+        ):
             response = self.client.patch(
                 f"/api/v1/admin/teams/{self.team.pk}/board/cells/2",
-                {"status": "CLEARED", "reason": "풀이 판정 보정"}, format="json",
+                {"status": "CLEARED", "reason": "풀이 판정 보정"},
+                format="json",
             )
 
         self.assertEqual(response.status_code, 500)
         access.refresh_from_db()
         self.assertEqual(access.status, TeamChallengeAccess.Status.OPENED)
         self.assertEqual(
-            TeamBoardState.objects.get(team=self.team).active_challenge_access_id, access.pk,
+            TeamBoardState.objects.get(team=self.team).active_challenge_access_id,
+            access.pk,
         )
 
 
@@ -3225,9 +3767,7 @@ class AdminBoardPositionTests(AdminBoardTestBase):
         self.assertEqual(data["type"], "CHANCE")
         self.assertFalse(data["cell_consumed"])
         self.assertEqual(data["moved_by"], "root")
-        self.assertEqual(
-            TeamBoardState.objects.get(team=self.team).position_id, 7
-        )
+        self.assertEqual(TeamBoardState.objects.get(team=self.team).position_id, 7)
 
     def test_consume_cell_marks_arrival_cell(self):
         from apps.board.models import TeamBoardState, TeamCellConsumption
@@ -3267,8 +3807,13 @@ class AdminBoardPositionTests(AdminBoardTestBase):
         self.auth("root")
         TeamBoardState.objects.create(team=self.team, position=self.start)
         PendingDiceRoll.objects.create(
-            team=self.team, dice_a=3, dice_b=4, rolled_number=7,
-            previous_position=1, candidate_position=8, board_event_code="CHALLENGE",
+            team=self.team,
+            dice_a=3,
+            dice_b=4,
+            rolled_number=7,
+            previous_position=1,
+            candidate_position=8,
+            board_event_code="CHALLENGE",
         )
 
         res = self.patch({"position": 7, "reason": "주사위 중복 처리 보정"})
@@ -3279,22 +3824,36 @@ class AdminBoardPositionTests(AdminBoardTestBase):
     def test_closes_chance_card_awaiting_choice(self):
         """굴림만 지우고 선택 대기 카드를 두면 이후 모든 확정이 영구히 막힌다."""
         from apps.board.models import (
-            ChanceCard, PendingDiceRoll, TeamBoardState, TeamChanceCard,
+            ChanceCard,
+            PendingDiceRoll,
+            TeamBoardState,
+            TeamChanceCard,
         )
 
         self.auth("root")
         TeamBoardState.objects.create(team=self.team, position=self.start)
         card = ChanceCard.objects.create(
-            card_id="card_roll_twice_choose", name="두 번 굴리기",
-            effect="ROLL_TWICE_CHOOSE", usage_timing="PRE_ROLL", weight=1,
+            card_id="card_roll_twice_choose",
+            name="두 번 굴리기",
+            effect="ROLL_TWICE_CHOOSE",
+            usage_timing="PRE_ROLL",
+            weight=1,
         )
         draw = TeamChanceCard.objects.create(
-            team=self.team, source_cell=self.chance_cell, card=card,
-            pending_first_number=5, pending_second_number=9,
+            team=self.team,
+            source_cell=self.chance_cell,
+            card=card,
+            pending_first_number=5,
+            pending_second_number=9,
         )
         PendingDiceRoll.objects.create(
-            team=self.team, dice_a=2, dice_b=3, rolled_number=5,
-            previous_position=1, candidate_position=6, board_event_code="CHALLENGE",
+            team=self.team,
+            dice_a=2,
+            dice_b=3,
+            rolled_number=5,
+            previous_position=1,
+            candidate_position=6,
+            board_event_code="CHALLENGE",
         )
 
         self.patch({"position": 7, "reason": "굴림 오작동 보정"})
@@ -3410,8 +3969,12 @@ class AdminBoardCellStatusTests(AdminBoardTestBase):
 
         self.auth("root")
         challenge = Challenge.objects.create(
-            title="후보 문제", category="WEB", difficulty="EASY",
-            score=100, flag_hash="x", is_published=True,
+            title="후보 문제",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
         )
         BoardChallenge.objects.create(challenge=challenge, challenge_number=1)
         TeamBoardState.objects.create(team=self.team, position=self.challenge_cell)
@@ -3421,7 +3984,9 @@ class AdminBoardCellStatusTests(AdminBoardTestBase):
         response = self.patch({"status": "UNVISITED", "reason": "잘못된 도착 취소"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(TeamCellCandidate.objects.filter(team=self.team, cell=2).exists())
+        self.assertFalse(
+            TeamCellCandidate.objects.filter(team=self.team, cell=2).exists()
+        )
 
     def _prepare_last_unconsumed_cell(self, now):
         from apps.board.models import TeamBoardState, TeamCellConsumption
@@ -3429,12 +3994,18 @@ class AdminBoardCellStatusTests(AdminBoardTestBase):
         for index in range(1, 37):
             cell, _ = Cell.objects.get_or_create(
                 cell_index=index,
-                defaults={"type": "CHALLENGE", "difficulty": "EASY", "name": str(index)},
+                defaults={
+                    "type": "CHALLENGE",
+                    "difficulty": "EASY",
+                    "name": str(index),
+                },
             )
             if index not in (1, 2):
                 TeamCellConsumption.objects.create(team=self.team, cell=cell)
         return TeamBoardState.objects.create(
-            team=self.team, position=self.start, dice_rolls_left=1,
+            team=self.team,
+            position=self.start,
+            dice_rolls_left=1,
             next_dice_reset_at=now + timedelta(minutes=5),
         )
 
@@ -3532,7 +4103,8 @@ class AdminBoardCellStatusTests(AdminBoardTestBase):
         self.assertIsNone(access.cleared_at)
         self.assertEqual(access.opened_at, opened_at)
         self.assertEqual(
-            TeamBoardState.objects.get(team=self.team).active_challenge_access_id, access.pk,
+            TeamBoardState.objects.get(team=self.team).active_challenge_access_id,
+            access.pk,
         )
 
     def test_reopening_another_cell_does_not_make_it_active(self):
@@ -3693,8 +4265,12 @@ class AdminBoardCellStatusTests(AdminBoardTestBase):
 
         self.auth("root")
         challenge = Challenge.objects.create(
-            title="보드2", category="WEB", difficulty="EASY",
-            score=100, flag_hash="x", is_published=True,
+            title="보드2",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
+            is_published=True,
         )
         BoardChallenge.objects.create(challenge=challenge, challenge_number=2)
         TeamBoardState.objects.create(team=self.team, position=self.challenge_cell)
@@ -3730,25 +4306,45 @@ class AdminTeamManageTests(TestCase):
         self.team = Team.objects.create(team_name="감자는외로워")
         self.other = Team.objects.create(team_name="고구마")
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자", team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         self.leader = User.objects.create_user(
-            login_id="leader", password="pw1234", nickname="팀장", team=self.team, is_leader=True,
+            login_id="leader",
+            password="pw1234",
+            nickname="팀장",
+            team=self.team,
+            is_leader=True,
         )
         self.member = User.objects.create_user(
-            login_id="member", password="pw1234", nickname="팀원", team=self.team,
+            login_id="member",
+            password="pw1234",
+            nickname="팀원",
+            team=self.team,
         )
-        self.free = User.objects.create_user(login_id="free", password="pw1234", nickname="무소속")
+        self.free = User.objects.create_user(
+            login_id="free", password="pw1234", nickname="무소속"
+        )
         self.elsewhere = User.objects.create_user(
-            login_id="elsewhere", password="pw1234", nickname="남의팀", team=self.other,
+            login_id="elsewhere",
+            password="pw1234",
+            nickname="남의팀",
+            team=self.other,
         )
         self.auth("root")
 
     def auth(self, login_id):
         res = self.client.post(
-            "/api/v1/auth/login", {"login_id": login_id, "password": "pw1234"}, format="json",
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
         )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def url(self, team=None):
         return f"/api/v1/admin/teams/{(team or self.team).team_id}"
@@ -3761,6 +4357,7 @@ class AdminTeamManageTests(TestCase):
 
     def events(self, event_type):
         from apps.adminpanel.models import AdminEvent
+
         return list(AdminEvent.objects.filter(type=event_type))
 
     # ---- 수정 ----
@@ -3781,21 +4378,26 @@ class AdminTeamManageTests(TestCase):
         self.assertEqual(res.data["code"], "TEAM_NAME_TAKEN")
 
     def test_add_and_remove_members(self):
-        res = self.patch({
-            "add_user_ids": [str(self.free.user_id)],
-            "remove_user_ids": [str(self.member.user_id)],
-            "reason": "팀 재편성",
-        })
+        res = self.patch(
+            {
+                "add_user_ids": [str(self.free.user_id)],
+                "remove_user_ids": [str(self.member.user_id)],
+                "reason": "팀 재편성",
+            }
+        )
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(
-            sorted(m["login_id"] for m in res.data["data"]["members"]), ["free", "leader"]
+            sorted(m["login_id"] for m in res.data["data"]["members"]),
+            ["free", "leader"],
         )
         self.assertEqual(User.objects.get(pk=self.free.pk).team_id, self.team.team_id)
         self.assertIsNone(User.objects.get(pk=self.member.pk).team_id)
 
     def test_change_leader(self):
-        res = self.patch({"leader_user_id": str(self.member.user_id), "reason": "팀장 교체"})
+        res = self.patch(
+            {"leader_user_id": str(self.member.user_id), "reason": "팀장 교체"}
+        )
 
         self.assertEqual(res.status_code, 200)
         self.assertFalse(User.objects.get(pk=self.leader.pk).is_leader)
@@ -3805,11 +4407,13 @@ class AdminTeamManageTests(TestCase):
         self.assertIn("팀장 leader → member", event.message)
 
     def test_add_member_and_make_leader_in_one_request(self):
-        res = self.patch({
-            "add_user_ids": [str(self.free.user_id)],
-            "leader_user_id": str(self.free.user_id),
-            "reason": "신규 팀장",
-        })
+        res = self.patch(
+            {
+                "add_user_ids": [str(self.free.user_id)],
+                "leader_user_id": str(self.free.user_id),
+                "reason": "신규 팀장",
+            }
+        )
         self.assertEqual(res.status_code, 200)
         self.assertTrue(User.objects.get(pk=self.free.pk).is_leader)
         self.assertFalse(User.objects.get(pk=self.leader.pk).is_leader)
@@ -3820,7 +4424,9 @@ class AdminTeamManageTests(TestCase):
         self.assertFalse(User.objects.filter(team=self.team, is_leader=True).exists())
 
     def test_removing_leader_leaves_team_without_leader(self):
-        res = self.patch({"remove_user_ids": [str(self.leader.user_id)], "reason": "탈퇴"})
+        res = self.patch(
+            {"remove_user_ids": [str(self.leader.user_id)], "reason": "탈퇴"}
+        )
         self.assertEqual(res.status_code, 200)
         leader = User.objects.get(pk=self.leader.pk)
         self.assertIsNone(leader.team_id)
@@ -3832,7 +4438,9 @@ class AdminTeamManageTests(TestCase):
 
         for login_id in ("leader", "member"):
             self.client.post(
-                "/api/v1/auth/login", {"login_id": login_id, "password": "pw1234"}, format="json",
+                "/api/v1/auth/login",
+                {"login_id": login_id, "password": "pw1234"},
+                format="json",
             )
         self.auth("root")
 
@@ -3844,7 +4452,9 @@ class AdminTeamManageTests(TestCase):
     def test_rejects_user_from_another_team(self):
         res = self.patch({"add_user_ids": [str(self.elsewhere.user_id)], "reason": "x"})
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(User.objects.get(pk=self.elsewhere.pk).team_id, self.other.team_id)
+        self.assertEqual(
+            User.objects.get(pk=self.elsewhere.pk).team_id, self.other.team_id
+        )
 
     def test_rejects_admin_account(self):
         res = self.patch({"add_user_ids": [str(self.admin.user_id)], "reason": "x"})
@@ -3868,8 +4478,11 @@ class AdminTeamManageTests(TestCase):
             {"add_user_ids": ["not-a-uuid"], "reason": "x"},
             {"add_user_ids": [str(uuid.uuid4())], "reason": "x"},
             {"leader_user_id": 3, "reason": "x"},
-            {"add_user_ids": [str(self.free.user_id)],
-             "remove_user_ids": [str(self.free.user_id)], "reason": "x"},
+            {
+                "add_user_ids": [str(self.free.user_id)],
+                "remove_user_ids": [str(self.free.user_id)],
+                "reason": "x",
+            },
         ]
         for body in cases:
             with self.subTest(body=body):
@@ -3878,10 +4491,17 @@ class AdminTeamManageTests(TestCase):
 
     def test_removing_member_with_running_instance_is_409(self):
         challenge = Challenge.objects.create(
-            title="웹", category="WEB", difficulty="EASY", score=100, flag_hash="x",
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
         )
         Instance.objects.create(
-            user=self.member, team=self.team, challenge=challenge, status=InstanceStatus.RUNNING,
+            user=self.member,
+            team=self.team,
+            challenge=challenge,
+            status=InstanceStatus.RUNNING,
         )
         res = self.patch({"remove_user_ids": [str(self.member.user_id)], "reason": "x"})
         self.assertEqual(res.status_code, 409)
@@ -3890,7 +4510,9 @@ class AdminTeamManageTests(TestCase):
 
     def test_update_unknown_team_is_404(self):
         res = self.client.patch(
-            f"/api/v1/admin/teams/{uuid.uuid4()}", {"team_name": "x", "reason": "x"}, format="json",
+            f"/api/v1/admin/teams/{uuid.uuid4()}",
+            {"team_name": "x", "reason": "x"},
+            format="json",
         )
         self.assertEqual(res.status_code, 404)
 
@@ -3902,7 +4524,9 @@ class AdminTeamManageTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["data"]["deleted_member_count"], 2)
         self.assertFalse(Team.objects.filter(pk=self.team.pk).exists())
-        self.assertFalse(User.objects.filter(login_id__in=["leader", "member"]).exists())
+        self.assertFalse(
+            User.objects.filter(login_id__in=["leader", "member"]).exists()
+        )
         self.assertTrue(User.objects.filter(login_id="elsewhere").exists())
         [event] = self.events("TEAM_DELETED")
         self.assertEqual(event.severity, "CRITICAL")
@@ -3916,11 +4540,20 @@ class AdminTeamManageTests(TestCase):
         from apps.challenge.services import update_dynamic_score_and_team_scores
 
         challenge = Challenge.objects.create(
-            title="웹", category="WEB", difficulty="EASY", score=500, flag_hash="x",
-            initial_score=500, minimum_score=100, decay=2, current_score=500,
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+            initial_score=500,
+            minimum_score=100,
+            decay=2,
+            current_score=500,
         )
         for team in (self.team, self.other):
-            Solve.objects.create(team=team, challenge=challenge, earned_score=0, earned_mileage=0)
+            Solve.objects.create(
+                team=team, challenge=challenge, earned_score=0, earned_mileage=0
+            )
         update_dynamic_score_and_team_scores(challenge)
         before = Challenge.objects.get(pk=challenge.pk).current_score
 
@@ -3933,10 +4566,17 @@ class AdminTeamManageTests(TestCase):
 
     def test_delete_with_running_instance_is_409(self):
         challenge = Challenge.objects.create(
-            title="웹", category="WEB", difficulty="EASY", score=100, flag_hash="x",
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=100,
+            flag_hash="x",
         )
         Instance.objects.create(
-            user=self.member, team=self.team, challenge=challenge, status=InstanceStatus.RUNNING,
+            user=self.member,
+            team=self.team,
+            challenge=challenge,
+            status=InstanceStatus.RUNNING,
         )
         res = self.delete({"reason": "정리"})
         self.assertEqual(res.status_code, 409)
@@ -3949,7 +4589,9 @@ class AdminTeamManageTests(TestCase):
         self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
 
     def test_delete_unknown_team_is_404(self):
-        res = self.client.delete(f"/api/v1/admin/teams/{uuid.uuid4()}", {"reason": "x"}, format="json")
+        res = self.client.delete(
+            f"/api/v1/admin/teams/{uuid.uuid4()}", {"reason": "x"}, format="json"
+        )
         self.assertEqual(res.status_code, 404)
 
     def test_participant_cannot_update_or_delete(self):
@@ -3962,8 +4604,12 @@ class AdminTeamManageTests(TestCase):
     def test_account_create_records_event(self):
         res = self.client.post(
             "/api/v1/admin/accounts",
-            {"login_id": "newbie", "password": "pw12345678", "nickname": "신입",
-             "team_id": str(self.other.team_id)},
+            {
+                "login_id": "newbie",
+                "password": "pw12345678",
+                "nickname": "신입",
+                "team_id": str(self.other.team_id),
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 200)
@@ -3983,12 +4629,15 @@ class AdminTeamManageTests(TestCase):
         self.team.mileage = 100
         self.team.save(update_fields=["mileage"])
         PaymentToken.objects.create(
-            team=self.team, token_hash=hash_token("tok"), status=PaymentTokenStatus.ACTIVE,
+            team=self.team,
+            token_hash=hash_token("tok"),
+            status=PaymentTokenStatus.ACTIVE,
             expires_at=timezone.now() + timedelta(hours=1),
         )
         res = self.client.post(
             "/api/v1/admin/payment/checkout",
-            {"payment_token": "tok", "amount": 30, "item_name": "굿즈"}, format="json",
+            {"payment_token": "tok", "amount": 30, "item_name": "굿즈"},
+            format="json",
         )
         self.assertEqual(res.status_code, 200)
         [event] = self.events("PAYMENT_PROCESSED")
@@ -3999,8 +4648,16 @@ class AdminTeamManageTests(TestCase):
     def test_challenge_create_records_event(self):
         res = self.client.post(
             "/api/v1/admin/challenges",
-            {"challenge_slug": "web-1", "title": "첫 문제", "category": "WEB", "difficulty": "EASY",
-             "flag": "MSG{x}", "initial_score": 500, "minimum_score": 100, "decay": 10},
+            {
+                "challenge_slug": "web-1",
+                "title": "첫 문제",
+                "category": "WEB",
+                "difficulty": "EASY",
+                "flag": "MSG{x}",
+                "initial_score": 500,
+                "minimum_score": 100,
+                "decay": 10,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 200, res.data)
@@ -4018,21 +4675,35 @@ class AdminEventTeamSnapshotTests(TestCase):
         self.client = APIClient()
         self.team = Team.objects.create(team_name="지울팀")
         User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자", team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         res = self.client.post(
-            "/api/v1/auth/login", {"login_id": "root", "password": "pw1234"}, format="json",
+            "/api/v1/auth/login",
+            {"login_id": "root", "password": "pw1234"},
+            format="json",
         )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def events(self, **params):
         return self.client.get("/api/v1/admin/events", params).data["data"]["events"]
 
     def test_deleted_team_is_kept_in_events(self):
         team_id = str(self.team.team_id)
-        self.client.post(f"/api/v1/admin/teams/{team_id}/ban", {"ban_reason": "부정행위"}, format="json")
+        self.client.post(
+            f"/api/v1/admin/teams/{team_id}/ban",
+            {"ban_reason": "부정행위"},
+            format="json",
+        )
 
-        self.client.delete(f"/api/v1/admin/teams/{team_id}", {"reason": "정리"}, format="json")
+        self.client.delete(
+            f"/api/v1/admin/teams/{team_id}", {"reason": "정리"}, format="json"
+        )
 
         rows = self.events()
         self.assertEqual([r["type"] for r in rows], ["TEAM_DELETED", "TEAM_BANNED"])
@@ -4042,7 +4713,9 @@ class AdminEventTeamSnapshotTests(TestCase):
 
     def test_team_filter_finds_deleted_team_events(self):
         team_id = str(self.team.team_id)
-        self.client.delete(f"/api/v1/admin/teams/{team_id}", {"reason": "정리"}, format="json")
+        self.client.delete(
+            f"/api/v1/admin/teams/{team_id}", {"reason": "정리"}, format="json"
+        )
 
         rows = self.events(team_id=team_id)
         self.assertEqual([r["type"] for r in rows], ["TEAM_DELETED"])
@@ -4050,8 +4723,14 @@ class AdminEventTeamSnapshotTests(TestCase):
     def test_live_team_shows_current_name(self):
         """팀이 살아 있으면 기록 당시가 아니라 지금 이름을 보여준다."""
         team_id = str(self.team.team_id)
-        self.client.post(f"/api/v1/admin/teams/{team_id}/ban", {"ban_reason": "x"}, format="json")
-        self.client.patch(f"/api/v1/admin/teams/{team_id}", {"team_name": "새이름", "reason": "x"}, format="json")
+        self.client.post(
+            f"/api/v1/admin/teams/{team_id}/ban", {"ban_reason": "x"}, format="json"
+        )
+        self.client.patch(
+            f"/api/v1/admin/teams/{team_id}",
+            {"team_name": "새이름", "reason": "x"},
+            format="json",
+        )
 
         names = {r["team_name"] for r in self.events()}
         self.assertEqual(names, {"새이름"})
@@ -4067,10 +4746,16 @@ class PaymentCheckoutLockOrderTest(TransactionTestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="감자는외로워", mileage=100)
         self.admin = User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자", team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
         PaymentToken.objects.create(
-            team=self.team, token_hash=hash_token("tok"), status=PaymentTokenStatus.ACTIVE,
+            team=self.team,
+            token_hash=hash_token("tok"),
+            status=PaymentTokenStatus.ACTIVE,
             expires_at=timezone.now() + timedelta(hours=1),
         )
 
@@ -4088,7 +4773,10 @@ class PaymentCheckoutLockOrderTest(TransactionTestCase):
                     time.sleep(1)
                     PaymentToken.objects.filter(
                         team=self.team, status=PaymentTokenStatus.ACTIVE
-                    ).update(status=PaymentTokenStatus.INVALIDATED, invalidated_at=timezone.now())
+                    ).update(
+                        status=PaymentTokenStatus.INVALIDATED,
+                        invalidated_at=timezone.now(),
+                    )
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
             finally:
@@ -4098,7 +4786,9 @@ class PaymentCheckoutLockOrderTest(TransactionTestCase):
             try:
                 team_locked.wait(timeout=5)
                 client = APIClient()
-                client.credentials(HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.admin)}")
+                client.credentials(
+                    HTTP_AUTHORIZATION=f"Bearer {issue_access_token(self.admin)}"
+                )
                 res = client.post(
                     "/api/v1/admin/payment/checkout",
                     {"payment_token": "tok", "amount": 30, "item_name": "굿즈"},
@@ -4117,7 +4807,9 @@ class PaymentCheckoutLockOrderTest(TransactionTestCase):
 
         self.assertEqual(errors, [])
         # 재발급이 먼저 토큰을 무효화했으므로 결제는 무효 토큰으로 거절돼야 한다.
-        self.assertEqual((result.get("status"), result.get("code")), (400, "PAYMENT_TOKEN_INVALID"))
+        self.assertEqual(
+            (result.get("status"), result.get("code")), (400, "PAYMENT_TOKEN_INVALID")
+        )
         self.assertEqual(Team.objects.get(pk=self.team.pk).mileage, 100)
 
 
@@ -4149,20 +4841,32 @@ class AdminResourcesTests(TestCase):
         cache.clear()
         self.client = APIClient()
         User.objects.create_user(
-            login_id="root", password="pw1234", nickname="운영자", team=None, role=Role.ADMIN,
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
         )
-        User.objects.create_user(login_id="player", password="pw1234", nickname="참가자")
+        User.objects.create_user(
+            login_id="player", password="pw1234", nickname="참가자"
+        )
         self.auth("root")
 
     def auth(self, login_id):
         res = self.client.post(
-            "/api/v1/auth/login", {"login_id": login_id, "password": "pw1234"}, format="json",
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
         )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def get(self, targets):
-        with patch("apps.adminpanel.views.fetch_resource_targets",
-                   return_value=(self.GENERATED_AT, targets)):
+        with patch(
+            "apps.adminpanel.views.fetch_resource_targets",
+            return_value=(self.GENERATED_AT, targets),
+        ):
             return self.client.get(self.URL)
 
     def test_groups_targets_into_accounts_and_nodes(self):
@@ -4178,21 +4882,31 @@ class AdminResourcesTests(TestCase):
         self.assertEqual(account["scope_id"], "example-project")
         self.assertEqual(account["status"], "HEALTHY")
         self.assertEqual(account["container_count"], 2)
-        self.assertEqual(account["nodes"], [{
-            "node_id": "00000000-0000-4000-8000-000000000001",
-            "node_name": "vm-a",
-            "status": "HEALTHY",
-            "container_count": 2,
-            "cpu_usage_percent": 30,
-            "memory_usage_percent": 38,
-        }])
+        self.assertEqual(
+            account["nodes"],
+            [
+                {
+                    "node_id": "00000000-0000-4000-8000-000000000001",
+                    "node_name": "vm-a",
+                    "status": "HEALTHY",
+                    "container_count": 2,
+                    "cpu_usage_percent": 30,
+                    "memory_usage_percent": 38,
+                }
+            ],
+        )
 
     def test_two_vms_same_account_are_one_account(self):
-        res = self.get([
-            _target(),
-            _target(resource_target_id="00000000-0000-4000-8000-000000000003", name="vm-b",
-                    runtime_ready=False),
-        ])
+        res = self.get(
+            [
+                _target(),
+                _target(
+                    resource_target_id="00000000-0000-4000-8000-000000000003",
+                    name="vm-b",
+                    runtime_ready=False,
+                ),
+            ]
+        )
 
         data = res.data["data"]
         self.assertEqual(data["total_count"], 1)
@@ -4200,7 +4914,9 @@ class AdminResourcesTests(TestCase):
         self.assertEqual(len(account["nodes"]), 2)
         self.assertEqual(account["container_count"], 4)
         self.assertEqual(account["status"], "DEGRADED")
-        self.assertEqual([n["status"] for n in account["nodes"]], ["HEALTHY", "DEGRADED"])
+        self.assertEqual(
+            [n["status"] for n in account["nodes"]], ["HEALTHY", "DEGRADED"]
+        )
 
     def test_missing_usage_stays_null_not_zero(self):
         """브로커의 null 은 미수집이다. 프론트가 0 과 구분해 표시한다."""
@@ -4214,7 +4930,9 @@ class AdminResourcesTests(TestCase):
 
     def test_stopped_vm_is_degraded(self):
         res = self.get([_target(status="STOPPED")])
-        self.assertEqual(res.data["data"]["accounts"][0]["nodes"][0]["status"], "DEGRADED")
+        self.assertEqual(
+            res.data["data"]["accounts"][0]["nodes"][0]["status"], "DEGRADED"
+        )
 
     def test_empty_inventory_returns_null_data(self):
         res = self.get([])
@@ -4226,8 +4944,10 @@ class AdminResourcesTests(TestCase):
     def test_broker_failure_returns_503(self):
         from apps.instances.services import SchedulerError
 
-        with patch("apps.adminpanel.views.fetch_resource_targets",
-                   side_effect=SchedulerError("SCHEDULER_UNAVAILABLE", "연결 실패", 503)):
+        with patch(
+            "apps.adminpanel.views.fetch_resource_targets",
+            side_effect=SchedulerError("SCHEDULER_UNAVAILABLE", "연결 실패", 503),
+        ):
             res = self.client.get(self.URL)
 
         self.assertEqual(res.status_code, 503)
@@ -4251,5 +4971,6 @@ class AdminResourcesTests(TestCase):
         self.assertEqual(generated_at, self.GENERATED_AT)
         self.assertEqual([i["name"] for i in items], ["vm-a", "vm-z"])
         self.assertEqual(
-            [c.args[1]["offset"] for c in mock_get.call_args_list], [0, 500],
+            [c.args[1]["offset"] for c in mock_get.call_args_list],
+            [0, 500],
         )

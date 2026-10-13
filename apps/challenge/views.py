@@ -31,6 +31,7 @@ from apps.common.permissions import IsAuthenticated
 from apps.accounts.models import Team
 from apps.board.models import TeamBoardState, TeamChallengeAccess
 from apps.board.services import complete_challenge_from_submission
+from apps.ranking.services import check_and_record_line_monopoly
 from apps.teams.models import MileageHistory, MileageType
 
 
@@ -39,6 +40,7 @@ CHALLENGE_MILEAGE_REWARDS = {
     Challenge.DifficultyType.MEDIUM: 60,
     Challenge.DifficultyType.EASY: 30,
 }
+
 
 def number_value(value):
     # Decimal 점수를 API 응답용 숫자로 바꾼다
@@ -50,6 +52,7 @@ def number_value(value):
 
 class ChallengeDetailView(APIView):
     permission_classes = [IsAuthenticated]
+
     def get(self, request, challenge_id):
         team = request.user.team
         if team is None:
@@ -66,14 +69,19 @@ class ChallengeDetailView(APIView):
 
         solve = Solve.objects.filter(team=team, challenge=challenge).first()
         instance = (
-            Instance.objects
-            .filter(user=request.user, challenge=challenge, status__in=ACTIVE_INSTANCE_STATUSES)
+            Instance.objects.filter(
+                user=request.user,
+                challenge=challenge,
+                status__in=ACTIVE_INSTANCE_STATUSES,
+            )
             .order_by("-created_at")
             .first()
         )
         if instance is not None:
             try:
-                instance = sync_instance_from_scheduler(instance, scheduler_auth_header(request))
+                instance = sync_instance_from_scheduler(
+                    instance, scheduler_auth_header(request)
+                )
             except SchedulerError as error:
                 if error.code == "INSTANCE_NOT_FOUND":
                     instance = None
@@ -101,6 +109,7 @@ class ChallengeDetailView(APIView):
 
 class ChallengeSubmitView(APIView):
     permission_classes = [IsAuthenticated]
+
     def post(self, request, challenge_id):
         team = request.user.team
         if team is None:
@@ -130,7 +139,9 @@ class ChallengeSubmitView(APIView):
             # Lock all affected teams in UUID order before any mileage/score writes
             # or FK inserts. NO KEY UPDATE allows unrelated FK references on PG.
             affected_team_ids = set(
-                Solve.objects.filter(challenge=challenge).values_list("team_id", flat=True)
+                Solve.objects.filter(challenge=challenge).values_list(
+                    "team_id", flat=True
+                )
             )
             affected_team_ids.add(team.pk)
             list(
@@ -147,7 +158,9 @@ class ChallengeSubmitView(APIView):
                 return fail("ALREADY_SOLVED", "이미 정답을 맞춘 문제입니다.", 409)
 
             if flag_lock.locked_until and flag_lock.locked_until > now:
-                retry_after_seconds = int((flag_lock.locked_until - now).total_seconds())
+                retry_after_seconds = int(
+                    (flag_lock.locked_until - now).total_seconds()
+                )
                 FlagSubmission.objects.create(
                     team=team,
                     user=request.user,
@@ -184,7 +197,14 @@ class ChallengeSubmitView(APIView):
                     message = "틀린 플래그입니다."
                     data = None
 
-                flag_lock.save(update_fields=["failed_count", "locked_until", "last_failed_at", "updated_at"])
+                flag_lock.save(
+                    update_fields=[
+                        "failed_count",
+                        "locked_until",
+                        "last_failed_at",
+                        "updated_at",
+                    ]
+                )
                 FlagSubmission.objects.create(
                     team=team,
                     user=request.user,
@@ -212,7 +232,9 @@ class ChallengeSubmitView(APIView):
             except IntegrityError:
                 return fail("ALREADY_SOLVED", "이미 정답을 맞춘 문제입니다.", 409)
 
-            Team.objects.filter(pk=team.pk).update(mileage=F("mileage") + earned_mileage)
+            Team.objects.filter(pk=team.pk).update(
+                mileage=F("mileage") + earned_mileage
+            )
             MileageHistory.objects.create(
                 team=team,
                 type=MileageType.CHALLENGE_SOLVE,
@@ -223,7 +245,14 @@ class ChallengeSubmitView(APIView):
             flag_lock.failed_count = 0
             flag_lock.locked_until = None
             flag_lock.last_failed_at = None
-            flag_lock.save(update_fields=["failed_count", "locked_until", "last_failed_at", "updated_at"])
+            flag_lock.save(
+                update_fields=[
+                    "failed_count",
+                    "locked_until",
+                    "last_failed_at",
+                    "updated_at",
+                ]
+            )
 
             FlagSubmission.objects.create(
                 team=team,
@@ -234,6 +263,7 @@ class ChallengeSubmitView(APIView):
             )
 
             update_dynamic_score_and_team_scores(challenge)
+            check_and_record_line_monopoly(team, challenge)
             team_score = get_team_total_score(team.pk)
             team.refresh_from_db(fields=["mileage"])
 

@@ -89,16 +89,12 @@ class SignatureAdminApiTests(TestCase):
             "description": "중복 문제",
             "flag": "MSG{duplicate}",
         }
-        duplicate = self.client.post(
-            "/api/v1/admin/signatures", payload, format="json"
-        )
+        duplicate = self.client.post("/api/v1/admin/signatures", payload, format="json")
         self.assertEqual(duplicate.status_code, 409)
         self.assertEqual(duplicate.data["code"], "SIGNATURE_ALREADY_EXISTS")
 
         payload["club_id"] = "018f3f1e-0300-7a91-a30b-630000000999"
-        missing = self.client.post(
-            "/api/v1/admin/signatures", payload, format="json"
-        )
+        missing = self.client.post("/api/v1/admin/signatures", payload, format="json")
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(missing.data["code"], "CLUB_NOT_FOUND")
 
@@ -175,9 +171,7 @@ class SignatureAdminApiTests(TestCase):
         signature_id = challenge.signature_id
         self.authenticate()
 
-        response = self.client.delete(
-            f"/api/v1/admin/signatures/{signature_id}"
-        )
+        response = self.client.delete(f"/api/v1/admin/signatures/{signature_id}")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["code"], "SUCCESS")

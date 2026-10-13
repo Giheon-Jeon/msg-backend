@@ -7,7 +7,9 @@ from django.db import models
 
 
 class SignatureChallenge(models.Model):
-    signature_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    signature_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
     club = models.OneToOneField(
         "koth.KothClub",
         on_delete=models.PROTECT,
@@ -91,7 +93,9 @@ class SignatureFlagSubmission(models.Model):
         ALREADY_SOLVED = "ALREADY_SOLVED"
         TOO_MANY_ATTEMPTS = "TOO_MANY_ATTEMPTS"
 
-    submission_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
     team = models.ForeignKey(
         "accounts.Team",
         on_delete=models.CASCADE,

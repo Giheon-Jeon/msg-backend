@@ -46,14 +46,22 @@ class AdminEvent(models.Model):
 
     event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     type = models.CharField(max_length=40, choices=EventType.choices)
-    severity = models.CharField(max_length=20, choices=Severity.choices, default=Severity.INFO)
+    severity = models.CharField(
+        max_length=20, choices=Severity.choices, default=Severity.INFO
+    )
     message = models.TextField()
     team = models.ForeignKey(
-        "accounts.Team", on_delete=models.SET_NULL, null=True, blank=True,
+        "accounts.Team",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="admin_events",
     )
     challenge = models.ForeignKey(
-        "challenge.Challenge", on_delete=models.SET_NULL, null=True, blank=True,
+        "challenge.Challenge",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="admin_events",
     )
     instance_id = models.UUIDField(null=True, blank=True)

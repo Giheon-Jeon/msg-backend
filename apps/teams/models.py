@@ -3,6 +3,7 @@ from django.db import models
 
 # Create your models here.
 
+
 class MileageType(models.TextChoices):
     CHALLENGE_SOLVE = "CHALLENGE_SOLVE"
     START_BONUS = "START_BONUS"

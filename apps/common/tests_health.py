@@ -17,9 +17,7 @@ class HealthzTests(TestCase):
         # 정상이면 200과 함께 항목별 상태를 snake_case로 내려준다
         res = self.client.get("/healthz")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(
-            res.json(), {"status": "ok", "database": "ok", "cache": "ok"}
-        )
+        self.assertEqual(res.json(), {"status": "ok", "database": "ok", "cache": "ok"})
 
     def test_no_auth_required(self):
         # 감시용이라 인증 없이 접근된다

@@ -21,7 +21,9 @@ class ChallengeCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200)
     category = serializers.ChoiceField(choices=Challenge.CategoryType.choices)
     difficulty = serializers.ChoiceField(choices=Challenge.DifficultyType.choices)
-    description = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    description = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True
+    )
     flag = serializers.CharField(trim_whitespace=False, write_only=True)
     initial_score = serializers.IntegerField(
         min_value=0,

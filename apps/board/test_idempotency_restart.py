@@ -10,25 +10,39 @@ from django.test import TransactionTestCase
 
 from apps.accounts.models import Team, User
 from apps.board._idempotency_test_worker import CRASH_EXIT_CODE
-from apps.board.models import Cell, DiceRoll, IdempotencyRequest, TeamBoardState, TeamCellConsumption
+from apps.board.models import (
+    Cell,
+    DiceRoll,
+    IdempotencyRequest,
+    TeamBoardState,
+    TeamCellConsumption,
+)
 
 
-@skipUnless(connection.vendor == "postgresql", "Requires a shared PostgreSQL test database")
+@skipUnless(
+    connection.vendor == "postgresql", "Requires a shared PostgreSQL test database"
+)
 class IdempotencyProcessRestartTests(TransactionTestCase):
     def setUp(self):
         self.team = Team.objects.create(team_name="process-restart-team")
         self.user = User.objects.create_user(
-            login_id="process-restart-leader", nickname="restart-leader",
-            team=self.team, is_leader=True,
+            login_id="process-restart-leader",
+            nickname="restart-leader",
+            team=self.team,
+            is_leader=True,
         )
-        Cell.objects.bulk_create([
-            Cell(cell_index=1, type=Cell.CellType.START, name="start"),
-            Cell(cell_index=3, type=Cell.CellType.ROULETTE, name="first landing"),
-            Cell(cell_index=5, type=Cell.CellType.ROULETTE, name="second landing"),
-        ])
+        Cell.objects.bulk_create(
+            [
+                Cell(cell_index=1, type=Cell.CellType.START, name="start"),
+                Cell(cell_index=3, type=Cell.CellType.ROULETTE, name="first landing"),
+                Cell(cell_index=5, type=Cell.CellType.ROULETTE, name="second landing"),
+            ]
+        )
         # A duplicate execution could roll again; lack of dice must not mask it.
         self.state = TeamBoardState.objects.create(
-            team=self.team, position_id=1, dice_rolls_left=2,
+            team=self.team,
+            position_id=1,
+            dice_rolls_left=2,
         )
 
     def request_in_new_process(self, mode="retry"):
@@ -46,8 +60,13 @@ class IdempotencyProcessRestartTests(TransactionTestCase):
         }
         result = subprocess.run(
             [sys.executable, "-m", "apps.board._idempotency_test_worker"],
-            input=json.dumps(configuration), text=True, capture_output=True,
-            cwd=settings.BASE_DIR, env=environment, timeout=30, check=False,
+            input=json.dumps(configuration),
+            text=True,
+            capture_output=True,
+            cwd=settings.BASE_DIR,
+            env=environment,
+            timeout=30,
+            check=False,
         )
         expected_exit = 0 if mode == "retry" else CRASH_EXIT_CODE
         self.assertEqual(result.returncode, expected_exit, result.stderr)

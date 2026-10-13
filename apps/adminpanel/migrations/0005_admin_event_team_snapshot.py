@@ -6,7 +6,9 @@ from django.db import migrations, models
 def fill_team_snapshot(apps, schema_editor):
     # 팀이 아직 있는 기존 이벤트는 지금 값으로 채운다. 이미 지워진 팀은 복구할 수 없다.
     AdminEvent = apps.get_model("adminpanel", "AdminEvent")
-    for event in AdminEvent.objects.exclude(team=None).select_related("team").iterator():
+    for event in (
+        AdminEvent.objects.exclude(team=None).select_related("team").iterator()
+    ):
         event.team_snapshot_id = event.team_id
         event.team_snapshot_name = event.team.team_name
         event.save(update_fields=["team_snapshot_id", "team_snapshot_name"])
@@ -15,18 +17,18 @@ def fill_team_snapshot(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('adminpanel', '0004_admin_event_team_and_create_types'),
+        ("adminpanel", "0004_admin_event_team_and_create_types"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='adminevent',
-            name='team_snapshot_id',
+            model_name="adminevent",
+            name="team_snapshot_id",
             field=models.UUIDField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='adminevent',
-            name='team_snapshot_name',
+            model_name="adminevent",
+            name="team_snapshot_name",
             field=models.CharField(blank=True, max_length=100, null=True),
         ),
         migrations.RunPython(fill_team_snapshot, migrations.RunPython.noop),

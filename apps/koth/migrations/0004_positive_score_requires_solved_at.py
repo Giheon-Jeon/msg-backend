@@ -24,8 +24,7 @@ class Migration(migrations.Migration):
             model_name="kothsolve",
             constraint=models.CheckConstraint(
                 condition=(
-                    models.Q(earned_score__lte=0)
-                    | models.Q(solved_at__isnull=False)
+                    models.Q(earned_score__lte=0) | models.Q(solved_at__isnull=False)
                 ),
                 name="ck_koth_positive_score_has_solved_at",
             ),

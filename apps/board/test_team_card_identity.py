@@ -22,29 +22,50 @@ class CardFixtureMixin:
         super().setUp()
         cache.clear()
         self.team = Team.objects.create(team_name="card-identity")
-        self.user = User.objects.create(login_id="card-leader", nickname="leader", team=self.team, is_leader=True)
-        Cell.objects.bulk_create([
-            Cell(cell_index=index, type=kind, name=str(index))
-            for index, kind in ((1, "START"), (3, "ROULETTE"), (5, "ROULETTE"), (7, "CHANCE"), (30, "CHANCE"))
-        ])
-        ChanceCard.objects.bulk_create([
-            ChanceCard(card_id=card_id, name=card_id, effect=effect, usage_timing=timing)
-            for card_id, effect, timing in (
-                ("card_extra_roll", "GRANT_EXTRA_ROLL", "PRE_ROLL"),
-                ("card_reroll", "RE_ROLL", "POST_ROLL"),
-                ("card_roll_twice_choose", "ROLL_TWICE_CHOOSE", "PRE_ROLL"),
-            )
-        ])
-        self.state = TeamBoardState.objects.create(team=self.team, position_id=1, dice_rolls_left=1)
+        self.user = User.objects.create(
+            login_id="card-leader", nickname="leader", team=self.team, is_leader=True
+        )
+        Cell.objects.bulk_create(
+            [
+                Cell(cell_index=index, type=kind, name=str(index))
+                for index, kind in (
+                    (1, "START"),
+                    (3, "ROULETTE"),
+                    (5, "ROULETTE"),
+                    (7, "CHANCE"),
+                    (30, "CHANCE"),
+                )
+            ]
+        )
+        ChanceCard.objects.bulk_create(
+            [
+                ChanceCard(
+                    card_id=card_id, name=card_id, effect=effect, usage_timing=timing
+                )
+                for card_id, effect, timing in (
+                    ("card_extra_roll", "GRANT_EXTRA_ROLL", "PRE_ROLL"),
+                    ("card_reroll", "RE_ROLL", "POST_ROLL"),
+                    ("card_roll_twice_choose", "ROLL_TWICE_CHOOSE", "PRE_ROLL"),
+                )
+            ]
+        )
+        self.state = TeamBoardState.objects.create(
+            team=self.team, position_id=1, dice_rolls_left=1
+        )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
     def draw(self, cell=7, kind="card_extra_roll", **kwargs):
-        return TeamChanceCard.objects.create(team=self.team, source_cell_id=cell, card_id=kind, **kwargs)
+        return TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=cell, card_id=kind, **kwargs
+        )
 
     def post(self, action, body, key="card-action", client=None):
         return (client or self.client).post(
-            f"/api/v1/board/chance/{action}", body, format="json", HTTP_IDEMPOTENCY_KEY=key,
+            f"/api/v1/board/chance/{action}",
+            body,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY=key,
         )
 
 
@@ -53,7 +74,9 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
     def test_inventory_distinguishes_identical_cards(self):
         first, second = self.draw(), self.draw(cell=30)
         cards = self.client.get("/api/v1/board/me").data["data"]["chance_cards"]
-        self.assertEqual({item["team_card_id"] for item in cards}, {str(first.pk), str(second.pk)})
+        self.assertEqual(
+            {item["team_card_id"] for item in cards}, {str(first.pk), str(second.pk)}
+        )
         self.assertEqual({item["card_id"] for item in cards}, {"card_extra_roll"})
 
     def test_discard_selects_older_copy_and_keeps_newer_copy_usable(self):
@@ -69,7 +92,10 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         used = self.post("use", {"team_card_id": str(second.pk)})
         self.assertEqual(used.status_code, 200, used.data)
         self.assertEqual(used.data["data"]["team_card_id"], str(second.pk))
-        self.assertEqual(self.post("use", {"team_card_id": str(first.pk)}, "discarded").status_code, 404)
+        self.assertEqual(
+            self.post("use", {"team_card_id": str(first.pk)}, "discarded").status_code,
+            404,
+        )
 
     def test_two_sequential_draws_of_same_kind_can_each_be_used_once(self):
         first = self.draw()
@@ -80,8 +106,16 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         self.assertEqual(retry_used.data["code"], "CHANCE_CARD_ALREADY_USED")
         second.refresh_from_db()
         self.assertIsNone(second.used_at)
-        self.assertEqual(self.post("use", {"team_card_id": str(second.pk)}, "second").status_code, 200)
-        self.assertEqual(TeamChanceCard.objects.filter(team=self.team, used_at__isnull=False).count(), 2)
+        self.assertEqual(
+            self.post("use", {"team_card_id": str(second.pk)}, "second").status_code,
+            200,
+        )
+        self.assertEqual(
+            TeamChanceCard.objects.filter(
+                team=self.team, used_at__isnull=False
+            ).count(),
+            2,
+        )
 
     def test_older_unused_card_can_be_used_after_newer_copy_was_used(self):
         older = self.draw()
@@ -108,7 +142,9 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         own = self.draw()
         self.draw(cell=30)
         other = Team.objects.create(team_name="other-card-team")
-        foreign = TeamChanceCard.objects.create(team=other, source_cell_id=7, card_id="card_extra_roll")
+        foreign = TeamChanceCard.objects.create(
+            team=other, source_cell_id=7, card_id="card_extra_roll"
+        )
         for body in (
             {"team_card_id": str(foreign.pk), "card_id": "card_extra_roll"},
             {"team_card_id": str(uuid.uuid4()), "card_id": "card_extra_roll"},
@@ -120,7 +156,9 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
                     self.assertEqual(response.status_code, 404, response.data)
                     self.assertEqual(response.data["code"], "CHANCE_CARD_NOT_FOUND")
         self.assertFalse(TeamChanceCard.objects.filter(used_at__isnull=False).exists())
-        self.assertFalse(TeamChanceCard.objects.filter(discarded_at__isnull=False).exists())
+        self.assertFalse(
+            TeamChanceCard.objects.filter(discarded_at__isnull=False).exists()
+        )
 
     def test_malformed_copy_identifiers_are_rejected_before_mutation(self):
         self.draw()
@@ -128,10 +166,14 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         for value in (None, "", "not-a-uuid", 1, True, [], {}):
             for action in ("use", "discard"):
                 with self.subTest(value=value, action=action):
-                    response = self.post(action, {"team_card_id": value, "card_id": "card_extra_roll"})
+                    response = self.post(
+                        action, {"team_card_id": value, "card_id": "card_extra_roll"}
+                    )
                     self.assertEqual(response.status_code, 400, response.data)
                     self.assertEqual(response.data["code"], "INVALID_REQUEST")
-        self.assertFalse(TeamChanceCard.objects.filter(discarded_at__isnull=False).exists())
+        self.assertFalse(
+            TeamChanceCard.objects.filter(discarded_at__isnull=False).exists()
+        )
 
     def test_draw_and_pending_roll_responses_expose_copy_identity(self):
         self.state.position_id = 7
@@ -145,8 +187,15 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         self.state.position_id = 1
         self.state.save(update_fields=["position"])
         with patch("apps.board.services.random.randint", return_value=1):
-            rolled = self.client.post("/api/v1/board/dice/roll", {}, format="json", HTTP_IDEMPOTENCY_KEY="roll")
-            self.assertEqual(rolled.data["data"]["usable_chance_card"]["team_card_id"], str(draw.pk))
+            rolled = self.client.post(
+                "/api/v1/board/dice/roll",
+                {},
+                format="json",
+                HTTP_IDEMPOTENCY_KEY="roll",
+            )
+            self.assertEqual(
+                rolled.data["data"]["usable_chance_card"]["team_card_id"], str(draw.pk)
+            )
             used = self.post("use", {"team_card_id": str(draw.pk)})
         self.assertEqual(used.status_code, 200, used.data)
         self.assertEqual(used.data["data"]["team_card_id"], str(draw.pk))
@@ -168,7 +217,9 @@ class TeamCardIdentityTests(CardFixtureMixin, TestCase):
         self.user.is_leader = False
         self.user.save(update_fields=["is_leader"])
         for action in ("use", "discard"):
-            self.assertEqual(self.post(action, {"team_card_id": str(draw.pk)}).status_code, 403)
+            self.assertEqual(
+                self.post(action, {"team_card_id": str(draw.pk)}).status_code, 403
+            )
 
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locks")
@@ -186,7 +237,9 @@ class TeamCardIdentityConcurrencyTests(CardFixtureMixin, TransactionTestCase):
                 client = APIClient()
                 client.force_authenticate(self.user)
                 barrier.wait(timeout=5)
-                response = self.post(action, {"team_card_id": str(card_id)}, f"parallel-{index}", client)
+                response = self.post(
+                    action, {"team_card_id": str(card_id)}, f"parallel-{index}", client
+                )
                 return response.status_code, response.data
             finally:
                 connection.close()
@@ -198,13 +251,24 @@ class TeamCardIdentityConcurrencyTests(CardFixtureMixin, TransactionTestCase):
         first, second = self.draw(), self.draw(cell=30)
         responses = self.parallel("discard", [first.pk, second.pk])
         self.assertEqual(sorted(code for code, _ in responses), [200, 409])
-        self.assertEqual(TeamChanceCard.objects.filter(team=self.team, discarded_at__isnull=True).count(), 1)
-        self.assertEqual(next(body["code"] for status, body in responses if status == 409), "NO_CARD_TO_DISCARD")
+        self.assertEqual(
+            TeamChanceCard.objects.filter(
+                team=self.team, discarded_at__isnull=True
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            next(body["code"] for status, body in responses if status == 409),
+            "NO_CARD_TO_DISCARD",
+        )
 
     def test_concurrent_uses_of_same_copy_only_grant_once(self):
         draw = self.draw()
         responses = self.parallel("use", [draw.pk, draw.pk])
         self.assertEqual(sorted(code for code, _ in responses), [200, 409])
-        self.assertEqual(next(body["code"] for status, body in responses if status == 409), "CHANCE_CARD_ALREADY_USED")
+        self.assertEqual(
+            next(body["code"] for status, body in responses if status == 409),
+            "CHANCE_CARD_ALREADY_USED",
+        )
         self.state.refresh_from_db()
         self.assertEqual(self.state.dice_rolls_left, 2)

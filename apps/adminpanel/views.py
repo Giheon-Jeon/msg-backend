@@ -144,7 +144,9 @@ def team_list(request):
         raise InvalidRequest("정렬 기준이 올바르지 않습니다. (score, name 중 선택)")
 
     page = _page_number(request.query_params.get("page"), 1, MAX_PAGE)
-    size = min(_page_number(request.query_params.get("size"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE)
+    size = min(
+        _page_number(request.query_params.get("size"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE
+    )
 
     queryset = Team.objects.prefetch_related(
         Prefetch("members", queryset=User.objects.order_by("-is_leader", "nickname"))
@@ -182,9 +184,9 @@ def team_list(request):
                 "member_count": len(members),
             }
         )
-        
 
     return ok({"teams": teams, "total_count": total_count, "page": page, "size": size})
+
 
 def _get_team(team_id):
     try:
@@ -202,8 +204,17 @@ def _get_team_for_update(team_id):
         raise TeamNotFound()
 
 
-def _record_event(event_type, message, actor, *, severity=AdminEvent.Severity.INFO,
-                  team=None, challenge=None, instance_id=None, deleted_team=None):
+def _record_event(
+    event_type,
+    message,
+    actor,
+    *,
+    severity=AdminEvent.Severity.INFO,
+    team=None,
+    challenge=None,
+    instance_id=None,
+    deleted_team=None,
+):
     """관리자 조작을 admin_events 에 남긴다. 호출부의 트랜잭션 안에서 불러 조작과 함께 커밋되게 한다.
 
     deleted_team 은 이미 지운 팀의 (team_id, team_name) 이다. 외래키로는 걸 수 없어 스냅샷만 남긴다.
@@ -280,7 +291,11 @@ def account_create(request):
     if User.objects.filter(login_id=login_id).exists():
         raise LoginIdTaken()
 
-    if is_leader and team is not None and User.objects.filter(team=team, is_leader=True).exists():
+    if (
+        is_leader
+        and team is not None
+        and User.objects.filter(team=team, is_leader=True).exists()
+    ):
         raise TeamAlreadyHasLeader()
 
     try:
@@ -324,6 +339,7 @@ def account_create(request):
         message="계정이 등록되었습니다",
     )
 
+
 @api_view(["POST", "DELETE"])
 @permission_classes([IsAdmin])
 def team_ban(request, team_id):
@@ -359,7 +375,13 @@ def _ban(request, team_id):
         team.banned_at = timezone.now().replace(microsecond=0)
         team.banned_by = request.user.login_id
         team.save(
-            update_fields=["is_banned", "ban_reason", "banned_at", "banned_by", "updated_at"]
+            update_fields=[
+                "is_banned",
+                "ban_reason",
+                "banned_at",
+                "banned_by",
+                "updated_at",
+            ]
         )
         _record_event(
             AdminEvent.EventType.TEAM_BANNED,
@@ -379,6 +401,7 @@ def _ban(request, team_id):
         },
         message="팀 활동이 정지되었습니다",
     )
+
 
 @api_view(["PATCH"])
 @permission_classes([IsAdmin])
@@ -400,7 +423,9 @@ def challenge_visibility(request, challenge_id):
             previous = challenge.is_published
             challenge.is_published = is_published
             challenge.save(update_fields=["is_published"])
-            affected_team_count = TeamChallengeAccess.objects.filter(challenge=challenge).count()
+            affected_team_count = TeamChallengeAccess.objects.filter(
+                challenge=challenge
+            ).count()
             _record_event(
                 AdminEvent.EventType.CHALLENGE_VISIBILITY_CHANGED,
                 f"문제 {'공개' if is_published else '비공개'} 전환"
@@ -425,6 +450,7 @@ def challenge_visibility(request, challenge_id):
         message="문제 공개 상태가 변경되었습니다",
     )
 
+
 def _unban(request, team_id):
     with transaction.atomic():
         team = _get_team_for_update(team_id)
@@ -442,7 +468,13 @@ def _unban(request, team_id):
         team.banned_at = None
         team.banned_by = None
         team.save(
-            update_fields=["is_banned", "ban_reason", "banned_at", "banned_by", "updated_at"]
+            update_fields=[
+                "is_banned",
+                "ban_reason",
+                "banned_at",
+                "banned_by",
+                "updated_at",
+            ]
         )
 
     return ok(
@@ -454,6 +486,8 @@ def _unban(request, team_id):
         },
         message="팀 활동 정지가 해제되었습니다",
     )
+
+
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def team_mileage(request, team_id):
@@ -524,6 +558,7 @@ def team_mileage(request, team_id):
         message="마일리지가 조정되었습니다",
     )
 
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def mileage_history(request):
@@ -544,7 +579,9 @@ def mileage_history(request):
         queryset = queryset.filter(type=mtype)
 
     page = _page_number(request.query_params.get("page"), 1, MAX_PAGE)
-    size = min(_page_number(request.query_params.get("size"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE)
+    size = min(
+        _page_number(request.query_params.get("size"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE
+    )
 
     total_count = queryset.count()
     offset = (page - 1) * size
@@ -564,7 +601,9 @@ def mileage_history(request):
         for r in rows
     ]
 
-    return ok({"history": history, "total_count": total_count, "page": page, "size": size})
+    return ok(
+        {"history": history, "total_count": total_count, "page": page, "size": size}
+    )
 
 
 @api_view(["POST"])
@@ -603,7 +642,11 @@ def payment_checkout(request):
     with transaction.atomic():
         team = Team.objects.select_for_update(no_key=True).get(pk=owner_team_id)
         # 팀을 잠그기 전에 재발급이 이 토큰을 무효화했을 수 있어 잠근 뒤 다시 본다.
-        token = PaymentToken.objects.select_for_update().filter(token_hash=token_hash).first()
+        token = (
+            PaymentToken.objects.select_for_update()
+            .filter(token_hash=token_hash)
+            .first()
+        )
         if token is None or token.status != PaymentTokenStatus.ACTIVE:
             raise PaymentTokenInvalid()
         if token.expires_at < now:
@@ -652,6 +695,7 @@ def payment_checkout(request):
         message="결제가 완료되었습니다",
     )
 
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def payment_history(request):
@@ -674,7 +718,6 @@ def payment_history(request):
 
     offset = (page - 1) * size
     rows = list(queryset.order_by("-created_at")[offset : offset + size])
-
 
     history = [
         {
@@ -759,6 +802,7 @@ def payment_refund(request, history_id):
         },
         message="환불이 완료되었습니다",
     )
+
 
 INSTANCE_STATUS_VALUES = set(InstanceStatus.values)
 
@@ -861,7 +905,9 @@ def instance_list(request):
 def instance_force_delete(request, instance_id):
     now = timezone.now().replace(microsecond=0)
 
-    owner = Instance.objects.select_related("user").filter(instance_id=instance_id).first()
+    owner = (
+        Instance.objects.select_related("user").filter(instance_id=instance_id).first()
+    )
     if owner is None:
         return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
 
@@ -882,7 +928,10 @@ def instance_force_delete(request, instance_id):
                 "INSTANCE_ALREADY_TERMINATED",
                 "이미 종료된 인스턴스입니다",
                 409,
-                data={"instance_id": str(instance.instance_id), "status": instance.status},
+                data={
+                    "instance_id": str(instance.instance_id),
+                    "status": instance.status,
+                },
             )
 
         try:
@@ -916,15 +965,14 @@ def instance_force_delete(request, instance_id):
         status=202,
     )
 
+
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def instance_force_reset(request, instance_id):
     now = timezone.now().replace(microsecond=0)
 
     owner = (
-        Instance.objects.select_related("user")
-        .filter(instance_id=instance_id)
-        .first()
+        Instance.objects.select_related("user").filter(instance_id=instance_id).first()
     )
     if owner is None:
         return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
@@ -946,11 +994,16 @@ def instance_force_reset(request, instance_id):
                 "INSTANCE_NOT_RESTARTABLE",
                 "재시작할 수 없는 상태입니다.",
                 409,
-                data={"instance_id": str(instance.instance_id), "status": instance.status},
+                data={
+                    "instance_id": str(instance.instance_id),
+                    "status": instance.status,
+                },
             )
 
         try:
-            scheduler_data = call_scheduler_reset(instance, scheduler_auth_header(request))
+            scheduler_data = call_scheduler_reset(
+                instance, scheduler_auth_header(request)
+            )
         except SchedulerError as error:
             return fail(error.code, error.message, error.status_code)
 
@@ -983,7 +1036,11 @@ def instance_force_reset(request, instance_id):
             "team_name": instance.team.team_name,
             "challenge_id": str(new_instance.challenge_id),
             "status": new_instance.status,
-            "host": new_instance.host if new_instance.status == InstanceStatus.RUNNING else None,
+            "host": (
+                new_instance.host
+                if new_instance.status == InstanceStatus.RUNNING
+                else None
+            ),
             "endpoints": (
                 new_instance.endpoints
                 if new_instance.status == InstanceStatus.RUNNING
@@ -1019,9 +1076,15 @@ def team_detail(request, team_id):
         history_limit = max(1, min(history_limit, 50))
 
     try:
-        team = Team.objects.select_related("board_state").prefetch_related(
-            Prefetch("members", queryset=User.objects.order_by("-is_leader", "nickname"))
-        ).get(pk=team_id)
+        team = (
+            Team.objects.select_related("board_state")
+            .prefetch_related(
+                Prefetch(
+                    "members", queryset=User.objects.order_by("-is_leader", "nickname")
+                )
+            )
+            .get(pk=team_id)
+        )
     except (Team.DoesNotExist, ValidationError, ValueError):
         raise TeamNotFound()
 
@@ -1085,6 +1148,7 @@ def team_detail(request, team_id):
         }
     )
 
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def dashboard(request):
@@ -1147,6 +1211,7 @@ def dashboard(request):
             "collected_at": now,
         }
     )
+
 
 CHALLENGE_SORT = {
     "running": "-running_instance_count",
@@ -1293,7 +1358,9 @@ def challenge_list(request):
 
     sort = request.query_params.get("sort", "running")
     if sort not in CHALLENGE_SORT:
-        raise InvalidRequest("정렬 기준이 올바르지 않습니다. (running, title, score 중 선택)")
+        raise InvalidRequest(
+            "정렬 기준이 올바르지 않습니다. (running, title, score 중 선택)"
+        )
 
     category = request.query_params.get("category")
     if category and category not in Challenge.CategoryType.values:
@@ -1345,8 +1412,14 @@ def challenge_list(request):
     ]
 
     return ok(
-        {"challenges": challenges, "total_count": total_count, "page": page, "size": size}
+        {
+            "challenges": challenges,
+            "total_count": total_count,
+            "page": page,
+            "size": size,
+        }
     )
+
 
 @api_view(["POST"])
 @permission_classes([IsAdmin])
@@ -1357,7 +1430,9 @@ def board_dice(request, team_id):
     if amount == 0:
         raise InvalidAmount("조정할 횟수는 0이 될 수 없습니다")
     if not (DICE_ADJUST_MIN <= amount <= DICE_ADJUST_MAX):
-        raise InvalidRequest(f"amount 는 {DICE_ADJUST_MIN} ~ {DICE_ADJUST_MAX} 범위여야 합니다")
+        raise InvalidRequest(
+            f"amount 는 {DICE_ADJUST_MIN} ~ {DICE_ADJUST_MAX} 범위여야 합니다"
+        )
 
     reason = request.data.get("reason")
     if not isinstance(reason, str) or not reason.strip():
@@ -1379,7 +1454,9 @@ def board_dice(request, team_id):
                 data={"current_dice_rolls_left": previous, "requested_amount": -amount}
             )
         # 보드 보상(grant_dice_roll)과 같은 규칙으로 보유 상한을 넘기지 않는다.
-        applied = max(0, min(amount, MAX_DICE_ROLLS - previous)) if amount > 0 else amount
+        applied = (
+            max(0, min(amount, MAX_DICE_ROLLS - previous)) if amount > 0 else amount
+        )
         state.dice_rolls_left = previous + applied
         state.save(update_fields=["dice_rolls_left", "updated_at"])
         # 조정 뒤 충전 시계를 보드와 같은 규칙으로 다시 맞춘다.
@@ -1422,7 +1499,9 @@ def _settings_payload():
     grouped = {}
     for key, (_, _, default) in SETTING_SPECS.items():
         group, name = key.split(".", 1)
-        grouped.setdefault(group, {})[name] = stored[key].value if key in stored else default
+        grouped.setdefault(group, {})[name] = (
+            stored[key].value if key in stored else default
+        )
 
     contest = Contest.objects.filter(is_active=True).first()
     if contest is None:
@@ -1456,7 +1535,9 @@ def settings_view(request):
 
     unknown_groups = set(body) - {"board", "flag", "contest"}
     if unknown_groups:
-        raise InvalidRequest(f"알 수 없는 항목입니다: {', '.join(sorted(unknown_groups))}")
+        raise InvalidRequest(
+            f"알 수 없는 항목입니다: {', '.join(sorted(unknown_groups))}"
+        )
 
     changes = {}
     for group in ("board", "flag"):
@@ -1486,7 +1567,9 @@ def settings_view(request):
         if contest_body:
             unknown = set(contest_body) - {"started_at", "ends_at"}
             if unknown:
-                raise InvalidRequest(f"알 수 없는 설정입니다: {', '.join(sorted(unknown))}")
+                raise InvalidRequest(
+                    f"알 수 없는 설정입니다: {', '.join(sorted(unknown))}"
+                )
 
             contest = Contest.objects.select_for_update().filter(is_active=True).first()
             if contest is None:
@@ -1565,7 +1648,11 @@ def event_list(request):
             "type": e.type,
             "severity": e.severity,
             "message": e.message,
-            "team_id": str(e.team_id or e.team_snapshot_id) if (e.team_id or e.team_snapshot_id) else None,
+            "team_id": (
+                str(e.team_id or e.team_snapshot_id)
+                if (e.team_id or e.team_snapshot_id)
+                else None
+            ),
             "team_name": e.team.team_name if e.team_id else e.team_snapshot_name,
             "challenge_id": str(e.challenge_id) if e.challenge_id else None,
             "challenge_title": e.challenge.title if e.challenge_id else None,
@@ -1576,7 +1663,9 @@ def event_list(request):
         for e in rows
     ]
 
-    return ok({"events": events, "total_count": total_count, "page": page, "size": size})
+    return ok(
+        {"events": events, "total_count": total_count, "page": page, "size": size}
+    )
 
 
 def _json_object(request):
@@ -1688,7 +1777,9 @@ def board_position(request, team_id):
             TeamCellConsumption.objects.get_or_create(team=team, cell=cell)
         apply_pending_dice_recharge(state)
         # 도착 칸의 효과는 발동하지 않는다. 소모 여부만 현재 값으로 돌려준다.
-        cell_consumed = TeamCellConsumption.objects.filter(team=team, cell=cell).exists()
+        cell_consumed = TeamCellConsumption.objects.filter(
+            team=team, cell=cell
+        ).exists()
         _record_event(
             AdminEvent.EventType.BOARD_POSITION_MOVED,
             f"말 위치 {previous_position} → {cell.cell_index}"
@@ -1759,7 +1850,10 @@ def board_cell_status(request, team_id, cell_index):
             else:
                 access.status = TeamChallengeAccess.Status.OPENED
                 access.cleared_at = None
-                if state.position_id == cell.cell_index and state.active_challenge_access_id is None:
+                if (
+                    state.position_id == cell.cell_index
+                    and state.active_challenge_access_id is None
+                ):
                     state.active_challenge_access = access
                     state.save(update_fields=["active_challenge_access", "updated_at"])
             access.save(update_fields=["status", "cleared_at"])
@@ -1813,7 +1907,9 @@ def _team_members_payload(team):
 
 def _team_update(request, team_id):
     body = _json_object(request)
-    if not {"team_name", "leader_user_id", "add_user_ids", "remove_user_ids"} & set(body):
+    if not {"team_name", "leader_user_id", "add_user_ids", "remove_user_ids"} & set(
+        body
+    ):
         raise InvalidRequest("변경할 항목이 없습니다")
     reason = _require_reason(body)
 
@@ -1863,7 +1959,9 @@ def _team_update(request, team_id):
             if user.role != Role.PARTICIPANT:
                 raise InvalidRequest("관리자 계정은 팀에 넣을 수 없습니다")
             if user.team_id is not None:
-                raise InvalidRequest(f"{user.login_id} 는 다른 팀 소속입니다. 먼저 그 팀에서 제외하세요")
+                raise InvalidRequest(
+                    f"{user.login_id} 는 다른 팀 소속입니다. 먼저 그 팀에서 제외하세요"
+                )
         for uid in remove_ids:
             if uid not in members:
                 raise InvalidRequest(f"{users[uid].login_id} 는 이 팀 소속이 아닙니다")
@@ -1877,10 +1975,17 @@ def _team_update(request, team_id):
             new_leader = leader_id
 
         # 제외된 계정의 인스턴스는 팀 소속이 바뀌면 추적이 끊긴다.
-        if remove_ids and Instance.objects.filter(
-            user_id__in=remove_ids, status__in=ACTIVE_INSTANCE_STATUSES
-        ).exists():
-            return fail("ACTIVE_INSTANCE_EXISTS", "제외할 팀원의 인스턴스를 먼저 종료해야 합니다", 409)
+        if (
+            remove_ids
+            and Instance.objects.filter(
+                user_id__in=remove_ids, status__in=ACTIVE_INSTANCE_STATUSES
+            ).exists()
+        ):
+            return fail(
+                "ACTIVE_INSTANCE_EXISTS",
+                "제외할 팀원의 인스턴스를 먼저 종료해야 합니다",
+                409,
+            )
 
         if team_name is not None and team_name != team.team_name:
             if Team.objects.filter(team_name=team_name).exclude(pk=team.pk).exists():
@@ -1953,10 +2058,16 @@ def _team_delete(request, team_id):
     with transaction.atomic():
         team = _get_team_for_update(team_id)
         # 인스턴스 행만 지우면 스케줄러의 컨테이너가 고아로 남는다.
-        if Instance.objects.filter(team=team, status__in=ACTIVE_INSTANCE_STATUSES).exists():
-            return fail("ACTIVE_INSTANCE_EXISTS", "팀의 인스턴스를 먼저 종료해야 합니다", 409)
+        if Instance.objects.filter(
+            team=team, status__in=ACTIVE_INSTANCE_STATUSES
+        ).exists():
+            return fail(
+                "ACTIVE_INSTANCE_EXISTS", "팀의 인스턴스를 먼저 종료해야 합니다", 409
+            )
 
-        solved_ids = list(Solve.objects.filter(team=team).values_list("challenge_id", flat=True))
+        solved_ids = list(
+            Solve.objects.filter(team=team).values_list("challenge_id", flat=True)
+        )
         member_count = User.objects.filter(team=team).count()
         deleted_id, deleted_name = str(team.team_id), team.team_name
         team.delete()
@@ -1972,7 +2083,9 @@ def _team_delete(request, team_id):
     # 잠그려고 삭제 트랜잭션 밖에서 문제마다 따로 처리한다.
     for challenge_id in sorted(solved_ids):
         with transaction.atomic():
-            challenge = Challenge.objects.select_for_update().filter(pk=challenge_id).first()
+            challenge = (
+                Challenge.objects.select_for_update().filter(pk=challenge_id).first()
+            )
             if challenge is not None:
                 update_dynamic_score_and_team_scores(challenge)
 
@@ -2044,7 +2157,9 @@ def admin_resources(request):
 
     for account in accounts.values():
         nodes = account["nodes"]
-        counts = [n["container_count"] for n in nodes if n["container_count"] is not None]
+        counts = [
+            n["container_count"] for n in nodes if n["container_count"] is not None
+        ]
         account["container_count"] = sum(counts) if counts else None
         account["status"] = (
             "HEALTHY" if all(n["status"] == "HEALTHY" for n in nodes) else "DEGRADED"

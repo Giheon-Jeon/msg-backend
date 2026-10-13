@@ -6,9 +6,8 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('challenge', '0004_merge_opened_challenges_into_team_access'),
-        ('challenge', '0005_challenge_challenge_slug'),
+        ("challenge", "0004_merge_opened_challenges_into_team_access"),
+        ("challenge", "0005_challenge_challenge_slug"),
     ]
 
-    operations = [
-    ]
+    operations = []

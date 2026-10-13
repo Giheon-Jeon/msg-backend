@@ -17,10 +17,15 @@ COPY --chown=app:app . .
 
 ENV HOME=/app \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    WEB_CONCURRENCY=2 \
+    GUNICORN_WORKER_CLASS=gthread \
+    GUNICORN_THREADS=4 \
+    GUNICORN_KEEPALIVE=10 \
+    GUNICORN_TIMEOUT=30
 
 USER app
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers ${WEB_CONCURRENCY:-2} --worker-class ${GUNICORN_WORKER_CLASS:-gthread} --threads ${GUNICORN_THREADS:-4} --keep-alive ${GUNICORN_KEEPALIVE:-10} --timeout ${GUNICORN_TIMEOUT:-30} --access-logfile - --error-logfile -"]

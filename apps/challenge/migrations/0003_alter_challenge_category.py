@@ -6,13 +6,25 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('challenge', '0002_challenge_current_score_challenge_decay_and_more'),
+        ("challenge", "0002_challenge_current_score_challenge_decay_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='challenge',
-            name='category',
-            field=models.CharField(choices=[('WEB', 'Web'), ('PWN', 'Pwn'), ('REV', 'Rev'), ('CRYPTO', 'Crypto'), ('FORENSIC', 'Forensic'), ('MISC', 'Misc'), ('WEB3', 'Web3'), ('OSINT', 'Osint')], max_length=20),
+            model_name="challenge",
+            name="category",
+            field=models.CharField(
+                choices=[
+                    ("WEB", "Web"),
+                    ("PWN", "Pwn"),
+                    ("REV", "Rev"),
+                    ("CRYPTO", "Crypto"),
+                    ("FORENSIC", "Forensic"),
+                    ("MISC", "Misc"),
+                    ("WEB3", "Web3"),
+                    ("OSINT", "Osint"),
+                ],
+                max_length=20,
+            ),
         ),
     ]

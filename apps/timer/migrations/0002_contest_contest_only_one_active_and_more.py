@@ -6,16 +6,23 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('timer', '0001_initial'),
+        ("timer", "0001_initial"),
     ]
 
     operations = [
         migrations.AddConstraint(
-            model_name='contest',
-            constraint=models.UniqueConstraint(condition=models.Q(('is_active', True)), fields=('is_active',), name='contest_only_one_active'),
+            model_name="contest",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("is_active", True)),
+                fields=("is_active",),
+                name="contest_only_one_active",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='contest',
-            constraint=models.CheckConstraint(condition=models.Q(('start_time__lt', models.F('end_time'))), name='contest_start_before_end'),
+            model_name="contest",
+            constraint=models.CheckConstraint(
+                condition=models.Q(("start_time__lt", models.F("end_time"))),
+                name="contest_start_before_end",
+            ),
         ),
     ]

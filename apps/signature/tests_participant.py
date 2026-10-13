@@ -82,21 +82,19 @@ class SignatureParticipantApiTests(TestCase):
             earned_score=self.published.score,
         )
 
-        response = self.client.get(
-            f"/api/v1/signatures/{self.published.signature_id}"
-        )
+        response = self.client.get(f"/api/v1/signatures/{self.published.signature_id}")
 
         self.assertEqual(response.status_code, 200)
         data = response.data["data"]
         self.assertEqual(data["description"], self.published.description)
         self.assertTrue(data["is_solved"])
-        self.assertEqual(data["solved_at"], solve.solved_at.isoformat().replace("+00:00", "Z"))
+        self.assertEqual(
+            data["solved_at"], solve.solved_at.isoformat().replace("+00:00", "Z")
+        )
         self.assertNotIn("flag_hash", data)
 
     def test_detail_returns_null_solved_at_when_unsolved(self):
-        response = self.client.get(
-            f"/api/v1/signatures/{self.published.signature_id}"
-        )
+        response = self.client.get(f"/api/v1/signatures/{self.published.signature_id}")
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data["data"]["is_solved"])

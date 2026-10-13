@@ -14,3 +14,7 @@ teams.csv
 apps/common/static/devtools.html
 CLAUDE.md
 TODO.md
+
+# Local load-test artifacts and generated credentials
+loadtests/runtime/
+loadtests/results/

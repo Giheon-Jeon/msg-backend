@@ -6,28 +6,28 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('challenge', '0001_initial'),
+        ("challenge", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='challenge',
-            name='current_score',
+            model_name="challenge",
+            name="current_score",
             field=models.DecimalField(decimal_places=2, default=1000, max_digits=12),
         ),
         migrations.AddField(
-            model_name='challenge',
-            name='decay',
+            model_name="challenge",
+            name="decay",
             field=models.IntegerField(default=20),
         ),
         migrations.AddField(
-            model_name='challenge',
-            name='initial_score',
+            model_name="challenge",
+            name="initial_score",
             field=models.DecimalField(decimal_places=2, default=1000, max_digits=12),
         ),
         migrations.AddField(
-            model_name='challenge',
-            name='minimum_score',
+            model_name="challenge",
+            name="minimum_score",
             field=models.DecimalField(decimal_places=2, default=100, max_digits=12),
         ),
     ]

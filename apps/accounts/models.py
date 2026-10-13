@@ -59,7 +59,9 @@ class User(AbstractBaseUser):
     )
     password = models.CharField(max_length=255, db_column="password_hash")
     nickname = models.CharField(max_length=50)
-    role = models.CharField(max_length=20, choices=Role.choices, default=Role.PARTICIPANT)
+    role = models.CharField(
+        max_length=20, choices=Role.choices, default=Role.PARTICIPANT
+    )
     is_leader = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)

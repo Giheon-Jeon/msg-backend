@@ -119,7 +119,9 @@ class SignatureSubmitApiTests(TestCase):
         self.assertEqual(third.data["data"]["retry_after_seconds"], 30)
         self.assertEqual(blocked.status_code, 429)
         self.assertFalse(SignatureSolve.objects.filter(team=self.team).exists())
-        lock = SignatureSubmissionLock.objects.get(team=self.team, challenge=self.challenge)
+        lock = SignatureSubmissionLock.objects.get(
+            team=self.team, challenge=self.challenge
+        )
         self.assertEqual(lock.failed_count, 3)
         self.assertEqual(lock.locked_until, BASE_TIME + timedelta(seconds=30))
         raw_flags = {

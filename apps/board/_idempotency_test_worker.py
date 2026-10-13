@@ -32,10 +32,15 @@ def main():
     from apps.accounts.models import User
 
     def emit_response(response):
-        print(json.dumps({
-            "status": response.status_code,
-            "body": json.loads(JSONRenderer().render(response.data)),
-        }), flush=True)
+        print(
+            json.dumps(
+                {
+                    "status": response.status_code,
+                    "body": json.loads(JSONRenderer().render(response.data)),
+                }
+            ),
+            flush=True,
+        )
 
     def crash_before_commit(response):
         emit_response(response)
@@ -54,7 +59,8 @@ def main():
         )
     elif mode == "after_commit":
         crash = patch(
-            "apps.board.idempotency._cache_set", side_effect=crash_after_commit,
+            "apps.board.idempotency._cache_set",
+            side_effect=crash_after_commit,
         )
     else:
         crash = nullcontext()
@@ -63,7 +69,9 @@ def main():
     client.force_authenticate(user=User.objects.get(pk=configuration["user_id"]))
     with crash, patch("apps.board.services.random.randint", return_value=1):
         response = client.post(
-            "/api/v1/board/dice/roll", {}, format="json",
+            "/api/v1/board/dice/roll",
+            {},
+            format="json",
             HTTP_IDEMPOTENCY_KEY=configuration["key"],
         )
     emit_response(response)

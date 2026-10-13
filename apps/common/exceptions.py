@@ -91,6 +91,7 @@ class KothChallengeNotFound(APIError):
 class InvalidRequest(APIError):
     pass
 
+
 class IdempotencyKeyRequired(APIError):
     status_code = status.HTTP_400_BAD_REQUEST
     code = "IDEMPOTENCY_KEY_REQUIRED"
@@ -129,7 +130,7 @@ def envelope_exception_handler(exc, context):
             {
                 "code": "INTERNAL_ERROR",
                 "message": "서버 오류가 발생했습니다",
-                "data": None
+                "data": None,
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

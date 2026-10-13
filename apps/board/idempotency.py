@@ -10,7 +10,11 @@ from rest_framework.response import Response
 
 from apps.common.exceptions import InvalidRequest
 
-from .exceptions import IdempotencyInProgress, IdempotencyKeyConflict, IdempotencyKeyRequired
+from .exceptions import (
+    IdempotencyInProgress,
+    IdempotencyKeyConflict,
+    IdempotencyKeyRequired,
+)
 from .models import IdempotencyRequest
 
 IDEMPOTENCY_TTL_SECONDS = 300
@@ -76,7 +80,9 @@ def idempotent(view_method):
         if not key:
             raise IdempotencyKeyRequired()
         if len(key) > MAX_KEY_LENGTH:
-            raise InvalidRequest(f"Idempotency-Key는 {MAX_KEY_LENGTH}자 이하여야 합니다.")
+            raise InvalidRequest(
+                f"Idempotency-Key는 {MAX_KEY_LENGTH}자 이하여야 합니다."
+            )
 
         fingerprint = _request_fingerprint(request)
         cache_key = f"idem:{request.user.user_id}:{request.method}:{request.path}:{key}"

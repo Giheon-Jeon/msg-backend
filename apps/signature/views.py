@@ -115,11 +115,12 @@ def signature_submit(request, signature_id):
         except SignatureChallenge.DoesNotExist:
             raise SignatureNotFound()
 
-        submission_lock, _ = (
-            SignatureSubmissionLock.objects.select_for_update().get_or_create(
-                team=team,
-                challenge=challenge,
-            )
+        (
+            submission_lock,
+            _,
+        ) = SignatureSubmissionLock.objects.select_for_update().get_or_create(
+            team=team,
+            challenge=challenge,
         )
 
         if SignatureSolve.objects.filter(team=team, challenge=challenge).exists():

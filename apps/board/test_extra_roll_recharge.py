@@ -7,38 +7,60 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Team, User
-from apps.board.models import Cell, ChanceCard, IdempotencyRequest, TeamBoardState, TeamChanceCard
+from apps.board.models import (
+    Cell,
+    ChanceCard,
+    IdempotencyRequest,
+    TeamBoardState,
+    TeamChanceCard,
+)
 from apps.board.services import grant_dice_roll
 
 
-@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+@override_settings(
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+)
 class ExtraRollRechargeBoundaryTests(TransactionTestCase):
     def setUp(self):
         cache.clear()
         self.team = Team.objects.create(team_name="card-recharge-team")
         self.user = User.objects.create_user(
-            login_id="card-recharge-leader", nickname="leader", team=self.team, is_leader=True,
+            login_id="card-recharge-leader",
+            nickname="leader",
+            team=self.team,
+            is_leader=True,
         )
-        Cell.objects.bulk_create([
-            Cell(cell_index=1, type=Cell.CellType.START, name="start"),
-            Cell(cell_index=3, type=Cell.CellType.ROULETTE, name="landing"),
-            Cell(cell_index=7, type=Cell.CellType.CHANCE, name="card source"),
-        ])
+        Cell.objects.bulk_create(
+            [
+                Cell(cell_index=1, type=Cell.CellType.START, name="start"),
+                Cell(cell_index=3, type=Cell.CellType.ROULETTE, name="landing"),
+                Cell(cell_index=7, type=Cell.CellType.CHANCE, name="card source"),
+            ]
+        )
         card = ChanceCard.objects.create(
-            card_id="card_extra_roll", name="extra roll", effect="GRANT_EXTRA_ROLL",
+            card_id="card_extra_roll",
+            name="extra roll",
+            effect="GRANT_EXTRA_ROLL",
             usage_timing=ChanceCard.UsageTiming.PRE_ROLL,
         )
-        self.draw = TeamChanceCard.objects.create(team=self.team, source_cell_id=7, card=card)
+        self.draw = TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card=card
+        )
         self.deadline = timezone.now().replace(microsecond=0) + timedelta(minutes=5)
         self.state = TeamBoardState.objects.create(
-            team=self.team, position_id=1, dice_rolls_left=2, next_dice_reset_at=self.deadline,
+            team=self.team,
+            position_id=1,
+            dice_rolls_left=2,
+            next_dice_reset_at=self.deadline,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
     def use_card(self, key="extra-roll-boundary"):
         return self.client.post(
-            "/api/v1/board/chance/use", {"card_id": self.draw.card_id}, format="json",
+            "/api/v1/board/chance/use",
+            {"card_id": self.draw.card_id},
+            format="json",
             HTTP_IDEMPOTENCY_KEY=key,
         )
 
@@ -57,8 +79,12 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
             grants.append(granted)
             return granted
 
-        with patch("apps.board.services.timezone.now", side_effect=lambda: current_time):
-            with patch("apps.board.services.grant_dice_roll", side_effect=grant_after_deadline):
+        with patch(
+            "apps.board.services.timezone.now", side_effect=lambda: current_time
+        ):
+            with patch(
+                "apps.board.services.grant_dice_roll", side_effect=grant_after_deadline
+            ):
                 response = self.use_card()
         self.assertEqual(len(grants), 1)
         return response, grants[0]
@@ -84,7 +110,9 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
         self.assertIsNone(self.state.next_dice_reset_at)
         self.assertEqual(self.draw.used_at, now)
 
-    def test_recharge_between_check_and_grant_preserves_card_and_rolls_back_request(self):
+    def test_recharge_between_check_and_grant_preserves_card_and_rolls_back_request(
+        self,
+    ):
         response, granted = self.use_card_crossing_deadline()
         self.assertEqual(granted, 0)
         self.assert_card_preserved(response)
@@ -107,7 +135,10 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
     def test_card_is_preserved_at_and_immediately_after_recharge(self):
         for offset in (timedelta(0), timedelta(microseconds=1)):
             with self.subTest(offset=offset):
-                with patch("apps.board.services.timezone.now", return_value=self.deadline + offset):
+                with patch(
+                    "apps.board.services.timezone.now",
+                    return_value=self.deadline + offset,
+                ):
                     response = self.use_card()
                 self.assert_card_preserved(response)
 
@@ -125,22 +156,33 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
                 self.assertEqual(granted, 1)
                 self.assertEqual(response.status_code, 200)
                 self.assertTrue(response.data["data"]["used"])
-                self.assertEqual(response.data["data"]["dice_rolls_left"], initial_rolls + 2)
+                self.assertEqual(
+                    response.data["data"]["dice_rolls_left"], initial_rolls + 2
+                )
                 self.state.refresh_from_db()
                 self.draw.refresh_from_db()
                 self.assertEqual(self.state.dice_rolls_left, initial_rolls + 2)
                 self.assertEqual(self.draw.used_at, self.deadline)
-                expected_deadline = self.deadline + timedelta(minutes=15) if initial_rolls == 0 else None
+                expected_deadline = (
+                    self.deadline + timedelta(minutes=15)
+                    if initial_rolls == 0
+                    else None
+                )
                 self.assertEqual(self.state.next_dice_reset_at, expected_deadline)
 
-    def test_rejected_key_can_retry_after_dice_is_spent_and_replay_without_double_grant(self):
+    def test_rejected_key_can_retry_after_dice_is_spent_and_replay_without_double_grant(
+        self,
+    ):
         response, granted = self.use_card_crossing_deadline()
         self.assertEqual(granted, 0)
         self.assert_card_preserved(response)
         with patch("apps.board.services.timezone.now", return_value=self.deadline):
             with patch("apps.board.services.random.randint", return_value=1):
                 roll = self.client.post(
-                    "/api/v1/board/dice/roll", {}, format="json", HTTP_IDEMPOTENCY_KEY="spend-dice",
+                    "/api/v1/board/dice/roll",
+                    {},
+                    format="json",
+                    HTTP_IDEMPOTENCY_KEY="spend-dice",
                 )
             self.assertEqual(roll.status_code, 200)
             self.state.refresh_from_db()
@@ -154,7 +196,12 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
         self.draw.refresh_from_db()
         self.assertEqual(self.state.dice_rolls_left, 3)
         self.assertEqual(self.draw.used_at, self.deadline)
-        self.assertEqual(IdempotencyRequest.objects.filter(user=self.user, key="extra-roll-boundary").count(), 1)
+        self.assertEqual(
+            IdempotencyRequest.objects.filter(
+                user=self.user, key="extra-roll-boundary"
+            ).count(),
+            1,
+        )
 
     def test_successful_request_replays_across_recharge_boundary(self):
         before = self.deadline - timedelta(microseconds=1)
@@ -162,7 +209,10 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
             first = self.use_card()
         self.assertEqual(first.status_code, 200)
         cache.clear()
-        with patch("apps.board.services.timezone.now", return_value=self.deadline + timedelta(seconds=1)):
+        with patch(
+            "apps.board.services.timezone.now",
+            return_value=self.deadline + timedelta(seconds=1),
+        ):
             replay = self.use_card()
         self.assertEqual(first.json(), replay.json())
         self.state.refresh_from_db()

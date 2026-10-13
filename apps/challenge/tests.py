@@ -16,6 +16,7 @@ from apps.board.models import Cell, TeamBoardState, TeamChallengeAccess
 from apps.board.services import get_or_create_board_state
 from apps.challenge.models import Challenge, FlagSubmissionLock, Solve
 from apps.challenge.services import hash_flag
+from apps.ranking.models import LineMonopoly
 from apps.teams.models import MileageHistory, MileageType
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
@@ -65,7 +66,9 @@ class ChallengeSubmitTests(TestCase):
             {"login_id": "challenger", "password": "pw1234"},
             format="json",
         )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}")
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
 
     def submit(self, flag="MSG{wrong_flag}"):
         return self.client.post(
@@ -103,14 +106,19 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(self.team.mileage, 30)
 
     def test_extra_dice_requires_current_cell_and_active_access(self):
-        access = TeamChallengeAccess.objects.get(team=self.team, challenge=self.challenge)
-        other_cell = Cell.objects.create(cell_index=2, type=Cell.CellType.START, name="other")
+        access = TeamChallengeAccess.objects.get(
+            team=self.team, challenge=self.challenge
+        )
+        other_cell = Cell.objects.create(
+            cell_index=2, type=Cell.CellType.START, name="other"
+        )
         for case in ("current", "moved", "inactive", "cleared", "expired", "missing"):
             with self.subTest(case=case):
                 Solve.objects.filter(team=self.team).delete()
                 TeamBoardState.objects.filter(team=self.team).delete()
                 access.status = (
-                    TeamChallengeAccess.Status.CLEARED if case == "cleared"
+                    TeamChallengeAccess.Status.CLEARED
+                    if case == "cleared"
                     else TeamChallengeAccess.Status.OPENED
                 )
                 access.opened_at = timezone.now() - datetime.timedelta(
@@ -124,12 +132,15 @@ class ChallengeSubmitTests(TestCase):
                         position=other_cell if case == "moved" else self.cell,
                         active_challenge_access=None if case == "inactive" else access,
                         dice_rolls_left=0,
-                        next_dice_reset_at=timezone.now() + datetime.timedelta(minutes=10),
+                        next_dice_reset_at=timezone.now()
+                        + datetime.timedelta(minutes=10),
                     )
                 response = self.submit("MSG{correct_flag}")
                 self.assertEqual(response.status_code, 200)
                 granted = case == "current"
-                self.assertEqual(response.data["data"]["is_extra_dice_granted"], granted)
+                self.assertEqual(
+                    response.data["data"]["is_extra_dice_granted"], granted
+                )
                 solve = Solve.objects.get(team=self.team, challenge=self.challenge)
                 self.assertEqual(solve.is_extra_dice_granted, granted)
                 access.refresh_from_db()
@@ -145,7 +156,9 @@ class ChallengeSubmitTests(TestCase):
                     self.assertEqual(state.dice_rolls_left, 1)
 
     def test_solve_reward_preserves_recharge_until_full_and_reports_actual_grant(self):
-        access = TeamChallengeAccess.objects.get(team=self.team, challenge=self.challenge)
+        access = TeamChallengeAccess.objects.get(
+            team=self.team, challenge=self.challenge
+        )
         now = timezone.now().replace(microsecond=0)
         deadline = now + datetime.timedelta(minutes=5)
         for initial_rolls in (0, 1, 2, 3):
@@ -157,7 +170,8 @@ class ChallengeSubmitTests(TestCase):
                 state, _ = TeamBoardState.objects.update_or_create(
                     team=self.team,
                     defaults={
-                        "position": self.cell, "active_challenge_access": access,
+                        "position": self.cell,
+                        "active_challenge_access": access,
                         "dice_rolls_left": initial_rolls,
                         "next_dice_reset_at": deadline if initial_rolls < 3 else None,
                     },
@@ -170,24 +184,39 @@ class ChallengeSubmitTests(TestCase):
                     state.refresh_from_db()
                     self.assertEqual(state.dice_rolls_left, expected_rolls)
                     self.assertEqual(state.next_dice_reset_at, expected_deadline)
-                    self.assertEqual(response.data["data"]["is_extra_dice_granted"], initial_rolls < 3)
                     self.assertEqual(
-                        Solve.objects.get(team=self.team, challenge=self.challenge).is_extra_dice_granted,
+                        response.data["data"]["is_extra_dice_granted"],
+                        initial_rolls < 3,
+                    )
+                    self.assertEqual(
+                        Solve.objects.get(
+                            team=self.team, challenge=self.challenge
+                        ).is_extra_dice_granted,
                         initial_rolls < 3,
                     )
                     for path in ("/api/v1/board/me", "/api/v1/board/dice/status"):
                         status = self.client.get(path)
                         self.assertEqual(status.status_code, 200)
-                        self.assertEqual(status.data["data"]["dice_rolls_left"], expected_rolls)
-                        self.assertEqual(status.data["data"]["next_dice_reset_at"], expected_deadline)
+                        self.assertEqual(
+                            status.data["data"]["dice_rolls_left"], expected_rolls
+                        )
+                        self.assertEqual(
+                            status.data["data"]["next_dice_reset_at"], expected_deadline
+                        )
 
                 with patch("apps.board.services.timezone.now", return_value=deadline):
                     status = self.client.get("/api/v1/board/dice/status")
                     charged_rolls = min(3, expected_rolls + 1)
-                    self.assertEqual(status.data["data"]["dice_rolls_left"], charged_rolls)
+                    self.assertEqual(
+                        status.data["data"]["dice_rolls_left"], charged_rolls
+                    )
                     self.assertEqual(
                         status.data["data"]["next_dice_reset_at"],
-                        deadline + datetime.timedelta(minutes=15) if charged_rolls < 3 else None,
+                        (
+                            deadline + datetime.timedelta(minutes=15)
+                            if charged_rolls < 3
+                            else None
+                        ),
                     )
 
     def test_three_wrong_flags_lock_submission(self):
@@ -201,7 +230,9 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(res.data["code"], "TOO_MANY_ATTEMPTS")
         self.assertIn("retry_after_seconds", res.data["data"])
 
-        flag_lock = FlagSubmissionLock.objects.get(team=self.team, challenge=self.challenge)
+        flag_lock = FlagSubmissionLock.objects.get(
+            team=self.team, challenge=self.challenge
+        )
         self.assertEqual(flag_lock.failed_count, 3)
         self.assertIsNotNone(flag_lock.locked_until)
         self.team.refresh_from_db()
@@ -234,11 +265,68 @@ class ChallengeSubmitTests(TestCase):
         self.team.refresh_from_db()
         self.assertEqual(self.team.mileage, 30)
         self.assertEqual(
-            list(MileageHistory.objects.filter(team=self.team).values_list("amount", flat=True)),
+            list(
+                MileageHistory.objects.filter(team=self.team).values_list(
+                    "amount", flat=True
+                )
+            ),
             [30],
         )
         self.assertEqual(
             Solve.objects.filter(team=self.team, challenge=self.challenge).count(),
+            1,
+        )
+
+    def test_duplicate_line_bonus_does_not_rollback_the_last_solve(self):
+        Cell.objects.filter(pk=self.cell.pk).update(line_number=1)
+        for index in range(2, 6):
+            cell = Cell.objects.create(
+                cell_index=index,
+                type=Cell.CellType.CHALLENGE,
+                difficulty=Cell.Difficulty.EASY,
+                line_number=1,
+                name=f"line-cell-{index}",
+            )
+            challenge = Challenge.objects.create(
+                title=f"line-challenge-{index}",
+                category=Challenge.CategoryType.WEB,
+                difficulty=Challenge.DifficultyType.EASY,
+                score=1000,
+                current_score=1000,
+                flag_hash=f"line-flag-{index}",
+                is_published=True,
+            )
+            TeamChallengeAccess.objects.create(
+                team=self.team,
+                challenge=challenge,
+                source_cell=cell,
+                status=TeamChallengeAccess.Status.CLEARED,
+            )
+            Solve.objects.create(
+                team=self.team,
+                challenge=challenge,
+                earned_score=1000,
+                earned_mileage=30,
+            )
+
+        LineMonopoly.objects.create(
+            team=self.team,
+            line_number=1,
+            earned_score=225,
+            is_category_bonus=True,
+        )
+
+        response = self.submit("MSG{correct_flag}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Solve.objects.filter(team=self.team).count(), 5)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.mileage, 30)
+        self.assertEqual(
+            MileageHistory.objects.filter(
+                team=self.team,
+                type=MileageType.CHALLENGE_SOLVE,
+            ).count(),
             1,
         )
 
@@ -335,7 +423,9 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(response.status_code, 500)
         self.challenge.refresh_from_db()
         self.team.refresh_from_db()
-        self.assertFalse(Solve.objects.filter(team=self.team, challenge=self.challenge).exists())
+        self.assertFalse(
+            Solve.objects.filter(team=self.team, challenge=self.challenge).exists()
+        )
         self.assertFalse(MileageHistory.objects.filter(team=self.team).exists())
         self.assertEqual(self.challenge.current_score, Decimal("1000"))
         self.assertEqual(self.team.team_score, Decimal("0"))
@@ -367,7 +457,9 @@ class ChallengeSubmitTests(TestCase):
                 challenge=challenge,
                 source_cell=cell,
             )
-            extra_challenges.append((challenge, reward, f"MSG{{{difficulty.lower()}_flag}}"))
+            extra_challenges.append(
+                (challenge, reward, f"MSG{{{difficulty.lower()}_flag}}")
+            )
 
         cases = [(self.challenge, 30, "MSG{correct_flag}"), *extra_challenges]
         total_mileage = 0
@@ -393,8 +485,10 @@ class ChallengeSubmitTests(TestCase):
                 solves = self.client.get("/api/v1/teams/me/solves")
                 self.assertEqual(solves.status_code, 200)
                 self.assertEqual(
-                    {row["challenge_id"]: row["earned_mileage"]
-                     for row in solves.data["data"]["solves"]},
+                    {
+                        row["challenge_id"]: row["earned_mileage"]
+                        for row in solves.data["data"]["solves"]
+                    },
                     expected_solves,
                 )
                 history = self.client.get("/api/v1/teams/me/mileage_history")
@@ -402,7 +496,9 @@ class ChallengeSubmitTests(TestCase):
                 self.assertEqual(history.data["data"]["mileage"], total_mileage)
                 rows = history.data["data"]["history"]
                 self.assertEqual(len(rows), len(expected_solves))
-                self.assertTrue(all(row["type"] == MileageType.CHALLENGE_SOLVE for row in rows))
+                self.assertTrue(
+                    all(row["type"] == MileageType.CHALLENGE_SOLVE for row in rows)
+                )
                 self.assertCountEqual(
                     [row["amount"] for row in rows], list(expected_solves.values())
                 )
@@ -412,7 +508,9 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(self.team.mileage, 210)
         self.assertEqual(
             list(
-                MileageHistory.objects.filter(team=self.team, type=MileageType.CHALLENGE_SOLVE)
+                MileageHistory.objects.filter(
+                    team=self.team, type=MileageType.CHALLENGE_SOLVE
+                )
                 .order_by("created_at")
                 .values_list("amount", flat=True)
             ),
@@ -425,18 +523,31 @@ class ChallengeSubmitTests(TestCase):
 class ConcurrentChallengeSubmitTests(TransactionTestCase):
     def test_due_recharge_and_solve_reward_are_applied_once_when_requests_overlap(self):
         team = Team.objects.create(team_name="recharge-and-solve")
-        user = User.objects.create_user(login_id="recharge-user", nickname="recharge-user", team=team)
-        cell = Cell.objects.create(cell_index=1, type=Cell.CellType.CHALLENGE, name="current")
-        challenge = Challenge.objects.create(
-            title="recharge", category="WEB", difficulty="EASY", score=1000,
-            flag_hash=hash_flag("MSG{recharge}"), is_published=True,
+        user = User.objects.create_user(
+            login_id="recharge-user", nickname="recharge-user", team=team
         )
-        access = TeamChallengeAccess.objects.create(team=team, challenge=challenge, source_cell=cell)
+        cell = Cell.objects.create(
+            cell_index=1, type=Cell.CellType.CHALLENGE, name="current"
+        )
+        challenge = Challenge.objects.create(
+            title="recharge",
+            category="WEB",
+            difficulty="EASY",
+            score=1000,
+            flag_hash=hash_flag("MSG{recharge}"),
+            is_published=True,
+        )
+        access = TeamChallengeAccess.objects.create(
+            team=team, challenge=challenge, source_cell=cell
+        )
         now = timezone.now()
         deadline = now - datetime.timedelta(seconds=1)
         state = TeamBoardState.objects.create(
-            team=team, position=cell, active_challenge_access=access,
-            dice_rolls_left=0, next_dice_reset_at=deadline,
+            team=team,
+            position=cell,
+            active_challenge_access=access,
+            dice_rolls_left=0,
+            next_dice_reset_at=deadline,
         )
         status_locked = Event()
         submit_waiting = Event()
@@ -452,14 +563,20 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
 
                 def synchronize(execute, sql, params, many, context):
                     nonlocal synchronized
-                    if synchronized or 'FROM "team_board_states"' not in sql or 'FOR UPDATE' not in sql:
+                    if (
+                        synchronized
+                        or 'FROM "team_board_states"' not in sql
+                        or "FOR UPDATE" not in sql
+                    ):
                         return execute(sql, params, many, context)
                     synchronized = True
                     if action == "status":
                         result = execute(sql, params, many, context)
                         status_locked.set()
                         if not submit_waiting.wait(timeout=10):
-                            raise AssertionError("Submission never attempted the board lock")
+                            raise AssertionError(
+                                "Submission never attempted the board lock"
+                            )
                         return result
                     submit_waiting.set()
                     return execute(sql, params, many, context)
@@ -472,7 +589,8 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
                     else:
                         response = client.post(
                             f"/api/v1/challenges/{challenge.pk}/submit",
-                            {"flag": "MSG{recharge}"}, format="json",
+                            {"flag": "MSG{recharge}"},
+                            format="json",
                         )
                 return action, response.status_code, response.data
             finally:
@@ -489,8 +607,12 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
             get_or_create_board_state(team)
         state.refresh_from_db()
         self.assertEqual(state.dice_rolls_left, 2)
-        self.assertEqual(state.next_dice_reset_at, deadline + datetime.timedelta(minutes=15))
-        self.assertTrue(Solve.objects.get(team=team, challenge=challenge).is_extra_dice_granted)
+        self.assertEqual(
+            state.next_dice_reset_at, deadline + datetime.timedelta(minutes=15)
+        )
+        self.assertTrue(
+            Solve.objects.get(team=team, challenge=challenge).is_extra_dice_granted
+        )
 
     def test_submit_and_roulette_finish_when_submit_locks_board_first(self):
         self._assert_submit_and_roulette_finish("submit")
@@ -507,19 +629,35 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
     def _assert_submit_and_roulette_finish(self, first_action, cell_index=16):
         team = Team.objects.create(team_name="submit-and-roulette")
         user = User.objects.create_user(
-            login_id="roulette-leader", nickname="roulette-leader", team=team,
+            login_id="roulette-leader",
+            nickname="roulette-leader",
+            team=team,
             is_leader=True,
         )
         challenge = Challenge.objects.create(
-            title="previous-cell", category=Challenge.CategoryType.WEB,
-            difficulty=Challenge.DifficultyType.EASY, score=1000,
-            initial_score=1000, minimum_score=100, decay=20, current_score=1000,
-            flag_hash=hash_flag("MSG{concurrent}"), is_published=True,
+            title="previous-cell",
+            category=Challenge.CategoryType.WEB,
+            difficulty=Challenge.DifficultyType.EASY,
+            score=1000,
+            initial_score=1000,
+            minimum_score=100,
+            decay=20,
+            current_score=1000,
+            flag_hash=hash_flag("MSG{concurrent}"),
+            is_published=True,
         )
-        challenge_cell = Cell.objects.create(cell_index=1, type=Cell.CellType.CHALLENGE, name="previous")
-        roulette_cell = Cell.objects.create(cell_index=cell_index, type=Cell.CellType.ROULETTE, name="roulette")
-        access = TeamChallengeAccess.objects.create(team=team, challenge=challenge, source_cell=challenge_cell)
-        state = TeamBoardState.objects.create(team=team, position=roulette_cell, dice_rolls_left=1)
+        challenge_cell = Cell.objects.create(
+            cell_index=1, type=Cell.CellType.CHALLENGE, name="previous"
+        )
+        roulette_cell = Cell.objects.create(
+            cell_index=cell_index, type=Cell.CellType.ROULETTE, name="roulette"
+        )
+        access = TeamChallengeAccess.objects.create(
+            team=team, challenge=challenge, source_cell=challenge_cell
+        )
+        state = TeamBoardState.objects.create(
+            team=team, position=roulette_cell, dice_rolls_left=1
+        )
         first_locked = Event()
         second_waiting = Event()
 
@@ -535,7 +673,9 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
 
                 def synchronize(execute, sql, params, many, context):
                     nonlocal synchronized
-                    is_board_lock = 'FROM "team_board_states"' in sql and 'FOR UPDATE' in sql
+                    is_board_lock = (
+                        'FROM "team_board_states"' in sql and "FOR UPDATE" in sql
+                    )
                     if not is_board_lock or synchronized:
                         return execute(sql, params, many, context)
                     synchronized = True
@@ -543,7 +683,9 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
                         result = execute(sql, params, many, context)
                         first_locked.set()
                         if not second_waiting.wait(timeout=10):
-                            raise AssertionError("Second request never attempted the board lock")
+                            raise AssertionError(
+                                "Second request never attempted the board lock"
+                            )
                         return result
                     second_waiting.set()
                     return execute(sql, params, many, context)
@@ -554,11 +696,14 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
                     if action == "submit":
                         response = client.post(
                             f"/api/v1/challenges/{challenge.pk}/submit",
-                            {"flag": "MSG{concurrent}"}, format="json",
+                            {"flag": "MSG{concurrent}"},
+                            format="json",
                         )
                     else:
                         response = client.post(
-                            "/api/v1/board/roulette/spin", {}, format="json",
+                            "/api/v1/board/roulette/spin",
+                            {},
+                            format="json",
                             HTTP_IDEMPOTENCY_KEY=f"concurrent-roulette-{first_action}",
                         )
                 return action, response.status_code, response.data
@@ -576,8 +721,12 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
         self.assertFalse(bodies["submit"]["is_extra_dice_granted"])
         self.assertEqual(bodies["submit"]["team_score"], 998)
         self.assertEqual(bodies["roulette"]["mileage_gained"], 50)
-        self.assertEqual(bodies["submit"]["mileage"], 30 if first_action == "submit" else 80)
-        self.assertEqual(bodies["roulette"]["total_mileage"], 80 if first_action == "submit" else 50)
+        self.assertEqual(
+            bodies["submit"]["mileage"], 30 if first_action == "submit" else 80
+        )
+        self.assertEqual(
+            bodies["roulette"]["total_mileage"], 80 if first_action == "submit" else 50
+        )
         team.refresh_from_db()
         state.refresh_from_db()
         access.refresh_from_db()
@@ -595,31 +744,54 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
             [(MileageType.CHALLENGE_SOLVE, 30), (MileageType.ROULETTE, 50)],
         )
 
-    def test_cross_team_solves_on_different_challenges_finish_with_consistent_scores(self):
+    def test_cross_team_solves_on_different_challenges_finish_with_consistent_scores(
+        self,
+    ):
         teams = [Team.objects.create(team_name=f"concurrent-{i}") for i in range(3)]
         users = [
-            User.objects.create_user(login_id=f"concurrent-{i}", nickname=f"user-{i}", team=team)
+            User.objects.create_user(
+                login_id=f"concurrent-{i}", nickname=f"user-{i}", team=team
+            )
             for i, team in enumerate(teams)
         ]
         challenges = [
             Challenge.objects.create(
-                title=f"concurrent-{i}", category=Challenge.CategoryType.WEB,
-                difficulty=Challenge.DifficultyType.EASY, score=1000,
-                initial_score=1000, minimum_score=100, decay=20, current_score=991,
-                flag_hash=hash_flag("MSG{concurrent}"), is_published=True,
-            ) for i in range(3)
+                title=f"concurrent-{i}",
+                category=Challenge.CategoryType.WEB,
+                difficulty=Challenge.DifficultyType.EASY,
+                score=1000,
+                initial_score=1000,
+                minimum_score=100,
+                decay=20,
+                current_score=991,
+                flag_hash=hash_flag("MSG{concurrent}"),
+                is_published=True,
+            )
+            for i in range(3)
         ]
         # Every new solve affects all teams, with a different submitting team.
         for i, challenge in enumerate(challenges):
-            cell = Cell.objects.create(cell_index=i + 1, type=Cell.CellType.CHALLENGE, name=str(i))
-            access = TeamChallengeAccess.objects.create(team=teams[i], challenge=challenge, source_cell=cell)
+            cell = Cell.objects.create(
+                cell_index=i + 1, type=Cell.CellType.CHALLENGE, name=str(i)
+            )
+            access = TeamChallengeAccess.objects.create(
+                team=teams[i], challenge=challenge, source_cell=cell
+            )
             TeamBoardState.objects.create(
-                team=teams[i], position=cell, active_challenge_access=access, dice_rolls_left=0,
+                team=teams[i],
+                position=cell,
+                active_challenge_access=access,
+                dice_rolls_left=0,
             )
             for j, team in enumerate(teams):
                 if i != j:
-                    Solve.objects.create(team=team, challenge=challenge, solved_by_user=users[j],
-                                         earned_score=1000, earned_mileage=30)
+                    Solve.objects.create(
+                        team=team,
+                        challenge=challenge,
+                        solved_by_user=users[j],
+                        earned_score=1000,
+                        earned_mileage=30,
+                    )
         barrier = Barrier(3)
 
         def submit(i):
@@ -630,17 +802,20 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
                     cursor.execute("SET statement_timeout = '10s'")
                 client = APIClient()
                 client.force_authenticate(user=User.objects.get(pk=users[i].pk))
+
                 # Rendezvous after each distinct challenge lock is acquired, before
                 # any team lock: all three scoring transactions truly overlap.
                 def synchronize(execute, sql, params, many, context):
                     result = execute(sql, params, many, context)
-                    if 'FROM "challenges"' in sql and 'FOR UPDATE' in sql:
+                    if 'FROM "challenges"' in sql and "FOR UPDATE" in sql:
                         barrier.wait(timeout=10)
                     return result
+
                 with connection.execute_wrapper(synchronize):
                     response = client.post(
                         f"/api/v1/challenges/{challenges[i].pk}/submit",
-                        {"flag": "MSG{concurrent}"}, format="json",
+                        {"flag": "MSG{concurrent}"},
+                        format="json",
                     )
                 return response.status_code, response.data
             finally:

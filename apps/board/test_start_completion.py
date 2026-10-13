@@ -10,24 +10,36 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Team, User
 from apps.board.models import (
-    Cell, DiceRoll, PendingDiceRoll, TeamBoardState, TeamCellConsumption,
-    TeamChallengeAccess, TeamChanceCard,
+    Cell,
+    DiceRoll,
+    PendingDiceRoll,
+    TeamBoardState,
+    TeamCellConsumption,
+    TeamChallengeAccess,
+    TeamChanceCard,
 )
 from apps.board.services import grant_dice_roll
 from apps.challenge.models import Challenge
 from apps.teams.models import MileageHistory
 
 
-@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+@override_settings(
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+)
 class StartCompletionTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
         call_command("seed_board", verbosity=0)
         cls.team = Team.objects.create(team_name="start-completion")
         cls.user = User.objects.create(
-            login_id="start-leader", nickname="leader", team=cls.team, is_leader=True,
+            login_id="start-leader",
+            nickname="leader",
+            team=cls.team,
+            is_leader=True,
         )
-        cls.state = TeamBoardState.objects.create(team=cls.team, position_id=1, dice_rolls_left=2)
+        cls.state = TeamBoardState.objects.create(
+            team=cls.team, position_id=1, dice_rolls_left=2
+        )
 
     def setUp(self):
         cache.clear()
@@ -36,7 +48,10 @@ class StartCompletionTestCase(TestCase):
 
     def post(self, action, key, body=None):
         return self.client.post(
-            f"/api/v1/board/{action}", body or {}, format="json", HTTP_IDEMPOTENCY_KEY=key,
+            f"/api/v1/board/{action}",
+            body or {},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY=key,
         )
 
     def place(self, index):
@@ -46,13 +61,15 @@ class StartCompletionTestCase(TestCase):
         if cell.type == Cell.CellType.CHALLENGE:
             challenge = Challenge.objects.filter(difficulty=cell.difficulty).first()
             TeamChallengeAccess.objects.get_or_create(
-                team=self.team, source_cell=cell, defaults={"challenge": challenge},
+                team=self.team,
+                source_cell=cell,
+                defaults={"challenge": challenge},
             )
 
     def consume(self, indexes):
-        TeamCellConsumption.objects.bulk_create([
-            TeamCellConsumption(team=self.team, cell_id=index) for index in indexes
-        ])
+        TeamCellConsumption.objects.bulk_create(
+            [TeamCellConsumption(team=self.team, cell_id=index) for index in indexes]
+        )
 
     def assert_completed(self, rolls):
         self.state.refresh_from_db()
@@ -96,27 +113,50 @@ class StartCompletionTestCase(TestCase):
         self.assertEqual(response.data["data"]["current_position"], 36)
         self.assertEqual(response.data["data"]["movement_path"], [36, *range(1, 37)])
         self.assertEqual(response.data["data"]["skipped_cells"], list(range(1, 36)))
-        self.assertEqual(response.data["data"]["start_reward"], {"mileage_gained": 100, "roll_gained": 0})
-        self.assertTrue(self.client.get("/api/v1/board/me").data["data"]["board_completed"])
+        self.assertEqual(
+            response.data["data"]["start_reward"],
+            {"mileage_gained": 100, "roll_gained": 0},
+        )
+        self.assertTrue(
+            self.client.get("/api/v1/board/me").data["data"]["board_completed"]
+        )
 
-    def test_first_start_landing_is_consumed_and_next_landing_skips_with_mileage_only(self):
+    def test_first_start_landing_is_consumed_and_next_landing_skips_with_mileage_only(
+        self,
+    ):
         for attempt in range(2):
             self.place(35)
             with patch("apps.board.services.random.randint", return_value=1):
                 response = self.post("dice/roll", f"start-{attempt}")
             self.assertEqual(response.status_code, 200, response.data)
-            self.assertEqual(response.data["data"]["current_position"], 1 if attempt == 0 else 2)
-            self.assertEqual(response.data["data"]["skipped_cells"], [] if attempt == 0 else [1])
-            self.assertEqual(response.data["data"]["movement_path"], [36, 1] if attempt == 0 else [36, 1, 2])
-            self.assertEqual(response.data["data"]["start_reward"], {"mileage_gained": 100, "roll_gained": 1 - attempt})
+            self.assertEqual(
+                response.data["data"]["current_position"], 1 if attempt == 0 else 2
+            )
+            self.assertEqual(
+                response.data["data"]["skipped_cells"], [] if attempt == 0 else [1]
+            )
+            self.assertEqual(
+                response.data["data"]["movement_path"],
+                [36, 1] if attempt == 0 else [36, 1, 2],
+            )
+            self.assertEqual(
+                response.data["data"]["start_reward"],
+                {"mileage_gained": 100, "roll_gained": 1 - attempt},
+            )
             cache.clear()
-            self.assertEqual(self.post("dice/roll", f"start-{attempt}").data, response.data)
-        self.assertTrue(TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists())
+            self.assertEqual(
+                self.post("dice/roll", f"start-{attempt}").data, response.data
+            )
+        self.assertTrue(
+            TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
         self.team.refresh_from_db()
         self.state.refresh_from_db()
         self.assertEqual(self.team.mileage, 200)
         self.assertEqual(self.state.dice_rolls_left, 1)
-        self.assertEqual(MileageHistory.objects.filter(team=self.team, type="START_BONUS").count(), 2)
+        self.assertEqual(
+            MileageHistory.objects.filter(team=self.team, type="START_BONUS").count(), 2
+        )
         self.assertEqual(DiceRoll.objects.filter(team=self.team).count(), 2)
 
     def test_passing_start_grants_mileage_only_and_keeps_consumed_cells_in_path(self):
@@ -128,29 +168,41 @@ class StartCompletionTestCase(TestCase):
         data = response.data["data"]
         self.assertEqual(data["movement_path"], [1, 2, 3, 4])
         self.assertEqual(data["skipped_cells"], [2, 3])
-        self.assertEqual(data["start_reward"], {"mileage_gained": 100, "roll_gained": 0})
+        self.assertEqual(
+            data["start_reward"], {"mileage_gained": 100, "roll_gained": 0}
+        )
         cache.clear()
         self.assertEqual(self.post("dice/roll", "pass-start").data, response.data)
         self.team.refresh_from_db()
         self.state.refresh_from_db()
         self.assertEqual(self.team.mileage, 100)
         self.assertEqual(self.state.dice_rolls_left, 1)
-        self.assertFalse(TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists())
+        self.assertFalse(
+            TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
 
     def test_pending_start_reward_is_applied_only_on_confirmation(self):
         self.place(35)
-        TeamChanceCard.objects.create(team=self.team, source_cell_id=7, card_id="card_reroll")
+        TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_reroll"
+        )
         with patch("apps.board.services.random.randint", return_value=1):
             response = self.post("dice/roll", "pending-start")
         self.assertTrue(response.data["data"]["pending_confirm"])
         self.team.refresh_from_db()
         self.assertEqual(self.team.mileage, 0)
-        self.assertFalse(TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists())
+        self.assertFalse(
+            TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
         confirmed = self.post("dice/confirm", "confirm-start")
         self.assertEqual(confirmed.status_code, 200, confirmed.data)
         cache.clear()
-        self.assertEqual(self.post("dice/confirm", "confirm-start").data, confirmed.data)
-        self.assertTrue(TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists())
+        self.assertEqual(
+            self.post("dice/confirm", "confirm-start").data, confirmed.data
+        )
+        self.assertTrue(
+            TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
         self.assertFalse(PendingDiceRoll.objects.filter(team=self.team).exists())
         self.team.refresh_from_db()
         self.state.refresh_from_db()
@@ -164,7 +216,10 @@ class StartCompletionTestCase(TestCase):
             with patch("apps.board.services.random.randint", return_value=1):
                 response = self.post("dice/roll", f"pass-consumed-start-{attempt}")
             self.assertEqual(response.status_code, 200, response.data)
-            self.assertEqual(response.data["data"]["start_reward"], {"mileage_gained": 100, "roll_gained": 0})
+            self.assertEqual(
+                response.data["data"]["start_reward"],
+                {"mileage_gained": 100, "roll_gained": 0},
+            )
         self.team.refresh_from_db()
         self.state.refresh_from_db()
         self.assertEqual(self.team.mileage, 200)
@@ -174,14 +229,24 @@ class StartCompletionTestCase(TestCase):
         self.place(21)
         response = self.post("airport/move", "airport-start", {"destination_index": 1})
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data["data"]["start_reward"], {"mileage_gained": 100, "roll_gained": 1})
-        self.assertTrue(TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists())
+        self.assertEqual(
+            response.data["data"]["start_reward"],
+            {"mileage_gained": 100, "roll_gained": 1},
+        )
+        self.assertTrue(
+            TeamCellConsumption.objects.filter(team=self.team, cell_id=1).exists()
+        )
         cache.clear()
-        self.assertEqual(self.post("airport/move", "airport-start", {"destination_index": 1}).data, response.data)
+        self.assertEqual(
+            self.post("airport/move", "airport-start", {"destination_index": 1}).data,
+            response.data,
+        )
         self.place(21)
         self.state.airport_move_used = False
         self.state.save(update_fields=["airport_move_used"])
-        rejected = self.post("airport/move", "airport-start-again", {"destination_index": 1})
+        rejected = self.post(
+            "airport/move", "airport-start-again", {"destination_index": 1}
+        )
         self.assertEqual(rejected.data["code"], "INVALID_DESTINATION_INDEX")
         self.team.refresh_from_db()
         self.state.refresh_from_db()
@@ -190,8 +255,14 @@ class StartCompletionTestCase(TestCase):
 
     def test_free_travel_rejects_consumed_start_without_spending_card(self):
         self.consume([1])
-        draw = TeamChanceCard.objects.create(team=self.team, source_cell_id=7, card_id="card_free_travel")
-        response = self.post("chance/use", "travel-start", {"card_id": draw.card_id, "destination_index": 1})
+        draw = TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_free_travel"
+        )
+        response = self.post(
+            "chance/use",
+            "travel-start",
+            {"card_id": draw.card_id, "destination_index": 1},
+        )
         self.assertEqual(response.data["code"], "INVALID_DESTINATION_INDEX")
         draw.refresh_from_db()
         self.assertIsNone(draw.used_at)
@@ -200,11 +271,15 @@ class StartCompletionTestCase(TestCase):
 
     def test_offset_skips_consumed_start_backwards_and_pays_mileage_only(self):
         self.consume([1])
-        TeamChanceCard.objects.create(team=self.team, source_cell_id=7, card_id="card_move_offset")
+        TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_move_offset"
+        )
         with patch("apps.board.services.random.randint", return_value=1):
             pending = self.post("dice/roll", "offset-pending")
         self.assertTrue(pending.data["data"]["pending_confirm"])
-        response = self.post("chance/use", "offset-start", {"card_id": "card_move_offset", "offset": -2})
+        response = self.post(
+            "chance/use", "offset-start", {"card_id": "card_move_offset", "offset": -2}
+        )
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["data"]["to_index"], 36)
         self.assertEqual(response.data["data"]["movement_path"], [2, 1, 36])
@@ -213,7 +288,9 @@ class StartCompletionTestCase(TestCase):
         self.state.refresh_from_db()
         self.assertEqual((self.team.mileage, self.state.dice_rolls_left), (100, 1))
 
-    def test_final_landing_stops_recharge_immediately_and_replay_does_not_consume_again(self):
+    def test_final_landing_stops_recharge_immediately_and_replay_does_not_consume_again(
+        self,
+    ):
         self.consume(range(2, 36))
         self.place(34)
         with patch("apps.board.services.random.randint", return_value=1):
@@ -231,11 +308,15 @@ class StartCompletionTestCase(TestCase):
     def test_last_cell_pending_confirmation_completes_only_when_finalized(self):
         self.consume(range(2, 36))
         self.place(34)
-        TeamChanceCard.objects.create(team=self.team, source_cell_id=7, card_id="card_reroll")
+        TeamChanceCard.objects.create(
+            team=self.team, source_cell_id=7, card_id="card_reroll"
+        )
         with patch("apps.board.services.random.randint", return_value=1):
             response = self.post("dice/roll", "pending-final")
         self.assertTrue(response.data["data"]["pending_confirm"])
-        self.assertFalse(self.client.get("/api/v1/board/me").data["data"]["board_completed"])
+        self.assertFalse(
+            self.client.get("/api/v1/board/me").data["data"]["board_completed"]
+        )
         confirmed = self.post("dice/confirm", "confirm-final")
         self.assertEqual(confirmed.status_code, 200, confirmed.data)
         self.assert_completed(1)
@@ -249,13 +330,18 @@ class StartCompletionTestCase(TestCase):
             self.assertEqual(state.dice_rolls_left, 2)
             self.assertIsNone(state.next_dice_reset_at)
 
-    def test_final_landing_after_start_crossing_keeps_mileage_but_stops_dice_rewards(self):
+    def test_final_landing_after_start_crossing_keeps_mileage_but_stops_dice_rewards(
+        self,
+    ):
         self.consume(range(3, 37))
         self.place(36)
         with patch("apps.board.services.random.randint", return_value=1):
             response = self.post("dice/roll", "final-after-start")
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data["data"]["start_reward"], {"mileage_gained": 100, "roll_gained": 0})
+        self.assertEqual(
+            response.data["data"]["start_reward"],
+            {"mileage_gained": 100, "roll_gained": 0},
+        )
         self.assert_completed(1)
         self.team.refresh_from_db()
         self.assertEqual(self.team.mileage, 100)

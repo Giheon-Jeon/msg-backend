@@ -8,19 +8,29 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('accounts', '0001_initial'),
-        ('instances', '0001_initial'),
+        ("accounts", "0001_initial"),
+        ("instances", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='InstanceLock',
+            name="InstanceLock",
             fields=[
-                ('user', models.OneToOneField(db_column='user_id', on_delete=django.db.models.deletion.CASCADE, primary_key=True, related_name='instance_lock', serialize=False, to=settings.AUTH_USER_MODEL)),
-                ('locked_at', models.DateTimeField(auto_now=True)),
+                (
+                    "user",
+                    models.OneToOneField(
+                        db_column="user_id",
+                        on_delete=django.db.models.deletion.CASCADE,
+                        primary_key=True,
+                        related_name="instance_lock",
+                        serialize=False,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("locked_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'db_table': 'instance_locks',
+                "db_table": "instance_locks",
             },
         ),
     ]

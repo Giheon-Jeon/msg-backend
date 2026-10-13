@@ -13,7 +13,13 @@ from django.test import TestCase, TransactionTestCase
 
 from apps.accounts.models import Team
 
-from .models import KothChallenge, KothClub, KothScorePeriod, KothScorePeriodStatus, KothSolve
+from .models import (
+    KothChallenge,
+    KothClub,
+    KothScorePeriod,
+    KothScorePeriodStatus,
+    KothSolve,
+)
 from .services import ScoreFetchError, poll_challenge_period
 from .test_http_clients import score_server
 
@@ -22,7 +28,10 @@ PERIOD = datetime(2026, 9, 10, 4, 45, tzinfo=timezone.utc)
 
 def make_challenge(name):
     return KothChallenge.objects.create(
-        club=KothClub.objects.create(name=name), title=name, open_group=1, status="ACTIVE",
+        club=KothClub.objects.create(name=name),
+        title=name,
+        open_group=1,
+        status="ACTIVE",
         inbound_internal_token_hash=hashlib.sha256(name.encode()).hexdigest(),
         score_api_token_env="TEST_POLL_SCORE_TOKEN",
     )
@@ -60,13 +69,22 @@ class ScorePayloadFailureTests(TestCase):
         healthy = make_challenge("b-healthy")
         with score_server(body=b'{"code":"SUCCESS"}') as (bad_url, bad_requests):
             with score_server() as (good_url, good_requests):
-                KothChallenge.objects.filter(pk=malformed.pk).update(score_api_url=bad_url)
-                KothChallenge.objects.filter(pk=healthy.pk).update(score_api_url=good_url)
-                with patch("apps.koth.management.commands.poll_koth_scores.time.sleep") as sleep:
+                KothChallenge.objects.filter(pk=malformed.pk).update(
+                    score_api_url=bad_url
+                )
+                KothChallenge.objects.filter(pk=healthy.pk).update(
+                    score_api_url=good_url
+                )
+                with patch(
+                    "apps.koth.management.commands.poll_koth_scores.time.sleep"
+                ) as sleep:
                     with self.assertRaises(CommandError):
                         call_command(
-                            "poll_koth_scores", period_id="2026-09-10T04:45:00Z", max_retries=1,
-                            stdout=StringIO(), stderr=StringIO(),
+                            "poll_koth_scores",
+                            period_id="2026-09-10T04:45:00Z",
+                            max_retries=1,
+                            stdout=StringIO(),
+                            stderr=StringIO(),
                         )
         sleep.assert_called_once_with(60)
         self.assertEqual(len(bad_requests), 2)
@@ -93,10 +111,16 @@ class ConcurrentScorePollTests(TransactionTestCase):
     def assert_overlapping_polls(self, first_fails, second_fails):
         challenge = make_challenge("concurrent-poll")
         team = Team.objects.create(team_name="concurrent-poll-team")
-        payload = {"code": "SUCCESS", "data": {
-            "koth_challenge_id": str(challenge.pk), "period_id": "2026-09-10T04:45:00Z",
-            "results": [{"team_id": str(team.pk), "period_rank": 1, "metric_score": 100}],
-        }}
+        payload = {
+            "code": "SUCCESS",
+            "data": {
+                "koth_challenge_id": str(challenge.pk),
+                "period_id": "2026-09-10T04:45:00Z",
+                "results": [
+                    {"team_id": str(team.pk), "period_rank": 1, "metric_score": 100}
+                ],
+            },
+        }
         first_fetch = threading.Event()
         second_fetch = threading.Event()
         first_finished = threading.Event()
@@ -112,7 +136,9 @@ class ConcurrentScorePollTests(TransactionTestCase):
             else:
                 second_fetch.set()
                 if not first_finished.wait(timeout=10):
-                    raise AssertionError("First poll did not finish its database transaction")
+                    raise AssertionError(
+                        "First poll did not finish its database transaction"
+                    )
                 should_fail = second_fails
             if should_fail:
                 raise ScoreFetchError("controlled score fetch failure")
@@ -130,7 +156,8 @@ class ConcurrentScorePollTests(TransactionTestCase):
                     if index == 0:
                         record = KothScorePeriod.objects.get(challenge=challenge)
                         first_snapshot.update(
-                            applied_at=record.applied_at, updated_at=record.updated_at,
+                            applied_at=record.applied_at,
+                            updated_at=record.updated_at,
                             response_payload=record.response_payload,
                         )
                     return result

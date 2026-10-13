@@ -2,7 +2,7 @@ import random
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Count, Exists, F, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from apps.accounts.models import Team
@@ -79,18 +79,80 @@ def get_default_team():
 # ---------------------------------------------------------------------------
 
 
-def get_or_create_board_state(team):
-    start_cell = Cell.objects.filter(cell_index=START_CELL_INDEX).first()
-    if start_cell is None:
-        raise BoardNotReady()
+def _board_state_queryset():
+    return TeamBoardState.objects.select_related("position", "active_challenge_access")
 
-    with transaction.atomic():
-        # Reads can apply a due recharge, so serialize them with rewards/rolls.
-        state, _ = TeamBoardState.objects.select_for_update().get_or_create(
-            team=team,
-            defaults={"position": start_cell},
+
+def _board_state_read_queryset(
+    *, include_completion=False, include_pending=False, include_cards=False
+):
+    annotations = {}
+    if include_completion:
+        completed_consumptions = (
+            TeamCellConsumption.objects.filter(
+                team_id=OuterRef("team_id"),
+                cell_id__gt=START_CELL_INDEX,
+                cell_id__lte=LAST_CELL_INDEX,
+            )
+            .values("team_id")
+            .annotate(total=Count("pk"))
+            .filter(total__gte=BOARD_SIZE - 1)
         )
-        state = apply_pending_dice_recharge(state)
+        annotations["board_completed"] = Exists(completed_consumptions)
+    if include_pending:
+        annotations["has_pending_roll"] = Exists(
+            PendingDiceRoll.objects.filter(team_id=OuterRef("team_id"))
+        )
+    if include_cards:
+        annotations["has_chance_cards"] = Exists(
+            TeamChanceCard.objects.filter(
+                team_id=OuterRef("team_id"),
+                card_id__in=ChanceCard.CardId.values,
+            )
+        )
+    return _board_state_queryset().annotate(**annotations)
+
+
+def get_or_create_board_state(team):
+    with transaction.atomic():
+        # Mutations and due recharges serialize on the team's state row.
+        locked_states = _board_state_queryset().select_for_update(of=("self",))
+        try:
+            state = locked_states.get(team=team)
+        except TeamBoardState.DoesNotExist:
+            start_cell = Cell.objects.filter(cell_index=START_CELL_INDEX).first()
+            if start_cell is None:
+                raise BoardNotReady()
+            state, _ = locked_states.get_or_create(
+                team=team,
+                defaults={"position": start_cell},
+            )
+        return apply_pending_dice_recharge(state)
+
+
+def get_board_state_for_read(
+    team, *, include_completion=False, include_pending=False, include_cards=False
+):
+    """Avoid a write transaction when a read cannot change recharge state."""
+    read_states = _board_state_read_queryset(
+        include_completion=include_completion,
+        include_pending=include_pending,
+        include_cards=include_cards,
+    )
+    state = read_states.filter(team=team).first()
+    if state is None:
+        get_or_create_board_state(team)
+        return read_states.get(team=team)
+
+    now = timezone.now()
+    recharge_update_required = (
+        state.next_dice_reset_at is not None
+        if state.dice_rolls_left >= MAX_DICE_ROLLS
+        else state.next_dice_reset_at is None or now >= state.next_dice_reset_at
+    )
+    if recharge_update_required:
+        get_or_create_board_state(team)
+        return read_states.get(team=team)
     return state
 
 
@@ -106,10 +168,13 @@ def _update_dice_recharge(state, now):
         return
 
     elapsed_intervals = (now - state.next_dice_reset_at) // DICE_RECHARGE_INTERVAL + 1
-    state.dice_rolls_left = min(MAX_DICE_ROLLS, state.dice_rolls_left + elapsed_intervals)
+    state.dice_rolls_left = min(
+        MAX_DICE_ROLLS, state.dice_rolls_left + elapsed_intervals
+    )
     state.next_dice_reset_at = (
         state.next_dice_reset_at + elapsed_intervals * DICE_RECHARGE_INTERVAL
-        if state.dice_rolls_left < MAX_DICE_ROLLS else None
+        if state.dice_rolls_left < MAX_DICE_ROLLS
+        else None
     )
 
 
@@ -118,7 +183,9 @@ def apply_pending_dice_recharge(state):
     previous = (state.dice_rolls_left, state.next_dice_reset_at)
     _update_dice_recharge(state, timezone.now())
     if previous != (state.dice_rolls_left, state.next_dice_reset_at):
-        state.save(update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"])
+        state.save(
+            update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"]
+        )
     return state
 
 
@@ -144,13 +211,28 @@ def _consume_dice_roll(state):
 
 
 def get_consumed_indexes(team):
-    return set(TeamCellConsumption.objects.filter(team=team).values_list("cell_id", flat=True))
+    return set(
+        TeamCellConsumption.objects.filter(team=team).values_list("cell_id", flat=True)
+    )
 
 
-def is_board_completed(team):
-    return TeamCellConsumption.objects.filter(
-        team=team, cell_id__gt=START_CELL_INDEX, cell_id__lte=LAST_CELL_INDEX,
-    ).count() >= BOARD_SIZE - 1
+def is_board_completed(team, *, consumed_indexes=None):
+    if consumed_indexes is not None:
+        return (
+            sum(
+                START_CELL_INDEX < index <= LAST_CELL_INDEX
+                for index in consumed_indexes
+            )
+            >= BOARD_SIZE - 1
+        )
+    return (
+        TeamCellConsumption.objects.filter(
+            team=team,
+            cell_id__gt=START_CELL_INDEX,
+            cell_id__lte=LAST_CELL_INDEX,
+        ).count()
+        >= BOARD_SIZE - 1
+    )
 
 
 def challenge_solve_deadline(access):
@@ -158,13 +240,16 @@ def challenge_solve_deadline(access):
 
 
 def is_challenge_timer_running(access):
-    return access.status == TeamChallengeAccess.Status.OPENED and timezone.now() < challenge_solve_deadline(
-        access
+    return (
+        access.status == TeamChallengeAccess.Status.OPENED
+        and timezone.now() < challenge_solve_deadline(access)
     )
 
 
-def compute_blocked_reason(team, state):
-    if is_board_completed(team):
+def compute_blocked_reason(team, state, *, board_completed=None, has_pending=None):
+    if board_completed is None:
+        board_completed = is_board_completed(team)
+    if board_completed:
         return "BOARD_COMPLETED"
 
     cell = state.position
@@ -174,7 +259,9 @@ def compute_blocked_reason(team, state):
             return "CHALLENGE_NOT_SELECTED"
         # The solve reward window does not prevent spending remaining rolls.
 
-    if PendingDiceRoll.objects.filter(team=team).exists():
+    if has_pending is None:
+        has_pending = PendingDiceRoll.objects.filter(team=team).exists()
+    if has_pending:
         return "PENDING_CONFIRM"
     if state.dice_rolls_left <= 0:
         return "NO_ROLL_LEFT"
@@ -199,7 +286,9 @@ def grant_mileage(team, amount, mileage_type, reason=None):
         return
     Team.objects.filter(pk=team.pk).update(mileage=F("mileage") + amount)
     team.mileage += amount
-    MileageHistory.objects.create(team=team, type=mileage_type, amount=amount, reason=reason)
+    MileageHistory.objects.create(
+        team=team, type=mileage_type, amount=amount, reason=reason
+    )
 
 
 def roulette_reason(cell):
@@ -239,7 +328,12 @@ def finalize_landing(team, state, cell, passed_start, landed_on_start):
     state.save(update_fields=update_fields)
 
     if reward["mileage_gained"]:
-        grant_mileage(team, reward["mileage_gained"], MileageType.START_BONUS, reason="START 칸 통과")
+        grant_mileage(
+            team,
+            reward["mileage_gained"],
+            MileageType.START_BONUS,
+            reason="START 칸 통과",
+        )
 
     return reward
 
@@ -377,7 +471,9 @@ def roll_dice(team):
                 },
             }
 
-        start_reward = finalize_landing(team, state, destination_cell, passed_start, landed_on_start)
+        start_reward = finalize_landing(
+            team, state, destination_cell, passed_start, landed_on_start
+        )
 
     return {
         "dice_a": dice_a,
@@ -412,7 +508,9 @@ def confirm_dice_roll(team):
 
         destination_cell = Cell.objects.get(cell_index=pending.candidate_position)
         landed_on_start = pending.candidate_position == START_CELL_INDEX
-        start_reward = finalize_landing(team, state, destination_cell, pending.passed_start, landed_on_start)
+        start_reward = finalize_landing(
+            team, state, destination_cell, pending.passed_start, landed_on_start
+        )
 
         result = {
             "dice_a": pending.dice_a,
@@ -463,7 +561,9 @@ def move_team_via_airport(team, destination_index):
         state.airport_move_used = True
         state.save(update_fields=["airport_move_used", "updated_at"])
 
-        start_reward = finalize_landing(team, state, destination_cell, passed_start, landed_on_start)
+        start_reward = finalize_landing(
+            team, state, destination_cell, passed_start, landed_on_start
+        )
 
     return {
         "previous_position": previous_position,
@@ -517,8 +617,8 @@ def spin_roulette(team):
 
 
 def get_current_cell_candidates(team):
-    state = get_or_create_board_state(team)
-    if PendingDiceRoll.objects.filter(team=team).exists():
+    state = get_board_state_for_read(team, include_pending=True)
+    if state.has_pending_roll:
         raise PendingRollUnresolved()
 
     cell = state.position
@@ -545,7 +645,9 @@ def get_current_cell_candidates(team):
 
     missing_count = CHALLENGE_CANDIDATE_COUNT - len(existing_candidates)
     if missing_count > 0:
-        existing_challenge_ids = [candidate.challenge_id for candidate in existing_candidates]
+        existing_challenge_ids = [
+            candidate.challenge_id for candidate in existing_candidates
+        ]
         available_challenges = list(
             Challenge.objects.filter(
                 difficulty=cell.difficulty, board_meta__isnull=False, is_published=True
@@ -561,13 +663,18 @@ def get_current_cell_candidates(team):
 
         used_orders = {candidate.display_order for candidate in existing_candidates}
         free_orders = [
-            order for order in range(1, CHALLENGE_CANDIDATE_COUNT + 1) if order not in used_orders
+            order
+            for order in range(1, CHALLENGE_CANDIDATE_COUNT + 1)
+            if order not in used_orders
         ]
 
         for display_order, challenge in zip(free_orders, selected_challenges):
             existing_candidates.append(
                 TeamCellCandidate.objects.create(
-                    team=team, cell=cell, challenge=challenge, display_order=display_order
+                    team=team,
+                    cell=cell,
+                    challenge=challenge,
+                    display_order=display_order,
                 )
             )
 
@@ -689,7 +796,9 @@ def get_opened_challenges_summary(team):
         .order_by("opened_at")
     )
     solved_accesses = [
-        access for access in accesses if access.status == TeamChallengeAccess.Status.CLEARED
+        access
+        for access in accesses
+        if access.status == TeamChallengeAccess.Status.CLEARED
     ]
 
     return {
@@ -709,7 +818,9 @@ def get_opened_challenges_summary(team):
         ],
         "total_count": len(accesses),
         "solved_count": len(solved_accesses),
-        "total_score": sum(access.challenge.current_score for access in solved_accesses),
+        "total_score": sum(
+            access.challenge.current_score for access in solved_accesses
+        ),
     }
 
 
@@ -732,7 +843,9 @@ def get_challenges_progress_summary(team):
     for challenge in challenges:
         access = access_by_challenge_id.get(challenge.challenge_id)
         is_opened = access is not None
-        is_solved = access is not None and access.status == TeamChallengeAccess.Status.CLEARED
+        is_solved = (
+            access is not None and access.status == TeamChallengeAccess.Status.CLEARED
+        )
         if is_opened:
             opened_count += 1
         if is_solved:
@@ -762,18 +875,23 @@ def get_challenges_progress_summary(team):
 
 
 def build_cell_states(team):
-    consumed_indexes = sorted(get_consumed_indexes(team))
-    accesses = {
-        access.source_cell_id: access
-        for access in TeamChallengeAccess.objects.filter(team=team).select_related("challenge", "challenge__board_meta")
-    }
+    accesses = TeamChallengeAccess.objects.filter(
+        team=team,
+        source_cell_id=OuterRef("cell_id"),
+    )
+    consumed_cells = TeamCellConsumption.objects.filter(team=team).annotate(
+        access_status=Subquery(accesses.values("status")[:1]),
+        challenge_category=Subquery(accesses.values("challenge__category")[:1]),
+    )
 
     states = []
-    for cell_index in consumed_indexes:
-        access = accesses.get(cell_index)
-        if access is not None and access.status == TeamChallengeAccess.Status.CLEARED:
+    consumed_cell_indexes = []
+    for consumption in consumed_cells.order_by("cell_id"):
+        cell_index = consumption.cell_id
+        consumed_cell_indexes.append(cell_index)
+        if consumption.access_status == TeamChallengeAccess.Status.CLEARED:
             status = "CLEARED"
-        elif access is not None and access.status == TeamChallengeAccess.Status.OPENED:
+        elif consumption.access_status == TeamChallengeAccess.Status.OPENED:
             status = "OPENED"
         else:
             status = "CONSUMED"
@@ -781,10 +899,10 @@ def build_cell_states(team):
             {
                 "cell_index": cell_index,
                 "status": status,
-                "category": access.challenge.category if access is not None else None,
+                "category": consumption.challenge_category,
             }
         )
-    return states, consumed_indexes
+    return states, consumed_cell_indexes
 
 
 # ---------------------------------------------------------------------------
@@ -808,18 +926,31 @@ def _card_usable_now(card, state, blocked_reason, has_pending):
 def _held_cards_queryset(team):
     """아직 쓰지도 버리지도 않은, 현재 보유 중인 찬스카드."""
     return TeamChanceCard.objects.filter(
-        team=team, card_id__in=ChanceCard.CardId.values,
-        used_at__isnull=True, discarded_at__isnull=True,
+        team=team,
+        card_id__in=ChanceCard.CardId.values,
+        used_at__isnull=True,
+        discarded_at__isnull=True,
     )
 
 
-def build_chance_cards_view(team, state):
-    draws = TeamChanceCard.objects.select_related("card").filter(
-        team=team, card_id__in=ChanceCard.CardId.values,
-    ).order_by("drawn_at")
-    blocked_reason = compute_blocked_reason(team, state)
+def build_chance_cards_view(team, state, *, board_completed=None):
+    draws = list(
+        TeamChanceCard.objects.select_related("card")
+        .filter(
+            team=team,
+            card_id__in=ChanceCard.CardId.values,
+        )
+        .order_by("drawn_at")
+    )
+    if not draws:
+        return []
     has_pending = PendingDiceRoll.objects.filter(team=team).exists()
-    awaiting_discard = _held_cards_queryset(team).count() >= 2
+    blocked_reason = compute_blocked_reason(
+        team, state, board_completed=board_completed, has_pending=has_pending
+    )
+    awaiting_discard = (
+        sum(draw.used_at is None and draw.discarded_at is None for draw in draws) >= 2
+    )
 
     result = []
     for draw in draws:
@@ -854,12 +985,16 @@ def draw_chance_card(team):
         if TeamChanceCard.objects.filter(team=team, source_cell=cell).exists():
             raise NotChanceCell()
 
-        card = random.choice(list(ChanceCard.objects.filter(card_id__in=ChanceCard.CardId.values)))
+        card = random.choice(
+            list(ChanceCard.objects.filter(card_id__in=ChanceCard.CardId.values))
+        )
         draw = TeamChanceCard.objects.create(team=team, source_cell=cell, card=card)
 
         consume_cell(team, cell)
         grant_dice_roll(state, CHANCE_DRAW_ROLL_BONUS)
-        state.save(update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"])
+        state.save(
+            update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"]
+        )
 
     awaiting_discard = _held_cards_queryset(team).count() >= 2
     return draw, state.dice_rolls_left, awaiting_discard
@@ -873,15 +1008,23 @@ def discard_chance_card(team, card_id, *, team_card_id=None):
     with transaction.atomic():
         # Serialize discards with draws and uses, including two different cards.
         get_or_create_board_state(team)
-        held = list(_held_cards_queryset(team).select_for_update(of=("self",)).select_related("card"))
+        held = list(
+            _held_cards_queryset(team)
+            .select_for_update(of=("self",))
+            .select_related("card")
+        )
         if len(held) < 2:
             raise NoCardToDiscard()
 
-        target = next((
-            draw for draw in held
-            if (team_card_id is None or draw.pk == team_card_id)
-            and (not card_id or draw.card_id == card_id)
-        ), None)
+        target = next(
+            (
+                draw
+                for draw in held
+                if (team_card_id is None or draw.pk == team_card_id)
+                and (not card_id or draw.card_id == card_id)
+            ),
+            None,
+        )
         if target is None:
             raise ChanceCardNotFound()
 
@@ -891,8 +1034,10 @@ def discard_chance_card(team, card_id, *, team_card_id=None):
         remaining = next(draw for draw in held if draw.pk != target.pk)
 
     return {
-        "discarded_card_id": target.card_id, "kept_card_id": remaining.card_id,
-        "discarded_team_card_id": str(target.pk), "kept_team_card_id": str(remaining.pk),
+        "discarded_card_id": target.card_id,
+        "kept_card_id": remaining.card_id,
+        "discarded_team_card_id": str(target.pk),
+        "kept_team_card_id": str(remaining.pk),
     }
 
 
@@ -922,8 +1067,12 @@ def _effect_reroll(team, state, draw, payload):
     destination_cell = Cell.objects.get(cell_index=destination)
 
     DiceRoll.objects.create(
-        team=team, dice_a=dice_a, dice_b=dice_b, rolled_number=rolled_number,
-        previous_position=previous_position, current_position=destination,
+        team=team,
+        dice_a=dice_a,
+        dice_b=dice_b,
+        rolled_number=rolled_number,
+        previous_position=previous_position,
+        current_position=destination,
     )
 
     draw.used_at = timezone.now()
@@ -961,7 +1110,9 @@ def _effect_roll_twice_choose(team, state, draw, payload):
     destination, movement_path, skipped_cells, passed_start = compute_movement(
         consumed, previous_position, first_number
     )
-    second_destination, _, _, _ = compute_movement(consumed, previous_position, second_number)
+    second_destination, _, _, _ = compute_movement(
+        consumed, previous_position, second_number
+    )
     destination_cell = Cell.objects.get(cell_index=destination)
 
     _consume_dice_roll(state)
@@ -1114,14 +1265,19 @@ def use_chance_card(team, card_id, payload, *, team_card_id=None):
     if card_id and card_id not in ChanceCard.CardId.values:
         raise ChanceCardNotFound()
 
-    draws = TeamChanceCard.objects.filter(team=team, card_id__in=ChanceCard.CardId.values)
+    draws = TeamChanceCard.objects.filter(
+        team=team, card_id__in=ChanceCard.CardId.values
+    )
     if card_id:
         draws = draws.filter(card_id=card_id)
     if team_card_id is not None:
         existing_draw = draws.filter(pk=team_card_id).first()
     else:
         # Retain legacy card_id requests, choosing a specific unused copy once.
-        existing_draw = draws.filter(used_at__isnull=True, discarded_at__isnull=True).first() or draws.first()
+        existing_draw = (
+            draws.filter(used_at__isnull=True, discarded_at__isnull=True).first()
+            or draws.first()
+        )
     if existing_draw is None:
         raise ChanceCardNotFound()
     if existing_draw.used_at is not None:
@@ -1180,7 +1336,11 @@ def confirm_chance_choice(team, choice):
         if draw is None or pending is None:
             raise ChanceConfirmNotFound()
 
-        chosen_number = draw.pending_first_number if choice == "FIRST" else draw.pending_second_number
+        chosen_number = (
+            draw.pending_first_number
+            if choice == "FIRST"
+            else draw.pending_second_number
+        )
         previous_position = pending.previous_position
         consumed = get_consumed_indexes(team)
         destination, movement_path, skipped_cells, passed_start = compute_movement(
@@ -1192,7 +1352,9 @@ def confirm_chance_choice(team, choice):
         draw.used_at = timezone.now()
         draw.pending_first_number = None
         draw.pending_second_number = None
-        draw.save(update_fields=["used_at", "pending_first_number", "pending_second_number"])
+        draw.save(
+            update_fields=["used_at", "pending_first_number", "pending_second_number"]
+        )
         pending.delete()
 
         finalize_landing(team, state, destination_cell, passed_start, landed_on_start)

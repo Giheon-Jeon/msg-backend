@@ -15,8 +15,9 @@ class EnvelopeTests(TestCase):
         cache.clear()
         self.client = APIClient()
         self.team = Team.objects.create(team_name="봉투팀")
-        User.objects.create_user(login_id="env", password="pw1234",
-                                 nickname="봉투", team=self.team)
+        User.objects.create_user(
+            login_id="env", password="pw1234", nickname="봉투", team=self.team
+        )
 
     def assertEnvelope(self, res):
         self.assertEqual(set(res.data), {"code", "message", "data"})
@@ -24,15 +25,21 @@ class EnvelopeTests(TestCase):
         self.assertIsInstance(res.data["message"], str)
 
     def test_success_envelope(self):
-        res = self.client.post("/api/v1/auth/login",
-                               {"login_id": "env", "password": "pw1234"}, format="json")
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": "env", "password": "pw1234"},
+            format="json",
+        )
         self.assertEnvelope(res)
         self.assertEqual(res.data["code"], "SUCCESS")
 
     def test_error_envelopes(self):
         cases = [
-            self.client.post("/api/v1/auth/login",
-                             {"login_id": "env", "password": "no"}, format="json"),
+            self.client.post(
+                "/api/v1/auth/login",
+                {"login_id": "env", "password": "no"},
+                format="json",
+            ),
             self.client.get("/api/v1/teams/me"),
             self.client.get("/api/v1/teams/me", HTTP_AUTHORIZATION="Bearer bad"),
             self.client.post("/api/v1/auth/refresh", {}, format="json"),
