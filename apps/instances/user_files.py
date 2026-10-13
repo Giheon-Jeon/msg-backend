@@ -30,12 +30,12 @@ from apps.instances.poller import (
     workflow_run_is_retryable,
 )
 from apps.instances.releases import ReleaseValidationError
+from apps.instances.release_files import file_bundle_for_release, USER_FILES_ARCHIVE
 
 logger = logging.getLogger(__name__)
 
 USER_FILES_BUNDLE_SUFFIX = "-user-files-bundle"
 USER_FILES_MANIFEST = "user-files.json"
-USER_FILES_ARCHIVE = "user-files.zip"
 MAX_FILE_COUNT = 1_000
 MAX_UNCOMPRESSED_SIZE = 100 * 1024 * 1024
 MAX_ARTIFACT_SIZE = 110 * 1024 * 1024
@@ -358,14 +358,14 @@ def selected_user_file_bundle(challenge):
     elif runtime_config.current_release is None:
         return None
     else:
-        bundle = bundles.filter(
-            registry_revision=runtime_config.current_release.registry_revision
-        ).first()
+        bundle = file_bundle_for_release(runtime_config.current_release)
     return bundle
 
 
-def current_user_file_bundle(challenge):
-    bundle = selected_user_file_bundle(challenge)
+def current_user_file_bundle(challenge, *, release=None):
+    if release is not None and release.challenge_id != challenge.pk:
+        return None
+    bundle = file_bundle_for_release(release) if release is not None else selected_user_file_bundle(challenge)
     if bundle is None or not bundle.present or not bundle.object_key:
         return None
     return bundle

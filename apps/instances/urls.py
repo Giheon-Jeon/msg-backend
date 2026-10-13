@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.instances.admin_views import ReleaseActivateView, ReleaseDeriveView, ReleaseListCreateView
 from apps.instances.secret_views import RuntimeSecretListCreateView
+from apps.instances.release_file_views import ReleaseFilesConfigureView
 from apps.instances.environment_file_views import EnvironmentFileImportView, EnvironmentFilePreviewView
 from apps.instances.repository_environment_views import RepositoryEnvironmentView, RepositoryEnvironmentPreviewView, RepositoryEnvironmentImportView
 from apps.instances.views import (
@@ -13,6 +14,8 @@ from apps.instances.views import (
 )
 
 urlpatterns = [
+    path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/files",
+         ReleaseFilesConfigureView.as_view(), name="admin-release-files-configure"),
     path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/repository_environment",
          RepositoryEnvironmentView.as_view(), name="admin-repository-environment"),
     path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/repository_environment/preview",

@@ -44,6 +44,12 @@ class IsolationProfile(models.TextChoices):
     PWN = "PWN"
 
 
+class UserFilesMode(models.TextChoices):
+    MATCH_REVISION = "MATCH_REVISION"
+    SELECTED = "SELECTED"
+    NONE = "NONE"
+
+
 class Instance(models.Model):
     instance_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -173,6 +179,11 @@ class ChallengeRelease(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
     source_ref = models.CharField(max_length=200, blank=True, default="")
     note = models.TextField(null=True, blank=True)
+    user_files_mode = models.CharField(max_length=20, choices=UserFilesMode.choices, default=UserFilesMode.MATCH_REVISION)
+    user_file_bundle = models.ForeignKey(
+        "instances.ChallengeUserFileBundle", on_delete=models.RESTRICT,
+        null=True, blank=True, related_name="selected_releases",
+    )
     # .env 저장 요청의 재시도는 같은 릴리스를 반환한다. 응답에는 포함하지 않는다
     env_import_id = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     env_import_fingerprint = models.CharField(max_length=64, blank=True, default="", editable=False)
@@ -184,6 +195,11 @@ class ChallengeRelease(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["challenge", "version"], name="uq_release_challenge_version"
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(user_files_mode="SELECTED", user_file_bundle__isnull=False)
+                           | models.Q(user_files_mode__in=["MATCH_REVISION", "NONE"], user_file_bundle__isnull=True)),
+                name="ck_release_user_files_selection",
             ),
         ]
         indexes = [models.Index(fields=["challenge", "-version"])]

@@ -52,7 +52,8 @@ class ReleaseListCreateView(APIView):
             .prefetch_related("containers")
             .order_by("-version")
         )
-        rows = [serialize_release(release, current_id) for release in releases]
+        bundles = list(challenge.user_file_bundles.all())
+        rows = [serialize_release(release, current_id, bundles) for release in releases]
 
         return ok(
             {

@@ -4,6 +4,30 @@ from django.test import TransactionTestCase
 
 
 class LegacyReleaseMigrationTests(TransactionTestCase):
+    def test_release_file_upgrade_preserves_current_release_and_defaults_to_same_publish(self):
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
+        self.addCleanup(self.restore_schema, latest)
+        target = [("instances", "0010_merge_user_files_environment")]
+        executor.migrate(target)
+        apps = executor.loader.project_state(target).apps
+        Challenge = apps.get_model("challenge", "Challenge")
+        Release = apps.get_model("instances", "ChallengeRelease")
+        Config = apps.get_model("instances", "ChallengeRuntimeConfig")
+        challenge = Challenge.objects.create(title="Existing", category="WEB", difficulty="EASY", score=100, flag_hash="test")
+        release = Release.objects.create(challenge=challenge, version=7, registry_revision=31,
+            isolation_profile="WEB", cpu_millicores=500, memory_mib=512, ephemeral_storage_mib=1024)
+        Config.objects.create(challenge=challenge, current_release=release)
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(latest)
+        apps = executor.loader.project_state(latest).apps
+        config = apps.get_model("instances", "ChallengeRuntimeConfig").objects.get(challenge_id=challenge.pk)
+        self.assertEqual(config.current_release_id, release.pk)
+        self.assertEqual(config.current_release.registry_revision, 31)
+        self.assertEqual(config.current_release.user_files_mode, "MATCH_REVISION")
+        self.assertIsNone(config.current_release.user_file_bundle_id)
+
     def test_upgrade_from_poller_migration_adds_user_file_bundle(self):
         executor = MigrationExecutor(connection)
         latest = executor.loader.graph.leaf_nodes()

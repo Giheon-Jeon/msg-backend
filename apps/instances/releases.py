@@ -359,6 +359,8 @@ def create_release(challenge, validated, created_by, derived_from=None):
         version=next_release_version(challenge),
         registry_revision=validated["registry_revision"],
         derived_from=derived_from,
+        **({"user_files_mode": derived_from.user_files_mode,
+            "user_file_bundle_id": derived_from.user_file_bundle_id} if derived_from else {}),
         challenge_slug=validated["challenge_slug"],
         runtime_type=validated["runtime_type"],
         architecture=validated["architecture"],
@@ -443,7 +445,8 @@ def is_deployable(release):
     return True
 
 
-def serialize_release(release, current_release_id=None):
+def serialize_release(release, current_release_id=None, file_bundles=None):
+    from apps.instances.release_files import release_files_summary
     containers = list(release.containers.all())
     references = {reference for container in containers for reference in container.secret_env.values()}
     records = RuntimeSecret.objects.filter(challenge_id=release.challenge_id, secret_id__in=references).only("secret_id", "name", "version")
@@ -468,6 +471,7 @@ def serialize_release(release, current_release_id=None):
         "challenge_id": str(release.challenge_id),
         "version": release.version,
         "registry_revision": release.registry_revision,
+        "user_files": release_files_summary(release, file_bundles),
         "derived_from_release_id": str(release.derived_from_id) if release.derived_from_id else None,
         "challenge_slug": release.challenge_slug,
         "runtime_type": release.runtime_type,
