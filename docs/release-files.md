@@ -41,4 +41,11 @@ status는 available, pending, none, disabled, unavailable을 구분합니다
 available은 파일 저장 기록이 있다는 뜻이며 실제 저장소 접근 가능 여부는 다운로드 때 확인합니다
 선택된 ZIP은 참조하는 릴리스가 남아 있는 동안 개별 삭제할 수 없습니다
 
+## 파일 수집 실패
+
+GCS나 로컬 파일 저장소에서 오류가 나면 해당 파일을 미처리 상태로 남기고 다음 파일을 수집합니다
+다음 수집 주기에 실패한 파일을 다시 시도하며, GCS 권한·인증 오류는 운영자가 설정을 복구한 뒤 재시도할 수 있습니다
+저장 실패 로그에는 파일 발행 이름과 오류 종류만 남깁니다
+저장소 오류 때문에 현재 적용 버전이나 이미 등록된 ZIP을 바꾸지는 않습니다
+
 [API 계약](release-files.openapi.json) · [기능 검사](../apps/instances/tests_release_files.py)

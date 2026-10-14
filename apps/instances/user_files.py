@@ -12,6 +12,8 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
+from google.api_core.exceptions import GoogleAPIError
+from google.auth.exceptions import GoogleAuthError
 
 from apps.instances.models import (
     ChallengeRelease,
@@ -326,8 +328,12 @@ def poll_user_files_once(token=None):
 
         try:
             status, detail = register_user_files_bundle(manifest, archive_bytes, artifact)
-        except OSError as error:
-            logger.warning("user-files poller 저장 실패 %s: %s", artifact.get("name"), error)
+        except (OSError, GoogleAPIError, GoogleAuthError) as error:
+            # GCS SDK 오류도 미처리 상태로 남겨 다음 poll에서 다시 시도한다
+            logger.warning(
+                "user-files poller 저장 실패 %s (%s)",
+                artifact.get("name"), type(error).__name__,
+            )
             summary["error"] += 1
             continue
         summary[status] += 1

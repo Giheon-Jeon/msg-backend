@@ -116,7 +116,7 @@ class ReleaseFilesTests(ReleaseTestBase):
         first = self.configure("SELECTED", bundle, key="same-request")
         again = self.configure("SELECTED", bundle, key="same-request")
         self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.content, again.content)
+        self.assertEqual(first.json(), again.json())
         self.assertEqual(self.configure("NONE", key="same-request").status_code, 409)
         self.assertEqual(ChallengeRelease.objects.count(), 2)
         self.assertEqual(self.client.post(self.url, {"mode": "NONE"}, format="json").status_code, 400)
@@ -192,7 +192,6 @@ class ReleaseFilesTests(ReleaseTestBase):
             downloaded = self.client.get(detail.data["data"]["files"][0]["download_url"])
             self.assertEqual(self.client.get(f"{detail_url}/files/{second.pk}/download").status_code, 404)
         self.assertEqual(hashlib.sha256(b"".join(downloaded.streaming_content)).hexdigest(), first.sha256)
-        downloaded.close()
         instance.status = InstanceStatus.STOPPED
         instance.save(update_fields=["status"])
         self.assertEqual(self.client.get(detail_url).data["data"]["files"][0]["file_id"], str(second.pk))
@@ -215,7 +214,7 @@ class ReleaseFilesTests(ReleaseTestBase):
                 self.assertIsNone(detail.data["data"]["instance"])
                 downloaded = self.client.get(detail.data["data"]["files"][0]["download_url"])
                 self.assertEqual(downloaded.status_code, 200)
-                downloaded.close()
+                self.assertEqual(hashlib.sha256(b"".join(downloaded.streaming_content)).hexdigest(), second.sha256)
                 self.assertEqual(self.client.get(f"{url}/files/{first.pk}/download").status_code, 404)
 
     def test_files_and_release_are_scoped_to_the_challenge_and_admin(self):
