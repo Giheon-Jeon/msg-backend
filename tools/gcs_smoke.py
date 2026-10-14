@@ -68,12 +68,16 @@ def main():
             raise RuntimeError(name)
 
     try:
+        run_id = os.getenv("GCS_QA_RUN_ID", "")
         if args.local_storage:
             os.environ["GCS_ENABLED"] = "False"
-        elif os.getenv("GCS_ENABLED", "").lower() != "true" or not re.fullmatch(
-            r"dev/qa/gcs-smoke/[0-9]+-[0-9]+", os.getenv("GCS_OBJECT_PREFIX", "")
-        ):
-            raise RuntimeError("GCS requires a unique run prefix below dev/qa/gcs-smoke")
+            run_id = "0-" + str(secrets.randbelow(10**10))
+        elif (os.getenv("GCS_ENABLED", "").lower() != "true"
+              or os.getenv("GCS_OBJECT_PREFIX") != "dev"
+              or not re.fullmatch(r"[0-9]+-[0-9]+", run_id)):
+            raise RuntimeError("GCS requires the dev prefix and a unique numeric QA run ID")
+        slug = "qa-gcs-smoke-" + run_id
+        report["qa_slug"] = slug
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         os.environ["DJANGO_SETTINGS_MODULE"] = "tools.gcs_smoke_settings"
@@ -121,7 +125,7 @@ def main():
                 team={"player": team, "outsider": outsider_team}.get(role),
             )
         challenge = Challenge.objects.create(
-            challenge_slug="gcs-smoke", title="GCS smoke", category="WEB",
+            challenge_slug=slug, title="GCS smoke", category="WEB",
             difficulty="EASY", score=100, flag_hash="unused", is_published=True,
         )
         cell = Cell.objects.create(cell_index=1, type="CHALLENGE", difficulty="EASY", name="GCS smoke")
@@ -162,23 +166,23 @@ def main():
         user_path = f"/api/v1/challenges/{challenge.pk}"
         for revision in (1, 2):
             stage = f"upload_revision_{revision}"
-            payload = artifact_payload(revision=revision, slug="gcs-smoke")
+            payload = artifact_payload(revision=revision, slug=slug)
             status, raw, _ = request(admin_path + "/releases", payload, tokens["admin"])
             check(f"register_release_{revision}", status == 200)
             releases.append(json.loads(raw)["data"]["release_id"])
             archive = user_archive({"README.txt": f"GCS participant ZIP version {revision}\n".encode()})
-            manifest = user_manifest(archive, revision=revision, slug="gcs-smoke")
-            key = f"participant-files/gcs-smoke/{revision}/{manifest['source_sha']}/{manifest['user_files']['sha256']}.zip"
+            manifest = user_manifest(archive, revision=revision, slug=slug)
+            key = f"participant-files/{slug}/{revision}/{manifest['source_sha']}/{manifest['user_files']['sha256']}.zip"
             check(f"new_object_{revision}", not storage.exists(key))
             object_keys.append(key)
             result, bundle = register_user_files_bundle(
-                manifest, archive, user_artifact(revision, slug="gcs-smoke")
+                manifest, archive, user_artifact(revision, slug=slug)
             )
             check(f"upload_{revision}", result == "registered" and bundle.object_key == key)
             check(f"object_exists_{revision}", storage.exists(key))
             bundles.append(bundle)
             result, duplicate = register_user_files_bundle(
-                manifest, archive, user_artifact(revision, slug="gcs-smoke")
+                manifest, archive, user_artifact(revision, slug=slug)
             )
             check(f"upload_retry_{revision}", result == "duplicate" and duplicate.pk == bundle.pk)
             path = admin_path + f"/files/{bundle.pk}/download"

@@ -58,7 +58,8 @@ jobs:
       GCS_ENABLED: "True"
       GCS_PROJECT_ID: msg-broker
       GCS_BUCKET_NAME: 2026msg_gcs
-      GCS_OBJECT_PREFIX: dev/qa/gcs-smoke/${{ github.run_id }}-${{ github.run_attempt }}
+      GCS_OBJECT_PREFIX: dev
+      GCS_QA_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -3,7 +3,7 @@
 Backend CI를 수동 실행하면서 verify_gcs를 켜면 등록된 GCP_WORKLOAD_IDENTITY_PROVIDER·GCP_SERVICE_ACCOUNT로 인증합니다
 서비스 배포는 실행하지 않으며 GitHub runner의 임시 PostgreSQL과 실제 GCS를 사용합니다
 
-검증용 ZIP 두 개를 dev/qa/gcs-smoke 아래 실행 번호별 경로에 저장합니다
+검증용 ZIP 두 개를 실제 파일 저장 경로인 dev/participant-files 아래 qa-gcs-smoke-실행번호 이름으로 저장합니다
 문제 원본·플래그·운영 DB는 사용하지 않습니다
 
 - 수집 코드로 ZIP 업로드, 같은 파일 재등록 시 중복 방지
