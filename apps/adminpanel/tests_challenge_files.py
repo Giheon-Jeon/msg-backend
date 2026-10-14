@@ -60,7 +60,7 @@ class AdminChallengeFilesTests(ReleaseTestBase):
         self.assertIn("attachment", downloaded["Content-Disposition"])
         self.assertIn("no-store", downloaded["Cache-Control"])
         self.assertEqual(hashlib.sha256(b"".join(downloaded.streaming_content)).hexdigest(), bundle.sha256)
-        downloaded.close()
+        self.assertTrue(downloaded.closed)
 
     def test_current_release_and_later_history_are_distinct(self):
         old, latest = self.bundle(1), self.bundle(2)
@@ -73,7 +73,8 @@ class AdminChallengeFilesTests(ReleaseTestBase):
         # 운영자는 아직 사용하지 않는 파일도 검수할 수 있다
         downloaded = self.client.get(f"{self.url}/{latest.pk}/download")
         self.assertEqual(downloaded.status_code, 200)
-        downloaded.close()
+        self.assertEqual(hashlib.sha256(b"".join(downloaded.streaming_content)).hexdigest(), latest.sha256)
+        self.assertTrue(downloaded.closed)
 
     def test_no_attachment_is_distinct_from_pending_collection_or_no_selected_release(self):
         config = self.select(1)
