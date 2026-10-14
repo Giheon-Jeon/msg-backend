@@ -182,9 +182,13 @@ def download_user_files_bundle(artifact, token=None):
             names = bundle.namelist()
             if names.count(USER_FILES_MANIFEST) != 1:
                 raise ReleaseValidationError("bundle 안에 user-files.json 파일이 없습니다")
+            if bundle.getinfo(USER_FILES_MANIFEST).file_size > 1024 * 1024:
+                raise ReleaseValidationError("user-files.json 파일이 너무 큽니다")
             manifest = json.loads(bundle.read(USER_FILES_MANIFEST).decode("utf-8"))
             if names.count(USER_FILES_ARCHIVE) > 1:
                 raise ReleaseValidationError("bundle 안에 user-files.zip 파일이 중복되었습니다")
+            if USER_FILES_ARCHIVE in names and bundle.getinfo(USER_FILES_ARCHIVE).file_size > MAX_ARTIFACT_SIZE:
+                raise ReleaseValidationError("user-files.zip 파일이 너무 큽니다")
             archive_bytes = bundle.read(USER_FILES_ARCHIVE) if USER_FILES_ARCHIVE in names else None
     except zipfile.BadZipFile as error:
         raise ReleaseValidationError("user-files artifact 형식이 올바르지 않습니다") from error
