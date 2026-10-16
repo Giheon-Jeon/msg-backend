@@ -73,7 +73,7 @@ jobs:
       - name: Authenticate with registered GCP identity
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          workload_identity_provider: projects/309055091666/locations/global/workloadIdentityPools/github-actions/providers/msg-github-actions
           service_account: gcs-file-upload-devops@msg-broker.iam.gserviceaccount.com
           project_id: msg-broker
           create_credentials_file: true
