@@ -152,7 +152,8 @@ def main():
                 json.dumps(body).encode() if body is not None else None
             ))
             try:
-                with urlopen(req, timeout=90) as response:
+                # base is the loopback HTTP server created above, not an input URL.
+                with urlopen(req, timeout=90) as response:  # nosec B310
                     return response.status, response.read(), response.headers
             except HTTPError as error:
                 with error:
@@ -207,7 +208,8 @@ def main():
                 url = "https://storage.googleapis.com/" + quote(settings.GCS_BUCKET_NAME, safe="")
                 url += "/" + quote(settings.GCS_OBJECT_PREFIX + "/" + key, safe="/")
                 try:
-                    with urlopen(url, timeout=30) as response:
+                    # HTTPS host is fixed; bucket and object key are URL-quoted path components.
+                    with urlopen(url, timeout=30) as response:  # nosec B310
                         anonymous_status = response.status
                 except HTTPError as error:
                     anonymous_status = error.code

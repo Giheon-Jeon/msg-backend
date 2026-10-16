@@ -39,7 +39,8 @@ def _github(path):
     if token:
         request.add_unredirected_header("Authorization", "Bearer " + token)
     try:
-        with urlopen(request, timeout=8) as response:
+        # The URL above fixes HTTPS and api.github.com; callers supply repository API paths only.
+        with urlopen(request, timeout=8) as response:  # nosec B310
             raw = response.read(4 * 1024 * 1024 + 1)
         if len(raw) > 4 * 1024 * 1024:
             raise ValueError
