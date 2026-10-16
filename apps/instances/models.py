@@ -44,6 +44,12 @@ class IsolationProfile(models.TextChoices):
     PWN = "PWN"
 
 
+class UserFilesMode(models.TextChoices):
+    MATCH_REVISION = "MATCH_REVISION"
+    SELECTED = "SELECTED"
+    NONE = "NONE"
+
+
 class Instance(models.Model):
     instance_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -145,6 +151,11 @@ class ChallengeRelease(models.Model):
     version = models.IntegerField()
     # bundle의 revision. 백필 릴리스는 0을 쓴다
     registry_revision = models.IntegerField()
+    # 같은 발행 이미지를 유지한 채 관리자 설정만 바꾼 릴리스의 원본
+    derived_from = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="derived_releases",
+    )
     # bundle의 challenge_slug. 백필 릴리스는 빈 문자열이라 slug 대조에서 제외한다
     challenge_slug = models.CharField(max_length=100, blank=True, default="")
     runtime_type = models.CharField(
@@ -165,8 +176,17 @@ class ChallengeRelease(models.Model):
     memory_mib = models.IntegerField()
     ephemeral_storage_mib = models.IntegerField()
     healthcheck = models.JSONField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
     source_ref = models.CharField(max_length=200, blank=True, default="")
     note = models.TextField(null=True, blank=True)
+    user_files_mode = models.CharField(max_length=20, choices=UserFilesMode.choices, default=UserFilesMode.MATCH_REVISION)
+    user_file_bundle = models.ForeignKey(
+        "instances.ChallengeUserFileBundle", on_delete=models.RESTRICT,
+        null=True, blank=True, related_name="selected_releases",
+    )
+    # .env 저장 요청의 재시도는 같은 릴리스를 반환한다. 응답에는 포함하지 않는다
+    env_import_id = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    env_import_fingerprint = models.CharField(max_length=64, blank=True, default="", editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.CharField(max_length=50, blank=True, default="")
 
@@ -176,9 +196,10 @@ class ChallengeRelease(models.Model):
             models.UniqueConstraint(
                 fields=["challenge", "version"], name="uq_release_challenge_version"
             ),
-            models.UniqueConstraint(
-                fields=["challenge", "registry_revision"],
-                name="uq_release_challenge_revision",
+            models.CheckConstraint(
+                condition=(models.Q(user_files_mode="SELECTED", user_file_bundle__isnull=False)
+                           | models.Q(user_files_mode__in=["MATCH_REVISION", "NONE"], user_file_bundle__isnull=True)),
+                name="ck_release_user_files_selection",
             ),
         ]
         indexes = [models.Index(fields=["challenge", "-version"])]
@@ -199,6 +220,10 @@ class ReleaseContainer(models.Model):
     image_ref = models.TextField()
     # bundle workload.containers[].ports 형식 그대로: [{"port": int, "public": bool}]
     ports = models.JSONField(default=list)
+    env = models.JSONField(default=dict)
+    # 릴리스 등록 때 선택한 불변 RuntimeSecret UUID를 저장한다
+    secret_env = models.JSONField(default=dict)
+    env_rules = models.JSONField(default=dict)
 
     class Meta:
         db_table = "challenge_release_containers"
@@ -210,6 +235,51 @@ class ReleaseContainer(models.Model):
 
     def __str__(self):
         return f"{self.release_id} {self.name}"
+
+
+class RuntimeSecret(models.Model):
+    secret_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey("challenge.Challenge", on_delete=models.CASCADE, related_name="runtime_secrets")
+    name = models.CharField(max_length=64)
+    version = models.PositiveIntegerField()
+    encrypted_value = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=50)
+
+    class Meta:
+        db_table = "challenge_runtime_secrets"
+        constraints = [
+            models.UniqueConstraint(fields=["challenge", "name", "version"], name="uq_runtime_secret_version"),
+        ]
+
+    def __str__(self):
+        return f"{self.challenge_id} {self.name} v{self.version}"
+
+
+class DeploymentTest(models.Model):
+    # 별도 scheduler user_id를 사용해 참가자의 인스턴스를 교체하지 않는다
+    test_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    request_id = models.UUIDField()
+    release = models.ForeignKey(ChallengeRelease, on_delete=models.PROTECT, related_name="deployment_tests")
+    instance_id = models.UUIDField(null=True, blank=True, unique=True)
+    status = models.CharField(max_length=30, choices=InstanceStatus.choices, default=InstanceStatus.REQUESTED)
+    endpoints = models.JSONField(default=list)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    running_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "admin_deployment_tests"
+        constraints = [
+            models.UniqueConstraint(fields=["requested_by", "request_id"], name="uq_deployment_test_request"),
+            models.UniqueConstraint(fields=["requested_by"], condition=models.Q(finished_at__isnull=True),
+                                    name="uq_admin_active_deployment_test"),
+        ]
+        indexes = [models.Index(fields=["release", "-created_at"])]
 
 
 class PollerArtifact(models.Model):

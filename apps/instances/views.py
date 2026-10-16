@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import transaction
 from rest_framework.views import APIView
 
@@ -47,13 +49,21 @@ class InstanceCreateView(APIView):
 
     def post(self, request):
         # 새 인스턴스 생성을 Scheduler에 요청하고 응답값으로 DB row를 만든다
+        if not isinstance(request.data, dict) or set(request.data) != {"challenge_id"}:
+            return fail("INVALID_REQUEST", "문제 ID만 지정할 수 있습니다", 400)
         user = request.user
         team = getattr(user, "team", None)
         if team is None:
             return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
 
         challenge_id = request.data.get("challenge_id")
-        if not challenge_id:
+        try:
+            if not isinstance(challenge_id, str):
+                raise ValueError()
+            parsed_id = uuid.UUID(challenge_id)
+            if parsed_id.int == 0 or str(parsed_id) != challenge_id:
+                raise ValueError()
+        except ValueError:
             return fail("INVALID_REQUEST", "요청 값이 올바르지 않습니다", 400)
 
         challenge = Challenge.objects.filter(challenge_id=challenge_id).first()

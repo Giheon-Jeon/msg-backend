@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from apps.challenge.models import Challenge
 from apps.instances.models import ChallengeRelease, PollerArtifact
+from apps.instances.runtime_secrets import RuntimeSecretUnavailable
 from apps.instances.releases import (
     ReleaseValidationError,
     check_slug_consistency,
@@ -289,7 +290,12 @@ def register_bundle(artifact_data, note=None):
         except ReleaseValidationError as error:
             return "invalid", error.message
 
-        release = create_release(challenge, validated, POLLER_CREATED_BY)
+        try:
+            release = create_release(challenge, validated, POLLER_CREATED_BY)
+        except ReleaseValidationError as error:
+            return "invalid", error.message
+        except RuntimeSecretUnavailable:
+            return "error", "비밀값 저장 설정을 확인하세요"
 
     return "registered", release
 
@@ -342,7 +348,7 @@ def poll_once(token=None):
             note="공급망 자동 등록: " + str(artifact.get("name", "")),
         )
         summary[status] += 1
-        if status != "unmatched":
+        if status not in ("unmatched", "error"):
             mark_artifact_processed(artifact)
         if status == "registered":
             logger.info(
@@ -351,7 +357,7 @@ def poll_once(token=None):
                 detail.version,
                 detail.registry_revision,
             )
-        elif status in ("unmatched", "invalid"):
+        elif status in ("unmatched", "invalid", "error"):
             logger.warning("release poller 건너뜀 (%s): %s", status, detail)
 
     return summary

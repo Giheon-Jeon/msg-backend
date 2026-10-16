@@ -61,6 +61,12 @@ class InvalidInternalToken(APIError):
     message = "문제 서버 인증에 실패했습니다."
 
 
+class KothVerifyThrottled(APIError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "TOO_MANY_ATTEMPTS"
+    message = "팀 토큰 검증 시도가 너무 많습니다. 잠시 후 다시 시도해주세요."
+
+
 class InvalidClubId(APIError):
     code = "INVALID_CLUB_ID"
     message = "club_id 형식이 올바르지 않습니다."

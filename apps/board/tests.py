@@ -302,7 +302,6 @@ class BoardApiTestCase(TestCase):
     # ---------------------------------------------------------------- GET /board
 
     def test_board_returns_notion_shape(self):
-        self.client.credentials()
         response = self.client.get("/api/v1/board")
 
         self.assertEqual(response.status_code, 200)
@@ -493,7 +492,6 @@ class BoardApiTestCase(TestCase):
     def test_board_returns_load_failed_when_not_seeded(self):
         TeamBoardState.objects.all().delete()
         Cell.objects.all().delete()
-        self.client.credentials()
 
         response = self.client.get("/api/v1/board")
 
@@ -829,15 +827,17 @@ class BoardApiTestCase(TestCase):
         )
 
     def test_dice_roll_skips_consumed_cells(self):
-        # 물리 거리(1+1=2칸)의 최종 도착지(3번 칸)가 이미 소모된 경우에만 다음 칸으로 넘어간다.
-        TeamCellConsumption.objects.create(team=self.team, cell_id=3)
+        # 소모된 2~5번 칸은 주사위 이동 횟수에 포함하지 않아 6, 7번을 두 칸으로 센다.
+        TeamCellConsumption.objects.bulk_create(
+            [TeamCellConsumption(team=self.team, cell_id=cell_index) for cell_index in range(2, 6)]
+        )
         with patch("apps.board.services.random.randint", side_effect=[1, 1]):
             response = self.post_idem("/api/v1/board/dice/roll")
 
         data = response.json()["data"]
-        self.assertEqual(data["current_position"], 4)
-        self.assertEqual(data["skipped_cells"], [3])
-        self.assertEqual(data["movement_path"], [2, 3, 4])
+        self.assertEqual(data["current_position"], 7)
+        self.assertEqual(data["skipped_cells"], [2, 3, 4, 5])
+        self.assertEqual(data["movement_path"], [2, 3, 4, 5, 6, 7])
 
     def test_dice_roll_landing_on_start_grants_mileage_and_roll(self):
         cell = self.set_position(35)
@@ -1234,8 +1234,7 @@ class BoardApiTestCase(TestCase):
 
     # ---------------------------------------------------------------- chance/catalog
 
-    def test_chance_catalog_returns_five_cards_without_auth(self):
-        self.client.credentials()
+    def test_chance_catalog_returns_five_cards_after_login(self):
         response = self.client.get("/api/v1/board/chance/catalog")
 
         self.assertEqual(set(response.json()), {"code", "message", "data"})

@@ -19,3 +19,5 @@ TODO.md
 # Local load-test artifacts and generated credentials
 loadtests/runtime/
 loadtests/results/
+gha-creds-*.json
+reports/gcs-smoke.json

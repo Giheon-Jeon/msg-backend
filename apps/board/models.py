@@ -212,6 +212,7 @@ class PendingDiceRoll(models.Model):
     movement_path = models.JSONField(default=list)
     skipped_cells = models.JSONField(default=list)
     passed_start = models.BooleanField(default=False)
+    start_pass_count = models.PositiveSmallIntegerField(default=0)
     board_event_code = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
 

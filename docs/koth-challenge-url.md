@@ -1,11 +1,11 @@
 # KOTH 참가자 접속 URL
 
-각 KOTH 문제 응답에 `challenge_url` 필드를 추가한다. 기존 응답 필드와 인증 조건은 유지한다.
+각 KOTH 문제 응답에 `challenge_url` 필드를 추가한다. 2026년 10월 12일 접근 정책 변경으로 참가자 조회 API는 모두 Bearer 인증이 필요하다.
 
 | API | 필드 위치 | 인증 |
 | --- | --- | --- |
-| `GET /api/v1/koth/clubs` | `data.clubs[].challenges[].challenge_url` | 불필요 |
-| `GET /api/v1/koth/clubs/{club_id}` | `data.challenges[].challenge_url` | 불필요 |
+| `GET /api/v1/koth/clubs` | `data.clubs[].challenges[].challenge_url` | Bearer 토큰 |
+| `GET /api/v1/koth/clubs/{club_id}` | `data.challenges[].challenge_url` | Bearer 토큰 |
 | `GET /api/v1/koth/me` | `data.challenges[].challenge_url` | Bearer 토큰 |
 
 ## 응답 규칙

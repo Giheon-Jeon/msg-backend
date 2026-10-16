@@ -112,3 +112,9 @@ class BoardReadQueryTests(TestCase):
                     team, consumed_indexes=range(BOARD_SIZE + 1, BOARD_SIZE * 2)
                 )
             )
+            self.assertFalse(
+                is_board_completed(
+                    team,
+                    consumed_indexes=[START_CELL_INDEX + 1] * (BOARD_SIZE - 1),
+                )
+            )

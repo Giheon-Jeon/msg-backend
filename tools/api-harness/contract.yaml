@@ -33,7 +33,7 @@ url_rules:
 # UUID 문자열이라 long_fields는 비운다.
 id_types:
   long_fields: []
-  string_fields: [card_id, team_card_id, discarded_team_card_id, kept_team_card_id, token, team_id, club_id, koth_challenge_id, challenge_id, user_id, history_id, instance_id]
+  string_fields: [card_id, team_card_id, discarded_team_card_id, kept_team_card_id, token, team_id, club_id, koth_challenge_id, challenge_id, user_id, history_id, instance_id, secret_id, secret_ref]
 
 # 타임스탬프 필드는 ISO-8601 UTC (끝에 Z) 형식이어야 한다.
 timestamp_must_be_iso_utc: true
@@ -147,3 +147,6 @@ common_error_codes:
   - {http: 400, code: RELEASE_NOT_DEPLOYABLE}
   - {http: 404, code: RELEASE_NOT_FOUND}
   - {http: 409, code: RELEASE_DUPLICATED}
+  - {http: 400, code: RUNTIME_SECRET_INVALID}
+  - {http: 404, code: RUNTIME_SECRET_NOT_FOUND}
+  - {http: 503, code: RUNTIME_SECRET_UNAVAILABLE}

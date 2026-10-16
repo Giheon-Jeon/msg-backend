@@ -239,7 +239,7 @@ REST_FRAMEWORK = {
         "apps.common.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "apps.common.permissions.IsAuthenticated",
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
@@ -274,6 +274,12 @@ if (
     )
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
+
+# 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
+RUNTIME_SECRET_ENCRYPTION_KEYS = [
+    key.strip() for key in os.getenv("RUNTIME_SECRET_ENCRYPTION_KEYS", "").split(",") if key.strip()
+]
+RUNTIME_SECRET_API_TOKEN = os.getenv("RUNTIME_SECRET_API_TOKEN", "")
 INSTANCE_EXTEND_MINUTES = int(os.getenv("INSTANCE_EXTEND_MINUTES", "30"))
 
 # 공급망 publish bundle 자동 수집 (manage.py poll_releases)
@@ -283,6 +289,11 @@ RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
 RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+# Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
+REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")
+REPOSITORY_ENV_REF = os.getenv("REPOSITORY_ENV_REF", "main")
+REPOSITORY_ENV_EXCLUDED_SLUGS = {"pwn-msgdriver"}
 
 
 def _validated_base_url(name, default):

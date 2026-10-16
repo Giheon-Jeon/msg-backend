@@ -7,8 +7,10 @@ from apps.board.views import (
     DebugSolveActiveChallengeView,
 )
 from apps.common.health import healthz
+from apps.instances.secret_views import RuntimeSecretResolveView
 
 urlpatterns = [
+    path("internal/v1/runtime-secrets/resolve", RuntimeSecretResolveView.as_view(), name="runtime-secrets-resolve"),
     path("healthz", healthz),
     path("admin/", admin.site.urls),
     path("api/v1/", include("apps.timer.urls")),

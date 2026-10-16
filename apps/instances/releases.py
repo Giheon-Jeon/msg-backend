@@ -2,8 +2,10 @@ import re
 
 from django.db.models import Max
 
-from apps.instances.models import ChallengeRelease, IsolationProfile, ReleaseContainer
+from apps.instances.models import ChallengeRelease, IsolationProfile, ReleaseContainer, RuntimeSecret
 from apps.instances.services import isoformat_z
+from apps.instances.execution_settings import validate_env, validate_secret_env, validate_env_rules
+from apps.instances.runtime_secrets import bind_secret_env
 
 # 공급망 발행 명명과 동일한 digest 고정 GHCR 참조만 허용한다
 IMAGE_REF_PATTERN = re.compile(
@@ -16,7 +18,7 @@ CONTAINER_NAME_PATTERN = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
 
-SUPPORTED_SCHEMA_VERSION = "2.0"
+SUPPORTED_SCHEMA_VERSIONS = {"2.0", "2.1"}
 MAX_CONTAINERS = 8
 MAX_PORTS_PER_CONTAINER = 8
 MAX_EXPOSED_PORTS = 8
@@ -109,6 +111,8 @@ def _validate_containers(raw_containers, challenge_slug):
     for raw in raw_containers:
         if not isinstance(raw, dict):
             raise ReleaseValidationError("workload.containers 항목 형식이 올바르지 않습니다")
+        if set(raw) - {"name", "image", "ports", "env", "secret_env"}:
+            raise ReleaseValidationError("지원하지 않는 컨테이너 실행 설정이 있습니다")
         name = _require_string(raw.get("name"), "container.name")
         if not CONTAINER_NAME_PATTERN.fullmatch(name):
             raise ReleaseValidationError(
@@ -121,11 +125,18 @@ def _validate_containers(raw_containers, challenge_slug):
         image_ref = _require_string(raw.get("image"), f"{name}.image")
         validate_container_image(image_ref, challenge_slug, name)
 
+        try:
+            env = validate_env(raw.get("env", {}))
+            aliases = validate_secret_env(raw.get("secret_env", {}), env)
+        except ValueError as error:
+            raise ReleaseValidationError(str(error)) from None
         containers.append(
             {
                 "name": name,
                 "image_ref": image_ref,
                 "ports": _validate_ports(raw.get("ports"), name),
+                "env": env,
+                "secret_env": aliases,
             }
         )
     return containers
@@ -175,7 +186,8 @@ def validate_release_payload(body):
         if note and len(note) > MAX_NOTE_LENGTH:
             raise ReleaseValidationError(f"note 값은 {MAX_NOTE_LENGTH}자 이하여야 합니다")
 
-    if artifact.get("schema_version") != SUPPORTED_SCHEMA_VERSION:
+    schema_version = artifact.get("schema_version")
+    if not isinstance(schema_version, str) or schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ReleaseValidationError("지원하지 않는 schema_version입니다")
     if artifact.get("scan_result") != "PASS":
         raise ReleaseValidationError("scan_result가 PASS인 릴리스만 등록할 수 있습니다")
@@ -200,6 +212,12 @@ def validate_release_payload(body):
     workload = artifact.get("workload")
     if not isinstance(workload, dict):
         raise ReleaseValidationError("workload 값이 올바르지 않습니다")
+    raw_containers = workload.get("containers")
+    if artifact["schema_version"] == "2.0" and isinstance(raw_containers, list) and any(
+        isinstance(container, dict) and ({"env", "secret_env"} & set(container))
+        for container in raw_containers
+    ):
+        raise ReleaseValidationError("환경변수와 비밀값 참조에는 schema_version 2.1이 필요합니다")
     challenge_slug = _require_string(artifact.get("challenge_slug"), "challenge_slug")
     containers = _validate_containers(workload.get("containers"), challenge_slug)
     validate_healthcheck(
@@ -272,11 +290,77 @@ def next_release_version(challenge):
     return (current_max or 0) + 1
 
 
-def create_release(challenge, validated, created_by):
+def validate_derived_settings(body, source):
+    if not isinstance(body, dict) or set(body) - {"containers", "note"}:
+        raise ReleaseValidationError("실행 설정 요청 형식이 올바르지 않습니다")
+    raw_containers = body.get("containers")
+    source_containers = list(source.containers.all())
+    rules_by_container = {container.name: container.env_rules for container in source_containers}
+    if not isinstance(raw_containers, list) or len(raw_containers) != len(source_containers):
+        raise ReleaseValidationError("원본 릴리스의 모든 컨테이너 설정이 필요합니다")
+    requested = {}
+    for raw in raw_containers:
+        if not isinstance(raw, dict) or set(raw) - {"name", "env", "secret_env", "env_rules"}:
+            raise ReleaseValidationError("컨테이너 실행 설정 형식이 올바르지 않습니다")
+        name = raw.get("name")
+        if not isinstance(name, str) or name in requested:
+            raise ReleaseValidationError("컨테이너 이름이 중복되거나 올바르지 않습니다")
+        try:
+            env = validate_env(raw.get("env", {}))
+            aliases = validate_secret_env(raw.get("secret_env", {}), env)
+            rules = validate_env_rules(raw.get("env_rules", rules_by_container.get(name, {})), env, aliases)
+        except ValueError as error:
+            raise ReleaseValidationError(str(error)) from None
+        requested[name] = {"env": env, "secret_env": aliases, "env_rules": rules}
+    if set(requested) != {container.name for container in source_containers}:
+        raise ReleaseValidationError("원본 릴리스와 컨테이너 이름이 일치하지 않습니다")
+    note = body.get("note")
+    if note is not None:
+        if not isinstance(note, str) or len(note.strip()) > MAX_NOTE_LENGTH:
+            raise ReleaseValidationError(f"note 값은 {MAX_NOTE_LENGTH}자 이하의 문자열이어야 합니다")
+        note = note.strip() or None
+    return {
+        "challenge_slug": source.challenge_slug,
+        "registry_revision": source.registry_revision,
+        "runtime_type": source.runtime_type,
+        "architecture": source.architecture,
+        "isolation_profile": source.isolation_profile,
+        "cpu_millicores": source.cpu_millicores,
+        "memory_mib": source.memory_mib,
+        "ephemeral_storage_mib": source.ephemeral_storage_mib,
+        "healthcheck": source.healthcheck,
+        "source_ref": source.source_ref,
+        "containers": [
+            {
+                "name": container.name,
+                "image_ref": container.image_ref,
+                "ports": container.ports,
+                **requested[container.name],
+            }
+            for container in source_containers
+        ],
+        "note": note,
+    }
+
+
+def create_release(challenge, validated, created_by, derived_from=None):
+    # 참조 선택을 먼저 끝낸다. 등록되지 않은 비밀값이 있으면 릴리스 행도 만들지 않는다
+    bindings = []
+    for container in validated["containers"]:
+        try:
+            bindings.append(bind_secret_env(
+                challenge, container.get("secret_env", {}), container.get("env", {}),
+                pinned=container.get("secret_versions"),
+            ))
+        except ValueError as error:
+            raise ReleaseValidationError(str(error)) from None
     release = ChallengeRelease.objects.create(
         challenge=challenge,
         version=next_release_version(challenge),
         registry_revision=validated["registry_revision"],
+        derived_from=derived_from,
+        **({"user_files_mode": derived_from.user_files_mode,
+            "user_file_bundle_id": derived_from.user_file_bundle_id} if derived_from else {}),
         challenge_slug=validated["challenge_slug"],
         runtime_type=validated["runtime_type"],
         architecture=validated["architecture"],
@@ -287,6 +371,8 @@ def create_release(challenge, validated, created_by):
         healthcheck=validated["healthcheck"],
         source_ref=validated["source_ref"],
         note=validated["note"],
+        env_import_id=validated.get("env_import_id"),
+        env_import_fingerprint=validated.get("env_import_fingerprint", ""),
         created_by=created_by,
     )
     ReleaseContainer.objects.bulk_create(
@@ -296,8 +382,11 @@ def create_release(challenge, validated, created_by):
                 name=container["name"],
                 image_ref=container["image_ref"],
                 ports=container["ports"],
+                env=container.get("env", {}),
+                secret_env=bindings[index],
+                env_rules=container.get("env_rules", {}),
             )
-            for container in validated["containers"]
+            for index, container in enumerate(validated["containers"])
         ]
     )
     return release
@@ -356,25 +445,59 @@ def is_deployable(release):
     return True
 
 
-def serialize_release(release, current_release_id=None):
+def serialize_release(release, current_release_id=None, file_bundles=None):
+    from apps.instances.release_files import release_files_summary
+    containers = list(release.containers.all())
+    references = {reference for container in containers for reference in container.secret_env.values()}
+    records = RuntimeSecret.objects.filter(challenge_id=release.challenge_id, secret_id__in=references).only("secret_id", "name", "version")
+    by_id = {str(record.pk): record for record in records}
+    latest = {row["name"]: row["latest_version"] for row in RuntimeSecret.objects.filter(challenge_id=release.challenge_id).values("name").annotate(latest_version=Max("version"))}
+
+    def secret_bindings(container):
+        rows = []
+        for env_name, reference in sorted(container.secret_env.items()):
+            record = by_id.get(reference)
+            rows.append({
+                "env_name": env_name,
+                "name": record.name if record else None,
+                "version": record.version if record else None,
+                "status": "registered" if record else "missing",
+                "is_latest": bool(record and record.version == latest.get(record.name)),
+            })
+        return rows
+
     return {
         "release_id": str(release.release_id),
         "challenge_id": str(release.challenge_id),
         "version": release.version,
         "registry_revision": release.registry_revision,
+        "user_files": release_files_summary(release, file_bundles),
+        "derived_from_release_id": str(release.derived_from_id) if release.derived_from_id else None,
         "challenge_slug": release.challenge_slug,
         "runtime_type": release.runtime_type,
         "architecture": release.architecture,
+        "isolation_profile": release.isolation_profile,
+        "resource_profile": {
+            "cpu_millicores": release.cpu_millicores,
+            "memory_mib": release.memory_mib,
+            "ephemeral_storage_mib": release.ephemeral_storage_mib,
+        },
+        "healthcheck": release.healthcheck,
         "containers": [
             {
                 "name": container.name,
                 "image_ref": container.image_ref,
                 "ports": container.ports,
+                **({"env": container.env} if container.env else {}),
+                **({"secret_ref": str(container.id)} if container.secret_env else {}),
+                "secret_bindings": secret_bindings(container),
+                "env_rules": container.env_rules,
             }
-            for container in release.containers.all()
+            for container in containers
         ],
         "is_current": release.release_id == current_release_id,
         "is_deployable": is_deployable(release),
         "note": release.note,
+        "source_ref": release.source_ref,
         "created_at": isoformat_z(release.created_at),
     }

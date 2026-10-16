@@ -32,12 +32,12 @@ from apps.instances.poller import (
     workflow_run_is_retryable,
 )
 from apps.instances.releases import ReleaseValidationError
+from apps.instances.release_files import file_bundle_for_release, USER_FILES_ARCHIVE
 
 logger = logging.getLogger(__name__)
 
 USER_FILES_BUNDLE_SUFFIX = "-user-files-bundle"
 USER_FILES_MANIFEST = "user-files.json"
-USER_FILES_ARCHIVE = "user-files.zip"
 MAX_FILE_COUNT = 1_000
 MAX_UNCOMPRESSED_SIZE = 100 * 1024 * 1024
 MAX_ARTIFACT_SIZE = 110 * 1024 * 1024
@@ -182,9 +182,13 @@ def download_user_files_bundle(artifact, token=None):
             names = bundle.namelist()
             if names.count(USER_FILES_MANIFEST) != 1:
                 raise ReleaseValidationError("bundle 안에 user-files.json 파일이 없습니다")
+            if bundle.getinfo(USER_FILES_MANIFEST).file_size > 1024 * 1024:
+                raise ReleaseValidationError("user-files.json 파일이 너무 큽니다")
             manifest = json.loads(bundle.read(USER_FILES_MANIFEST).decode("utf-8"))
             if names.count(USER_FILES_ARCHIVE) > 1:
                 raise ReleaseValidationError("bundle 안에 user-files.zip 파일이 중복되었습니다")
+            if USER_FILES_ARCHIVE in names and bundle.getinfo(USER_FILES_ARCHIVE).file_size > MAX_ARTIFACT_SIZE:
+                raise ReleaseValidationError("user-files.zip 파일이 너무 큽니다")
             archive_bytes = bundle.read(USER_FILES_ARCHIVE) if USER_FILES_ARCHIVE in names else None
     except zipfile.BadZipFile as error:
         raise ReleaseValidationError("user-files artifact 형식이 올바르지 않습니다") from error
@@ -351,7 +355,8 @@ def poll_user_files_once(token=None):
     return summary
 
 
-def current_user_file_bundle(challenge):
+def selected_user_file_bundle(challenge):
+    """현재 배포에 대응하는 수집 결과. 파일이 없는 revision도 그대로 반환한다."""
     try:
         runtime_config = challenge.runtime_config
     except ChallengeRuntimeConfig.DoesNotExist:
@@ -363,9 +368,14 @@ def current_user_file_bundle(challenge):
     elif runtime_config.current_release is None:
         return None
     else:
-        bundle = bundles.filter(
-            registry_revision=runtime_config.current_release.registry_revision
-        ).first()
+        bundle = file_bundle_for_release(runtime_config.current_release)
+    return bundle
+
+
+def current_user_file_bundle(challenge, *, release=None):
+    if release is not None and release.challenge_id != challenge.pk:
+        return None
+    bundle = file_bundle_for_release(release) if release is not None else selected_user_file_bundle(challenge)
     if bundle is None or not bundle.present or not bundle.object_key:
         return None
     return bundle
