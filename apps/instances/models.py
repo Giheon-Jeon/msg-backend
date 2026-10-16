@@ -228,6 +228,49 @@ class PollerArtifact(models.Model):
         indexes = [models.Index(fields=["kind", "processed_at", "artifact_id"])]
 
 
+class ChallengeUserFileBundle(models.Model):
+    bundle_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey(
+        "challenge.Challenge",
+        on_delete=models.CASCADE,
+        db_column="challenge_id",
+        related_name="user_file_bundles",
+    )
+    release = models.ForeignKey(
+        ChallengeRelease,
+        on_delete=models.SET_NULL,
+        db_column="release_id",
+        related_name="user_file_bundles",
+        null=True,
+        blank=True,
+    )
+    artifact_id = models.BigIntegerField(unique=True)
+    artifact_name = models.CharField(max_length=255)
+    registry_revision = models.PositiveIntegerField()
+    source_ref = models.CharField(max_length=200)
+    source_sha = models.CharField(max_length=40)
+    present = models.BooleanField()
+    object_key = models.CharField(max_length=500, blank=True, default="")
+    sha256 = models.CharField(max_length=64, blank=True, default="")
+    size_bytes = models.BigIntegerField(default=0)
+    file_count = models.PositiveIntegerField(default=0)
+    uncompressed_size_bytes = models.BigIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "challenge_user_file_bundles"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["challenge", "registry_revision"],
+                name="uq_user_files_challenge_revision",
+            ),
+        ]
+        indexes = [models.Index(fields=["challenge", "-registry_revision"])]
+
+    def __str__(self):
+        return f"{self.challenge_id} revision {self.registry_revision}"
+
+
 class ChallengeRuntimeConfig(models.Model):
     challenge = models.OneToOneField(
         "challenge.Challenge",

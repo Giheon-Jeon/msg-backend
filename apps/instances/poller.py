@@ -28,7 +28,7 @@ POLLER_CREATED_BY = "release-poller"
 RETRYABLE_WORKFLOW_STATUSES = {"queued", "in_progress"}
 
 
-def github_request(path, token=None, timeout=10):
+def github_request(path, token=None, timeout=10, max_bytes=None):
     # 공급망 artifact 조회용 GitHub API 호출. 응답 본문 bytes를 돌려준다
     base = settings.RELEASE_POLL_API_BASE.rstrip("/")
     if not base.startswith(("http://", "https://")):
@@ -44,7 +44,10 @@ def github_request(path, token=None, timeout=10):
         request.add_unredirected_header("Authorization", "Bearer " + token)
     # 위에서 scheme을 http와 https로 제한한 운영 설정만 사용한다
     with urlopen(request, timeout=timeout) as response:  # nosec B310
-        return response.read()
+        body = response.read() if max_bytes is None else response.read(max_bytes + 1)
+    if max_bytes is not None and len(body) > max_bytes:
+        raise ReleaseValidationError("GitHub artifact 크기가 허용 범위를 초과합니다")
+    return body
 
 
 def list_artifacts_by_suffix(suffix, token=None, stop_at_id=None):

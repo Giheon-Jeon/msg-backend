@@ -4,6 +4,29 @@ from django.test import TransactionTestCase
 
 
 class LegacyReleaseMigrationTests(TransactionTestCase):
+    def test_upgrade_from_poller_migration_adds_user_file_bundle(self):
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
+        self.addCleanup(self.restore_schema, latest)
+        target = [("instances", "0006_pollerartifact")]
+        executor.migrate(target)
+
+        apps = executor.loader.project_state(target).apps
+        PollerArtifact = apps.get_model("instances", "PollerArtifact")
+        PollerArtifact.objects.create(
+            artifact_id=1,
+            kind="RELEASE",
+            payload={"name": "existing-publish-bundle"},
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(latest)
+        apps = executor.loader.project_state(latest).apps
+        PollerArtifact = apps.get_model("instances", "PollerArtifact")
+        UserFileBundle = apps.get_model("instances", "ChallengeUserFileBundle")
+        self.assertTrue(PollerArtifact.objects.filter(artifact_id=1).exists())
+        self.assertEqual(UserFileBundle.objects.count(), 0)
+
     def test_backfill_preserves_runtime_settings_and_pwn_isolation(self):
         executor = MigrationExecutor(connection)
         latest = executor.loader.graph.leaf_nodes()
