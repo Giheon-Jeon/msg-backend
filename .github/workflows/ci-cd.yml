@@ -11,6 +11,10 @@ on:
         description: "GCS 참가자 ZIP 업로드·다운로드 검증"
         type: boolean
         default: false
+      verify_github_artifacts:
+        description: "verify_gcs와 함께 실제 GitHub 발행본 4종도 검증"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,7 +82,15 @@ jobs:
           project_id: msg-broker
           create_credentials_file: true
       - name: Verify GCS upload and authenticated HTTP downloads
-        run: python tools/gcs_smoke.py --report reports/gcs-smoke.json
+        env:
+          VERIFY_GITHUB_ARTIFACTS: ${{ inputs.verify_github_artifacts }}
+          RELEASE_POLL_GITHUB_TOKEN: ${{ inputs.verify_github_artifacts && secrets.RELEASE_POLL_GITHUB_TOKEN || '' }}
+        run: |
+          if [ "$VERIFY_GITHUB_ARTIFACTS" = "true" ]; then
+            python tools/gcs_smoke.py --github-artifacts --report reports/gcs-smoke.json
+          else
+            python tools/gcs_smoke.py --report reports/gcs-smoke.json
+          fi
       - name: Upload sanitized verification report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

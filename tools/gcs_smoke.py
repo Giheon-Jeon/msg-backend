@@ -45,6 +45,7 @@ def safe_error(error):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--local-storage", action="store_true")
+    parser.add_argument("--github-artifacts", action="store_true")
     parser.add_argument("--report", type=Path, default=Path("reports/gcs-smoke.json"))
     args = parser.parse_args()
     report = {
@@ -78,6 +79,12 @@ def main():
             raise RuntimeError("GCS requires the dev prefix and a unique numeric QA run ID")
         slug = "qa-gcs-smoke-" + run_id
         report["qa_slug"] = slug
+        if args.github_artifacts:
+            if args.local_storage or not os.getenv("RELEASE_POLL_GITHUB_TOKEN"):
+                raise RuntimeError("Real artifact verification requires GCS and a GitHub read token")
+            # Isolate real slugs without rewriting the signed artifact metadata.
+            os.environ["GCS_OBJECT_PREFIX"] = "dev/participant-files/qa-github-" + run_id
+            report["source"] = "synthetic ZIP checks followed by fixed real GitHub artifacts"
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         os.environ["DJANGO_SETTINGS_MODULE"] = "tools.gcs_smoke_settings"
@@ -239,6 +246,11 @@ def main():
         stage = "missing_object"
         storage.delete(bundles[1].object_key)
         check("missing_object_returns_404", request(user_path + f"/files/{bundles[1].pk}/download", token=tokens["player"])[0] == 404)
+        if args.github_artifacts:
+            stage = "github_artifacts"
+            from tools.gcs_artifact_smoke import verify_github_artifacts
+
+            verify_github_artifacts(check, request, tokens, team, storage, object_keys, report)
         report["result"] = "passed"
     except Exception as error:
         report["failure"] = {"stage": stage, **safe_error(error)}
