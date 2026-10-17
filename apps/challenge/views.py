@@ -289,7 +289,9 @@ class ChallengeSubmitView(APIView):
                 result=FlagSubmission.SubmissionResult.CORRECT,
             )
 
-            update_dynamic_score_and_team_scores(challenge, newly_solved_team_id=team.pk)
+            update_dynamic_score_and_team_scores(
+                challenge, newly_solved_team_id=team.pk, teams_already_locked=True
+            )
             check_and_record_line_monopoly(team, challenge)
             team_score = get_team_total_score(team.pk)
             team.refresh_from_db(fields=["mileage"])

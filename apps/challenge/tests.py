@@ -504,11 +504,39 @@ class ChallengeSubmitTests(TestCase):
             update_dynamic_score_and_team_scores(self.challenge)
         self.assertEqual(updated_rows, [2])
 
-    def test_submit_passes_new_solver_to_score_recalculation(self):
+    @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locks")
+    def test_score_recalculation_locks_teams_in_order_before_updating_by_default(self):
+        other_team = Team.objects.create(team_name="other-solver")
+        Solve.objects.bulk_create([
+            Solve(team=team, challenge=self.challenge, earned_score=0, earned_mileage=0)
+            for team in (self.team, other_team)
+        ])
+        statements = []
+
+        def track_team_queries(execute, sql, params, many, context):
+            if 'FROM "teams"' in sql and "FOR NO KEY UPDATE" in sql:
+                statements.append(("lock", sql))
+            elif sql.startswith('UPDATE "teams" SET "team_score"'):
+                statements.append(("update", sql))
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(track_team_queries):
+            update_dynamic_score_and_team_scores(self.challenge)
+
+        self.assertEqual([kind for kind, _ in statements], ["lock", "update"])
+        self.assertIn('ORDER BY "teams"."team_id" ASC', statements[0][1])
+        for team in (self.team, other_team):
+            team.refresh_from_db()
+            self.assertEqual(team.team_score, self.challenge.current_score)
+
+    def test_submit_passes_new_solver_and_held_locks_to_score_recalculation(self):
         with patch("apps.challenge.views.update_dynamic_score_and_team_scores", wraps=update_dynamic_score_and_team_scores) as recalculate:
             response = self.submit("MSG{correct_flag}")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(recalculate.call_args.kwargs, {"newly_solved_team_id": self.team.pk})
+        self.assertEqual(recalculate.call_args.kwargs, {
+            "newly_solved_team_id": self.team.pk,
+            "teams_already_locked": True,
+        })
 
     @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locks")
     def test_submit_locks_only_new_team_when_score_unchanged(self):
@@ -538,17 +566,20 @@ class ChallengeSubmitTests(TestCase):
             earned_score=current_score, earned_mileage=0,
         )
         locked_rows = []
+        lock_queries = []
 
         def track_team_locks(execute, sql, params, many, context):
             result = execute(sql, params, many, context)
             if 'FROM "teams"' in sql and "FOR NO KEY UPDATE" in sql:
                 locked_rows.append(context["cursor"].rowcount)
+                lock_queries.append(sql)
             return result
 
         with connection.execute_wrapper(track_team_locks):
             response = self.submit("MSG{correct_flag}")
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(locked_rows, [1 if score_unchanged else 2])
+        self.assertIn('ORDER BY "teams"."team_id" ASC', lock_queries[0])
         existing_team.refresh_from_db()
         self.team.refresh_from_db()
         expected_score = Decimal("1000" if score_unchanged else "991")

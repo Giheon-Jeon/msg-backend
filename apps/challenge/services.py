@@ -29,8 +29,10 @@ def is_correct_flag(flag, flag_hash):
     return False
 
 
-def update_dynamic_score_and_team_scores(challenge, *, newly_solved_team_id=None):
-    """Recalculate scores, limiting unchanged-score submissions to the new team."""
+def update_dynamic_score_and_team_scores(
+    challenge, *, newly_solved_team_id=None, teams_already_locked=False
+):
+    """Recalculate scores; prelocked callers must hold all affected teams in PK order."""
     solved_team_count = Solve.objects.filter(challenge=challenge).count()
     current_score = Decimal(
         calculate_dynamic_score(
@@ -59,10 +61,9 @@ def update_dynamic_score_and_team_scores(challenge, *, newly_solved_team_id=None
     else:
         affected_teams = Team.objects.filter(pk__in=affected_team_ids)
 
-    # Lock every affected team in the same order as challenge submissions.
-    list(
-        affected_teams.select_for_update(no_key=True).order_by("pk")
-    )
+    # Submission holds these locks in the same transaction before awarding mileage.
+    if not teams_already_locked:
+        list(affected_teams.select_for_update(no_key=True).order_by("pk"))
     affected_teams.update(
         team_score=Coalesce(
             Subquery(team_totals),
