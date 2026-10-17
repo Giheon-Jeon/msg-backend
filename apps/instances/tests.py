@@ -286,6 +286,34 @@ class InstanceLockTests(TestCase):
 
     @patch("apps.instances.services.scheduler_request")
     @patch("apps.instances.views.call_scheduler_active")
+    def test_missing_active_lookup_reconciles_cleanup_after_delete(self, active, detail):
+        active.side_effect = SchedulerError("INSTANCE_NOT_FOUND", "no active", 404)
+        for pending_status in (InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING):
+            with self.subTest(pending_status=pending_status):
+                instance = Instance.objects.create(
+                    user=self.user, team=self.team, challenge=self.challenge,
+                    status=pending_status, release=self.release,
+                )
+                detail.return_value = {
+                    "status": InstanceStatus.CLEANED,
+                    "release_id": str(self.release.pk),
+                    "endpoints": [],
+                    "service_url": None,
+                }
+
+                response = self.client.get("/api/v1/teams/me/instances")
+
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(response.data["data"])
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, InstanceStatus.CLEANED)
+                detail.assert_called_with(
+                    "GET", f"/api/instances/{instance.pk}",
+                    auth_header="Bearer test-scheduler-token",
+                )
+
+    @patch("apps.instances.services.scheduler_request")
+    @patch("apps.instances.views.call_scheduler_active")
     def test_missing_active_lookup_does_not_fail_a_new_pending_create(self, active, detail):
         active.side_effect = SchedulerError("INSTANCE_NOT_FOUND", "no active", 404)
         instance = Instance.objects.create(
