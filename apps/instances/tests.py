@@ -20,6 +20,7 @@ from apps.instances.models import (
     InstanceStatus,
     ReleaseContainer,
 )
+from apps.instances.services import SchedulerError
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
@@ -252,6 +253,67 @@ class InstanceLockTests(TestCase):
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.data["code"], "CHALLENGE_LOCKED")
         call_scheduler_create.assert_not_called()
+
+    @patch("apps.instances.services.scheduler_request")
+    @patch("apps.instances.views.call_scheduler_active")
+    def test_missing_active_lookup_reconciles_terminal_instance(self, active, detail):
+        active.side_effect = SchedulerError("INSTANCE_NOT_FOUND", "no active", 404)
+        other = User.objects.create_user(
+            login_id="other-instance-user", password="pw1234", nickname="other", team=self.team,
+        )
+        untouched = Instance.objects.create(
+            user=other, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED, release=self.release,
+        )
+        for status in (InstanceStatus.FAILED, InstanceStatus.CLEANED):
+            with self.subTest(status=status):
+                instance = Instance.objects.create(
+                    user=self.user, team=self.team, challenge=self.challenge,
+                    status=InstanceStatus.REQUESTED, release=self.release,
+                )
+                detail.return_value = {"status": status, "release_id": str(self.release.pk)}
+                response = self.client.get("/api/v1/teams/me/instances")
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(response.data["data"])
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, status)
+                detail.assert_called_with(
+                    "GET", f"/api/instances/{instance.pk}",
+                    auth_header="Bearer test-scheduler-token",
+                )
+        untouched.refresh_from_db()
+        self.assertEqual(untouched.status, InstanceStatus.REQUESTED)
+
+    @patch("apps.instances.services.scheduler_request")
+    @patch("apps.instances.views.call_scheduler_active")
+    def test_missing_active_lookup_does_not_fail_a_new_pending_create(self, active, detail):
+        active.side_effect = SchedulerError("INSTANCE_NOT_FOUND", "no active", 404)
+        instance = Instance.objects.create(
+            user=self.user, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED, release=self.release,
+        )
+        detail.return_value = {"status": InstanceStatus.REQUESTED, "release_id": str(self.release.pk)}
+        response = self.client.get("/api/v1/teams/me/instances")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["data"])
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, InstanceStatus.REQUESTED)
+
+    @patch("apps.instances.services.scheduler_request")
+    @patch("apps.instances.views.call_scheduler_active")
+    def test_missing_active_lookup_preserves_state_on_detail_failure(self, active, detail):
+        active.side_effect = SchedulerError("INSTANCE_NOT_FOUND", "no active", 404)
+        instance = Instance.objects.create(
+            user=self.user, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED, release=self.release,
+        )
+        for code, expected_http in (("SCHEDULER_UNAVAILABLE", 503), ("INSTANCE_NOT_FOUND", 200)):
+            with self.subTest(code=code):
+                detail.side_effect = SchedulerError(code, "detail unavailable", expected_http)
+                response = self.client.get("/api/v1/teams/me/instances")
+                self.assertEqual(response.status_code, expected_http)
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, InstanceStatus.REQUESTED)
 
     @patch("apps.instances.views.call_scheduler_active")
     def test_active_lookup_hides_endpoints_until_scheduler_reports_running(self, scheduler_active):

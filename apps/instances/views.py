@@ -11,14 +11,17 @@ from apps.instances.models import DeleteReason, Instance, InstanceLock, Instance
 from apps.instances.services import (
     DELETABLE_INSTANCE_STATUSES,
     EXTENDABLE_INSTANCE_STATUSES,
+    FINAL_INSTANCE_STATUSES,
     RESETTABLE_INSTANCE_STATUSES,
     SchedulerError,
     call_scheduler_active,
     call_scheduler_create,
     call_scheduler_delete,
+    call_scheduler_detail,
     call_scheduler_extend,
     call_scheduler_reset,
     create_instance_from_scheduler,
+    get_active_instance,
     get_challenge_runtime_config,
     mark_instance_replaced,
     scheduler_auth_header,
@@ -299,6 +302,24 @@ class MyInstanceView(APIView):
             )
         except SchedulerError as error:
             if error.code == "INSTANCE_NOT_FOUND":
+                # active 조회에서는 실패·종료된 인스턴스가 빠진다
+                # 생성과 같은 사용자 잠금 아래 마지막 기록의 최종 상태를 확인한다
+                with transaction.atomic():
+                    lock_instance_user(request.user)
+                    pending = get_active_instance(request.user)
+                    if pending is not None:
+                        try:
+                            terminal = call_scheduler_detail(
+                                pending, scheduler_auth_header(request),
+                            )
+                            if terminal.get("status") in FINAL_INSTANCE_STATUSES:
+                                update_instance_from_scheduler(pending, terminal)
+                        except SchedulerError as detail_error:
+                            if detail_error.code != "INSTANCE_NOT_FOUND":
+                                return fail(
+                                    detail_error.code, detail_error.message,
+                                    detail_error.status_code,
+                                )
                 return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
 
             return fail(error.code, error.message, error.status_code)
