@@ -9,6 +9,7 @@ from apps.challenge.models import Challenge
 from apps.common.response import fail, ok
 from apps.instances.models import DeleteReason, Instance, InstanceLock, InstanceStatus
 from apps.instances.services import (
+    ACTIVE_INSTANCE_STATUSES,
     DELETABLE_INSTANCE_STATUSES,
     EXTENDABLE_INSTANCE_STATUSES,
     FINAL_INSTANCE_STATUSES,
@@ -150,6 +151,19 @@ class InstanceDeleteView(APIView):
 
             if instance.user_id != request.user.user_id:
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
+
+            if (
+                instance.status in ACTIVE_INSTANCE_STATUSES
+                and instance.status not in DELETABLE_INSTANCE_STATUSES
+            ):
+                # 생성 직후 GET을 거치지 않아도 Scheduler의 현재 상태로 종료를 판단한다
+                try:
+                    scheduler_data = call_scheduler_detail(
+                        instance, scheduler_auth_header(request)
+                    )
+                    update_instance_from_scheduler(instance, scheduler_data)
+                except SchedulerError as error:
+                    return fail(error.code, error.message, error.status_code)
 
             if instance.status not in DELETABLE_INSTANCE_STATUSES:
                 return fail(
