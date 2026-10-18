@@ -10,6 +10,7 @@ from apps.common.utils import num
 from apps.koth.models import KothClub
 
 from .exceptions import SignatureAlreadyExists, SignatureInUse, SignatureNotFound
+from .locks import lock_signature
 from .models import SignatureChallenge, SignatureSolve
 from .serializers import (
     SignatureCreateSerializer,
@@ -100,6 +101,7 @@ def signature_collection(request):
 @permission_classes([IsAdmin])
 def signature_detail(request, signature_id):
     with transaction.atomic():
+        lock_signature(signature_id)
         try:
             challenge = (
                 SignatureChallenge.objects.select_for_update()
@@ -158,6 +160,7 @@ def signature_publish(request, signature_id):
     serializer.is_valid(raise_exception=True)
 
     with transaction.atomic():
+        lock_signature(signature_id)
         try:
             challenge = (
                 SignatureChallenge.objects.select_for_update()
