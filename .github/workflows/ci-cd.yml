@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      verify_gcs:
+        description: "GCS 참가자 ZIP 업로드·다운로드 검증"
+        type: boolean
+        default: false
+      verify_github_artifacts:
+        description: "verify_gcs와 함께 실제 GitHub 발행본 4종도 검증"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,9 +26,79 @@ concurrency:
 
 jobs:
   ci:
+    if: github.event_name != 'workflow_dispatch' || !inputs.verify_gcs
     uses: MSG-CTF/jm_devsecops/.github/workflows/reusable-ci.yml@v3.3.1
     with:
       smoke_test_path: /admin/login/
+
+  verify-gcs:
+    name: verify-gcs
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_gcs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: msg_gcs_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: msg_gcs_smoke
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      GCS_ENABLED: "True"
+      GCS_PROJECT_ID: msg-broker
+      GCS_BUCKET_NAME: 2026msg_gcs
+      GCS_OBJECT_PREFIX: dev
+      GCS_QA_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Authenticate with registered GCP identity
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: projects/309055091666/locations/global/workloadIdentityPools/github-actions/providers/msg-github-actions
+          service_account: gcs-file-upload-devops@msg-broker.iam.gserviceaccount.com
+          project_id: msg-broker
+          create_credentials_file: true
+      - name: Verify GCS upload and authenticated HTTP downloads
+        env:
+          VERIFY_GITHUB_ARTIFACTS: ${{ inputs.verify_github_artifacts }}
+          RELEASE_POLL_GITHUB_TOKEN: ${{ inputs.verify_github_artifacts && secrets.RELEASE_POLL_GITHUB_TOKEN || '' }}
+        run: |
+          if [ "$VERIFY_GITHUB_ARTIFACTS" = "true" ]; then
+            python tools/gcs_smoke.py --github-artifacts --report reports/gcs-smoke.json
+          else
+            python tools/gcs_smoke.py --report reports/gcs-smoke.json
+          fi
+      - name: Upload sanitized verification report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gcs-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/gcs-smoke.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   deploy-development:
     name: deploy-development

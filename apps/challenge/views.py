@@ -1,7 +1,9 @@
 from datetime import timedelta
 
+from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 from django.db.models import F
+from django.http import FileResponse
 from django.utils import timezone
 from rest_framework.views import APIView
 
@@ -19,6 +21,7 @@ from apps.challenge.services import (
 )
 from apps.common.response import fail, ok
 from apps.instances.models import Instance
+from apps.instances.user_files import current_user_file_bundle, serialize_user_file
 from apps.instances.services import (
     ACTIVE_INSTANCE_STATUSES,
     SchedulerError,
@@ -50,6 +53,23 @@ def number_value(value):
     return int(value) if value == int(value) else float(value)
 
 
+def active_challenge_instance(request, challenge, team):
+    # 상세와 다운로드가 같은 상태를 확인해 종료된 실행의 ZIP이 남지 않게 한다
+    instance = Instance.objects.filter(
+        user=request.user, team=team, challenge=challenge, status__in=ACTIVE_INSTANCE_STATUSES,
+    ).select_related("release").order_by("-created_at").first()
+    if instance is not None:
+        try:
+            instance = sync_instance_from_scheduler(instance, scheduler_auth_header(request))
+        except SchedulerError as error:
+            if error.code == "INSTANCE_NOT_FOUND":
+                return None
+            raise
+        if instance is not None and instance.status not in ACTIVE_INSTANCE_STATUSES:
+            return None
+    return instance
+
+
 class ChallengeDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -68,27 +88,10 @@ class ChallengeDetailView(APIView):
             return fail("CHALLENGE_LOCKED", "아직 개방되지 않은 문제입니다.", 403)
 
         solve = Solve.objects.filter(team=team, challenge=challenge).first()
-        instance = (
-            Instance.objects.filter(
-                user=request.user,
-                challenge=challenge,
-                status__in=ACTIVE_INSTANCE_STATUSES,
-            )
-            .order_by("-created_at")
-            .first()
-        )
-        if instance is not None:
-            try:
-                instance = sync_instance_from_scheduler(
-                    instance, scheduler_auth_header(request)
-                )
-            except SchedulerError as error:
-                if error.code == "INSTANCE_NOT_FOUND":
-                    instance = None
-                else:
-                    return fail(error.code, error.message, error.status_code)
-            if instance is not None and instance.status not in ACTIVE_INSTANCE_STATUSES:
-                instance = None
+        try:
+            instance = active_challenge_instance(request, challenge, team)
+        except SchedulerError as error:
+            return fail(error.code, error.message, error.status_code)
 
         return ok(
             message="문제 상세 조회 성공",
@@ -99,12 +102,49 @@ class ChallengeDetailView(APIView):
                 "difficulty": challenge.difficulty,
                 "score": number_value(challenge.current_score),
                 "description": challenge.description,
-                "files": [],
+                "files": (
+                    [serialize_user_file(challenge, bundle)]
+                    if (bundle := current_user_file_bundle(challenge, release=instance.release if instance else None)) is not None
+                    else []
+                ),
                 "solved_team_count": Solve.objects.filter(challenge=challenge).count(),
                 "is_solved": solve is not None,
                 "instance": serialize_instance(instance),
             },
         )
+
+
+class ChallengeFileDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, challenge_id, file_id):
+        team = request.user.team
+        if team is None:
+            return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
+
+        challenge = Challenge.objects.filter(challenge_id=challenge_id).first()
+        if challenge is None:
+            return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
+        if not TeamChallengeAccess.objects.filter(team=team, challenge=challenge).exists():
+            return fail("CHALLENGE_LOCKED", "아직 개방되지 않은 문제입니다.", 403)
+
+        # 실행 중인 참가자는 생성 당시 이미지와 짝인 ZIP을 계속 사용한다
+        try:
+            instance = active_challenge_instance(request, challenge, team)
+        except SchedulerError as error:
+            return fail(error.code, error.message, error.status_code)
+        bundle = current_user_file_bundle(challenge, release=instance.release if instance else None)
+        if bundle is None or bundle.bundle_id != file_id or not default_storage.exists(bundle.object_key):
+            return fail("CHALLENGE_FILE_NOT_FOUND", "존재하지 않는 문제 파일입니다.", 404)
+
+        response = FileResponse(
+            default_storage.open(bundle.object_key, "rb"),
+            as_attachment=True,
+            filename="user-files.zip",
+            content_type="application/zip",
+        )
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 class ChallengeSubmitView(APIView):

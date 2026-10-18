@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch, Q, Sum
 from django.db.models.deletion import SET_NULL
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from datetime import datetime
 
 from rest_framework.decorators import api_view, permission_classes
@@ -36,6 +37,7 @@ from apps.board.services import (
 )
 from apps.timer.models import Contest
 from .models import AdminEvent, AdminSetting
+from .challenge_deployment import deployment_summaries
 
 from apps.teams.models import (
     MileageHistory,
@@ -78,6 +80,7 @@ from apps.instances.services import (
     call_scheduler_reset,
     create_instance_from_scheduler,
     isoformat_z,
+    mark_instance_replaced,
     scheduler_auth_header,
 )
 from .resource_broker import fetch_resource_targets
@@ -1006,13 +1009,18 @@ def instance_force_reset(request, instance_id):
         except SchedulerError as error:
             return fail(error.code, error.message, error.status_code)
 
-        new_instance = create_instance_from_scheduler(
-            scheduler_data,
-            user=instance.user,
-            team=instance.team,
-            challenge=instance.challenge,
-            replaced_instance=instance,
-        )
+        try:
+            new_instance = create_instance_from_scheduler(
+                scheduler_data,
+                user=instance.user,
+                team=instance.team,
+                challenge=instance.challenge,
+                replaced_instance=instance,
+                release=instance.release,
+            )
+        except SchedulerError as error:
+            return fail(error.code, error.message, error.status_code)
+        mark_instance_replaced(instance)
         _record_event(
             AdminEvent.EventType.INSTANCE_FORCED,
             f"인스턴스 강제 재시작 (이전 {instance.instance_id})",
@@ -1034,6 +1042,11 @@ def instance_force_reset(request, instance_id):
                 new_instance.host
                 if new_instance.status == InstanceStatus.RUNNING
                 else None
+            ),
+            "endpoints": (
+                new_instance.endpoints
+                if new_instance.status == InstanceStatus.RUNNING
+                else []
             ),
             "port": None,
             "expires_at": isoformat_z(new_instance.expires_at),
@@ -1278,9 +1291,17 @@ def _challenge_create(request):
     return ok(_serialize_challenge(challenge), message="문제가 등록되었습니다.")
 
 
-@api_view(["PATCH", "DELETE"])
+@api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsAdmin])
 def challenge_detail(request, challenge_id):
+    if request.method == "GET":
+        challenge = Challenge.objects.filter(pk=challenge_id).first()
+        if challenge is None:
+            return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
+        response = ok(_serialize_challenge(challenge))
+        response["Cache-Control"] = "private, no-store"
+        return response
+
     with transaction.atomic():
         try:
             challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
@@ -1338,6 +1359,7 @@ def challenge_detail(request, challenge_id):
     return ok(_serialize_challenge(challenge), message="문제가 수정되었습니다.")
 
 
+@never_cache
 @api_view(["GET", "POST"])
 @permission_classes([IsAdmin])
 def challenge_list(request):
@@ -1382,7 +1404,8 @@ def challenge_list(request):
 
     total_count = queryset.count()
     offset = (page - 1) * size
-    rows = queryset.order_by(CHALLENGE_SORT[sort], "title")[offset : offset + size]
+    rows = list(queryset.order_by(CHALLENGE_SORT[sort], "title")[offset : offset + size])
+    deployments = deployment_summaries(rows)
 
     challenges = [
         {
@@ -1396,6 +1419,7 @@ def challenge_list(request):
             "solved_team_count": c.solved_team_count,
             "running_instance_count": c.running_instance_count,
             "failed_instance_count": c.failed_instance_count,
+            "deployment": deployments.get(c.pk),
         }
         for c in rows
     ]

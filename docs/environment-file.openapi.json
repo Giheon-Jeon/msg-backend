@@ -1,0 +1,640 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MSG CTF admin environment file import",
+    "version": "1.1.0",
+    "description": "Per-container import on existing Kubernetes releases. Preserves image, ports, untouched values and pinned secret versions. Saves without activation."
+  },
+  "paths": {
+    "/api/v1/admin/challenges/{challenge_id}/releases/{release_id}/environment_files/preview": {
+      "post": {
+        "operationId": "environment_file_preview",
+        "security": [
+          {
+            "admin_bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/challenges/{challenge_id}/releases/{release_id}/environment_files/import": {
+      "post": {
+        "operationId": "environment_file_import",
+        "security": [
+          {
+            "admin_bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "admin_bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "ADMIN role required"
+      }
+    },
+    "schemas": {
+      "Entry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]{0,63}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "env",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "secret_name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "use_existing": {
+            "type": "boolean"
+          },
+          "secret_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "container",
+          "content"
+        ],
+        "properties": {
+          "container": {
+            "type": "string",
+            "description": "Name in the selected release"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "UTF-8, at most 65536 bytes. Literal single-line NAME=VALUE syntax; no interpolation."
+          },
+          "entries": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            }
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ImportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "container",
+          "content",
+          "entries",
+          "request_id"
+        ],
+        "properties": {
+          "container": {
+            "type": "string",
+            "description": "Name in the selected release"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "UTF-8, at most 65536 bytes. Literal single-line NAME=VALUE syntax; no interpolation."
+          },
+          "entries": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            }
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PreviewRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "required",
+          "has_value",
+          "locked_secret",
+          "action"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]{0,63}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "env",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "secret_name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "use_existing": {
+            "type": "boolean"
+          },
+          "secret_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "has_value": {
+            "type": "boolean"
+          },
+          "locked_secret": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "update",
+              "keep"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "value": {
+            "type": "string",
+            "description": "Only present for ordinary, non-sensitive variables"
+          }
+        }
+      },
+      "EnvironmentRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "required"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "env",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReleaseContainer": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "env_rules": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EnvironmentRule"
+            }
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "null"
+          }
+        }
+      },
+      "PreviewEnvelope": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "container",
+              "entries",
+              "errors",
+              "preserved_names",
+              "other_containers",
+              "can_import"
+            ],
+            "properties": {
+              "container": {
+                "type": "string"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PreviewRow"
+                }
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preserved_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "other_containers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "can_import": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "ImportEnvelope": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "release_id",
+              "version",
+              "is_current",
+              "containers"
+            ],
+            "description": "Existing admin release representation; never includes file content or secret values.",
+            "properties": {
+              "release_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version": {
+                "type": "integer"
+              },
+              "is_current": {
+                "type": "boolean"
+              },
+              "containers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReleaseContainer"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

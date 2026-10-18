@@ -159,6 +159,40 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = "static/"
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "/media/"
+
+GCS_ENABLED = os.getenv("GCS_ENABLED", "False").lower() == "true"
+if GCS_ENABLED:
+    GCS_PROJECT_ID = os.getenv("GCS_PROJECT_ID", "").strip()
+    GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "").strip()
+    GCS_OBJECT_PREFIX = os.getenv("GCS_OBJECT_PREFIX", "").strip("/")
+    missing = [
+        name
+        for name, value in (
+            ("GCS_PROJECT_ID", GCS_PROJECT_ID),
+            ("GCS_BUCKET_NAME", GCS_BUCKET_NAME),
+            ("GCS_OBJECT_PREFIX", GCS_OBJECT_PREFIX),
+        )
+        if not value
+    ]
+    if missing:
+        raise ImproperlyConfigured(
+            "GCS_ENABLED=True requires: " + ", ".join(missing)
+        )
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+            "OPTIONS": {
+                "project_id": GCS_PROJECT_ID,
+                "bucket_name": GCS_BUCKET_NAME,
+                "location": GCS_OBJECT_PREFIX,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -213,6 +247,7 @@ REST_FRAMEWORK = {
         "login": "10/min",
     },
 }
+SCHEDULER_API_TOKEN = os.getenv("SCHEDULER_API_TOKEN", "")
 SCHEDULER_BASE_URL = os.getenv("SCHEDULER_BASE_URL", "http://127.0.0.1:8001").rstrip(
     "/"
 )
@@ -239,7 +274,26 @@ if (
     )
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
+
+# 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
+RUNTIME_SECRET_ENCRYPTION_KEYS = [
+    key.strip() for key in os.getenv("RUNTIME_SECRET_ENCRYPTION_KEYS", "").split(",") if key.strip()
+]
+RUNTIME_SECRET_API_TOKEN = os.getenv("RUNTIME_SECRET_API_TOKEN", "")
 INSTANCE_EXTEND_MINUTES = int(os.getenv("INSTANCE_EXTEND_MINUTES", "30"))
+
+# 공급망 publish bundle 자동 수집 (manage.py poll_releases)
+RELEASE_POLL_API_BASE = os.getenv("RELEASE_POLL_API_BASE", "https://api.github.com")
+RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
+# Actions artifact 다운로드는 공개 저장소여도 토큰이 필요하다 (actions:read)
+RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
+RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
+RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+# Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
+REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")
+REPOSITORY_ENV_REF = os.getenv("REPOSITORY_ENV_REF", "main")
+REPOSITORY_ENV_EXCLUDED_SLUGS = {"pwn-msgdriver"}
 
 
 def _validated_base_url(name, default):
