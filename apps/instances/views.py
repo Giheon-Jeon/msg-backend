@@ -149,7 +149,10 @@ class InstanceDeleteView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if (
@@ -208,7 +211,10 @@ class InstanceResetView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in RESETTABLE_INSTANCE_STATUSES:
@@ -265,7 +271,10 @@ class InstanceExtendView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in EXTENDABLE_INSTANCE_STATUSES:
@@ -309,6 +318,10 @@ class MyInstanceView(APIView):
 
     def get(self, request):
         # 현재 access token의 user_id 기준 활성 인스턴스 한 개를 Scheduler와 동기화해 조회한다
+        team = getattr(request.user, "team", None)
+        if team is None:
+            return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
+
         try:
             scheduler_data = call_scheduler_active(
                 request.user, scheduler_auth_header(request)
@@ -320,7 +333,7 @@ class MyInstanceView(APIView):
                 with transaction.atomic():
                     lock_instance_user(request.user)
                     pending = (
-                        Instance.objects.filter(user=request.user)
+                        Instance.objects.filter(user=request.user, team=team)
                         .exclude(status__in=FINAL_INSTANCE_STATUSES)
                         .select_related("challenge", "release")
                         .order_by("-created_at")
@@ -343,21 +356,35 @@ class MyInstanceView(APIView):
 
             return fail(error.code, error.message, error.status_code)
 
+        try:
+            if not isinstance(scheduler_data, dict):
+                raise ValueError()
+            instance_id = uuid.UUID(scheduler_data["instance_id"])
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return fail("SCHEDULER_UNAVAILABLE", "인스턴스 서버 응답이 올바르지 않습니다.", 503)
+
         instance = (
             Instance.objects.filter(
-                instance_id=scheduler_data.get("instance_id"),
+                instance_id=instance_id,
                 user=request.user,
             )
             .select_related("challenge")
             .first()
         )
+        if instance is not None and instance.team_id != team.pk:
+            return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
+
         if instance is None:
-            team = getattr(request.user, "team", None)
+            # Active is queried by user; its documented summary omits user_id.
+            try:
+                if not {"team_id", "challenge_id"}.issubset(scheduler_data):
+                    raise ValueError()
+                challenge_id = uuid.UUID(scheduler_data["challenge_id"])
+            except (ValueError, TypeError, AttributeError):
+                return fail("SCHEDULER_UNAVAILABLE", "인스턴스 서버 응답이 올바르지 않습니다.", 503)
             challenge = Challenge.objects.filter(
-                challenge_id=scheduler_data.get("challenge_id")
+                challenge_id=challenge_id
             ).first()
-            if team is None:
-                return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
             if challenge is None:
                 return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
 

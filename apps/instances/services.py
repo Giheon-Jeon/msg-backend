@@ -476,10 +476,33 @@ def call_scheduler_active(user, auth_header=None):
     )
 
 
+def _validate_scheduler_response_scope(
+    scheduler_data, *, user_id, team_id, challenge_id, instance_id=None
+):
+    expected = {"user_id": user_id, "team_id": team_id, "challenge_id": challenge_id}
+    if instance_id is not None:
+        expected["instance_id"] = instance_id
+    # Partial detail/extend responses may omit IDs, but supplied IDs must match.
+    if not isinstance(scheduler_data, dict) or any(
+        field in scheduler_data and scheduler_data[field] != str(value)
+        for field, value in expected.items()
+    ):
+        raise SchedulerError(
+            "SCHEDULER_UNAVAILABLE",
+            "Scheduler 응답의 인스턴스 소유 정보가 일치하지 않습니다.",
+            503,
+        )
+
+
 def update_instance_from_scheduler(instance, scheduler_data):
     # Scheduler 응답값으로 백엔드 인스턴스 상태를 갱신한다
     if not scheduler_data:
         return instance
+
+    _validate_scheduler_response_scope(
+        scheduler_data, instance_id=instance.pk, user_id=instance.user_id,
+        team_id=instance.team_id, challenge_id=instance.challenge_id,
+    )
 
     if instance.release_id is not None:
         returned_id = scheduler_data.get("release_id")
@@ -545,6 +568,10 @@ def create_instance_from_scheduler(
     # Scheduler가 발급한 instance_id로 백엔드 인스턴스 row를 만든다
     if challenge is None:
         challenge = Challenge.objects.filter(challenge_id=scheduler_data.get("challenge_id")).first()
+    _validate_scheduler_response_scope(
+        scheduler_data, user_id=user.pk, team_id=team.pk,
+        challenge_id=challenge.pk if challenge else None,
+    )
     if release is None and challenge is not None:
         release = get_release_from_scheduler_data(challenge, scheduler_data)
     elif release is not None:
