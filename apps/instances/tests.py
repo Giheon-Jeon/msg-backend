@@ -127,6 +127,78 @@ class InstanceLockTests(TestCase):
             name=name,
         )
 
+    @patch("apps.instances.views.call_scheduler_delete")
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_delete_refreshes_pending_instance_without_a_prior_get(self, detail, delete):
+        for status in (
+            InstanceStatus.REQUESTED, InstanceStatus.SCHEDULING,
+            InstanceStatus.PROVISIONING, InstanceStatus.RESTARTING,
+            InstanceStatus.RESETTING,
+        ):
+            with self.subTest(status=status):
+                instance = Instance.objects.create(
+                    user=self.user, team=self.team, challenge=self.challenge,
+                    release=self.release, status=status,
+                )
+                detail.return_value = {
+                    "instance_id": str(instance.pk), "status": "RUNNING",
+                    "release_id": str(self.release.pk),
+                }
+                response = self.client.delete(f"/api/v1/instances/{instance.pk}")
+                self.assertEqual(response.status_code, 202)
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, InstanceStatus.STOPPING)
+                self.assertEqual(instance.delete_reason, DeleteReason.USER_REQUESTED)
+                delete.assert_called_once()
+                detail.assert_called_once()
+                delete.reset_mock()
+                detail.reset_mock()
+
+    @patch("apps.instances.views.call_scheduler_delete")
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_delete_still_rejects_an_instance_that_is_not_ready(self, detail, delete):
+        instance = Instance.objects.create(
+            user=self.user, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED,
+        )
+        detail.return_value = {"instance_id": str(instance.pk), "status": "PROVISIONING"}
+        response = self.client.delete(f"/api/v1/instances/{instance.pk}")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "INVALID_STATE_TRANSITION")
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, InstanceStatus.PROVISIONING)
+        delete.assert_not_called()
+
+    @patch("apps.instances.views.call_scheduler_delete")
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_delete_propagates_refresh_failure_without_stopping(self, detail, delete):
+        instance = Instance.objects.create(
+            user=self.user, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED,
+        )
+        detail.side_effect = SchedulerError("SCHEDULER_UNAVAILABLE", "일시적인 오류", 503)
+        response = self.client.delete(f"/api/v1/instances/{instance.pk}")
+        self.assertEqual(response.status_code, 503)
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, InstanceStatus.REQUESTED)
+        delete.assert_not_called()
+
+    @patch("apps.instances.views.call_scheduler_delete")
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_delete_checks_ownership_before_refresh(self, detail, delete):
+        other = User.objects.create_user(
+            login_id="pending-owner", password="pw1234", nickname="다른 사용자",
+            team=self.team,
+        )
+        instance = Instance.objects.create(
+            user=other, team=self.team, challenge=self.challenge,
+            status=InstanceStatus.REQUESTED,
+        )
+        response = self.client.delete(f"/api/v1/instances/{instance.pk}")
+        self.assertEqual(response.status_code, 403)
+        detail.assert_not_called()
+        delete.assert_not_called()
+
     @patch("apps.instances.views.call_scheduler_create")
     def test_instance_create_creates_user_lock(self, call_scheduler_create):
         # 인스턴스 생성 요청은 사용자 단위 잠금 row를 만든 뒤 처리된다
