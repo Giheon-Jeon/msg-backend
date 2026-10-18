@@ -712,7 +712,10 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
             team=team, challenge=challenge, source_cell=cell
         )
         TeamBoardState.objects.create(
-            team=team, position=cell, active_challenge_access=access, dice_rolls_left=0
+            team=team,
+            position=cell,
+            active_challenge_access=access,
+            dice_rolls_left=0,
         )
         barrier = Barrier(2)
 
