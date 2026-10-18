@@ -29,7 +29,7 @@ class BackendReleaseTests(unittest.TestCase):
             {"deployment_id": "../other"},
             {"pipeline_revision": "b" * 40},
             {"repository": "other"},
-            {"helper": "/tmp/other"},
+            {"helper": "/unapproved/helper.py"},
         ]:
             with self.subTest(changes=changes), self.assertRaises(
                 release.DeploymentError
