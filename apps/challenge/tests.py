@@ -1,6 +1,7 @@
 import datetime
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
+from time import monotonic, sleep
 from unittest import skipUnless
 from decimal import Decimal
 from unittest.mock import patch
@@ -11,7 +12,7 @@ from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Team, User
+from apps.accounts.models import Role, Team, User
 from apps.board.models import Cell, TeamBoardState, TeamChallengeAccess
 from apps.board.services import get_or_create_board_state
 from apps.challenge.models import Challenge, FlagSubmissionLock, Solve
@@ -972,6 +973,150 @@ class ConcurrentChallengeSubmitTests(TransactionTestCase):
             MileageHistory.objects.filter(team=team).values_list("type", "amount"),
             [(MileageType.CHALLENGE_SOLVE, 30), (MileageType.ROULETTE, 50)],
         )
+
+    def test_admin_score_edit_and_submit_finish_when_admin_locks_teams_first(self):
+        self._assert_admin_score_edit_and_submit_finish("admin")
+
+    def test_admin_score_edit_and_submit_finish_when_submit_locks_teams_first(self):
+        self._assert_admin_score_edit_and_submit_finish("submit")
+
+    def _assert_admin_score_edit_and_submit_finish(self, first_action):
+        teams = [Team.objects.create(team_name=f"admin-submit-{i}") for i in range(2)]
+        users = {
+            "admin": User.objects.create_user(
+                login_id="score-admin", nickname="admin", role=Role.ADMIN
+            ),
+            "submit": User.objects.create_user(
+                login_id="score-solver", nickname="solver", team=teams[0]
+            ),
+        }
+        edited, submitted = [
+            Challenge.objects.create(
+                title=f"admin-submit-{i}", category="WEB", difficulty="EASY",
+                score=1000, initial_score=1000, minimum_score=100, decay=20,
+                current_score=991 if i == 0 else 998,
+                flag_hash=hash_flag("MSG{admin-submit}"), is_published=True,
+            )
+            for i in range(2)
+        ]
+        for team in teams:
+            Solve.objects.create(
+                team=team, challenge=edited, earned_score=1000, earned_mileage=0
+            )
+        Solve.objects.create(
+            team=teams[1], challenge=submitted, earned_score=1000, earned_mileage=0
+        )
+        for team, score in zip(teams, (991, 1989)):
+            Team.objects.filter(pk=team.pk).update(team_score=score)
+        cell = Cell.objects.create(
+            cell_index=1, type=Cell.CellType.CHALLENGE, name="admin-submit"
+        )
+        access = TeamChallengeAccess.objects.create(
+            team=teams[0], challenge=submitted, source_cell=cell
+        )
+        state = TeamBoardState.objects.create(
+            team=teams[0], position=cell, active_challenge_access=access,
+            dice_rolls_left=0,
+        )
+        first_locked, second_waiting = Event(), Event()
+        backend_pids = {}
+        lock_queries = {"admin": [], "submit": []}
+
+        def request_action(action):
+            close_old_connections()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET lock_timeout = '10s'")
+                    cursor.execute("SET statement_timeout = '20s'")
+                    cursor.execute("SELECT pg_backend_pid()")
+                    backend_pids[action] = cursor.fetchone()[0]
+                client = APIClient()
+                client.force_authenticate(user=User.objects.get(pk=users[action].pk))
+
+                def synchronize(execute, sql, params, many, context):
+                    if 'FROM "teams"' not in sql or "FOR NO KEY UPDATE" not in sql:
+                        return execute(sql, params, many, context)
+                    lock_queries[action].append(sql)
+                    self.assertIn('ORDER BY "teams"."team_id" ASC', sql)
+                    if action != first_action:
+                        if not first_locked.wait(timeout=5):
+                            raise AssertionError("First request never locked the teams")
+                        second_waiting.set()
+                        return execute(sql, params, many, context)
+
+                    result = execute(sql, params, many, context)
+                    first_locked.set()
+                    if not second_waiting.wait(timeout=5):
+                        raise AssertionError("Second request never attempted team locks")
+                    other_action = "submit" if action == "admin" else "admin"
+                    # Observe real database contention before letting the holder commit.
+                    deadline = monotonic() + 5
+                    while monotonic() < deadline:
+                        with connection.cursor() as cursor:
+                            cursor.execute(
+                                "SELECT %s = ANY(pg_blocking_pids(%s))",
+                                [backend_pids[action], backend_pids[other_action]],
+                            )
+                            if cursor.fetchone()[0]:
+                                return result
+                        sleep(0.01)
+                    raise AssertionError("Second request never waited on the first")
+
+                with connection.execute_wrapper(synchronize):
+                    if action == "admin":
+                        response = client.patch(
+                            f"/api/v1/admin/challenges/{edited.pk}",
+                            {"initial_score": 1200, "minimum_score": 600},
+                            format="json",
+                        )
+                    else:
+                        response = client.post(
+                            f"/api/v1/challenges/{submitted.pk}/submit",
+                            {"flag": "MSG{admin-submit}"}, format="json",
+                        )
+                return action, response.status_code, response.data
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(request_action, ("admin", "submit")))
+        bodies = {}
+        for action, status, body in results:
+            self.assertEqual(status, 200, body)
+            self.assertEqual(len(lock_queries[action]), 1)
+            bodies[action] = body["data"]
+        edited.refresh_from_db()
+        submitted.refresh_from_db()
+        self.assertEqual(edited.current_score, Decimal("1194"))
+        self.assertEqual(submitted.current_score, Decimal("991"))
+        self.assertEqual(bodies["admin"]["current_score"], 1194)
+        self.assertEqual(bodies["submit"]["earned_score"], 998)
+        self.assertEqual(
+            bodies["submit"]["team_score"],
+            2185 if first_action == "admin" else 1982,
+        )
+        self.assertEqual(bodies["submit"]["mileage"], 30)
+        self.assertTrue(bodies["submit"]["is_extra_dice_granted"])
+        self.assertEqual(Solve.objects.count(), 4)
+        self.assertEqual(
+            list(Solve.objects.filter(challenge=edited).values_list("earned_score", flat=True)),
+            [Decimal("1000"), Decimal("1000")],
+        )
+        self.assertEqual(Solve.objects.filter(team=teams[0], challenge=submitted).count(), 1)
+        self.assertEqual(
+            list(MileageHistory.objects.values_list("team_id", "type", "amount")),
+            [(teams[0].pk, MileageType.CHALLENGE_SOLVE, 30)],
+        )
+        for team in teams:
+            team.refresh_from_db()
+            self.assertEqual(team.team_score, Decimal("2185"))
+        self.assertEqual(teams[0].mileage, 30)
+        self.assertEqual(teams[1].mileage, 0)
+        state.refresh_from_db()
+        access.refresh_from_db()
+        self.assertEqual(state.dice_rolls_left, 1)
+        self.assertIsNone(state.active_challenge_access_id)
+        self.assertEqual(access.status, TeamChallengeAccess.Status.CLEARED)
 
     def test_cross_team_solves_on_different_challenges_finish_with_consistent_scores(
         self,
