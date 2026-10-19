@@ -1,0 +1,55 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Participant instance status", "version": "1.1.0"},
+  "paths": {
+    "/api/v1/teams/me/instances": {
+      "get": {
+        "summary": "Active instance, or the latest own challenge instance when no instance is active",
+        "security": [{"bearer_auth": []}],
+        "parameters": [{"name": "challenge_id", "in": "query", "required": false, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {
+          "200": {
+            "description": "Without challenge_id, a missing active instance remains null",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "properties": {
+                "code": {"type": "string", "const": "SUCCESS"},
+                "message": {"type": "string"},
+                "data": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/instance"}]}
+              }
+            }}}
+          },
+          "400": {"description": "INVALID_REQUEST for malformed challenge_id"},
+          "401": {"description": "Authentication required"},
+          "503": {"description": "Scheduler errors are not replaced with historical data"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"bearer_auth": {"type": "http", "scheme": "bearer"}},
+    "schemas": {
+      "instance": {
+        "type": "object",
+        "properties": {
+          "instance_id": {"type": "string", "format": "uuid"},
+          "challenge_id": {"type": "string", "format": "uuid"},
+          "challenge_title": {"type": "string"},
+          "status": {"type": "string", "enum": ["REQUESTED", "SCHEDULING", "PROVISIONING", "RUNNING", "RESTARTING", "RESETTING", "STOPPING", "STOPPED", "FAILED", "EXPIRED", "CLEANUP_PENDING", "CLEANED"]},
+          "host": {"type": ["string", "null"]},
+          "ports": {"type": "array", "items": {"type": "integer"}},
+          "endpoints": {"type": "array", "items": {"type": "object", "properties": {
+            "container_name": {"type": "string"},
+            "port": {"type": "integer"},
+            "protocol": {"type": "string"},
+            "service_url": {"type": "string"}
+          }}},
+          "expires_at": {"type": ["string", "null"], "format": "date-time"},
+          "hard_expires_at": {"type": ["string", "null"], "format": "date-time"},
+          "replaced_instance_id": {"type": ["string", "null"], "format": "uuid"},
+          "delete_reason": {"type": ["string", "null"], "enum": [null, "USER_REQUESTED", "REPLACED_BY_NEW_INSTANCE", "TTL_EXPIRED", "IDLE_EXPIRED", "HARD_TIMEOUT", "ADMIN_FORCED"]}
+        }
+      }
+    }
+  }
+}

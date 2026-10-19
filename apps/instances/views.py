@@ -322,6 +322,13 @@ class MyInstanceView(APIView):
         if team is None:
             return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
 
+        challenge_id = request.query_params.get("challenge_id")
+        if challenge_id is not None:
+            try:
+                challenge_id = uuid.UUID(challenge_id)
+            except (ValueError, TypeError, AttributeError):
+                return fail("INVALID_REQUEST", "문제 ID가 올바르지 않습니다", 400)
+
         try:
             scheduler_data = call_scheduler_active(
                 request.user, scheduler_auth_header(request)
@@ -352,6 +359,22 @@ class MyInstanceView(APIView):
                                     detail_error.code, detail_error.message,
                                     detail_error.status_code,
                                 )
+                if challenge_id is not None:
+                    latest = (
+                        Instance.objects.filter(
+                            user=request.user, team=team, challenge_id=challenge_id,
+                        )
+                        .select_related("challenge")
+                        .order_by("-created_at", "-instance_id")
+                        .first()
+                    )
+                    return ok(
+                        serialize_instance(
+                            latest, include_title=True, include_replaced=True,
+                            include_termination=True,
+                        ),
+                        message="인스턴스 상태 조회 성공",
+                    )
                 return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
 
             return fail(error.code, error.message, error.status_code)

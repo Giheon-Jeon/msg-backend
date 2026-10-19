@@ -318,7 +318,7 @@ def scheduler_network_values(scheduler_data):
     return service_url, endpoints
 
 
-def serialize_instance(instance, include_title=False, include_replaced=False):
+def serialize_instance(instance, include_title=False, include_replaced=False, include_termination=False):
     # 인스턴스 응답 데이터를 API 명세 형식으로 정리한다
     if instance is None:
         return None
@@ -344,6 +344,9 @@ def serialize_instance(instance, include_title=False, include_replaced=False):
             if instance.replaced_instance_id
             else None
         )
+
+    if include_termination:
+        data["delete_reason"] = instance.delete_reason
 
     return data
 
