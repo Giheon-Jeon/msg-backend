@@ -57,6 +57,30 @@ class SchedulerError(Exception):
         self.status_code = status_code
 
 
+SCHEDULER_DELETE_REASONS = {
+    "USER_REQUESTED": DeleteReason.USER_REQUESTED,
+    "TTL_EXPIRED": DeleteReason.TTL_EXPIRED,
+    "IDLE_EXPIRED": DeleteReason.IDLE_EXPIRED,
+    "HARD_TIMEOUT_EXPIRED": DeleteReason.HARD_TIMEOUT,
+    "ADMIN_FORCED": DeleteReason.ADMIN_FORCED,
+    "CREATE_FAILED_CLEANUP": None,
+}
+
+
+def scheduler_delete_reason(data):
+    reason = data.get("delete_reason")
+    if reason is None:
+        return None
+    if not isinstance(reason, str) or reason not in SCHEDULER_DELETE_REASONS:
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "종료 사유가 올바르지 않습니다", 503)
+    if data.get("status") not in (
+        InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING, InstanceStatus.EXPIRED,
+        InstanceStatus.STOPPED, InstanceStatus.CLEANED, InstanceStatus.FAILED,
+    ):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "종료 사유와 상태가 일치하지 않습니다", 503)
+    return SCHEDULER_DELETE_REASONS[reason]
+
+
 def isoformat_z(value):
     # datetime 값을 API 응답용 UTC 문자열로 바꾼다
     if value is None:
@@ -512,6 +536,11 @@ def update_instance_from_scheduler(instance, scheduler_data):
             raise SchedulerError("SCHEDULER_UNAVAILABLE", "Scheduler가 실행 설정 버전을 반환하지 않았습니다.", 503)
 
     update_fields = ["updated_at"]
+
+    reason = scheduler_delete_reason(scheduler_data)
+    if instance.delete_reason is None and reason is not None:
+        instance.delete_reason = reason
+        update_fields.append("delete_reason")
 
     instance.status = scheduler_data.get("status", instance.status)
     update_fields.append("status")
