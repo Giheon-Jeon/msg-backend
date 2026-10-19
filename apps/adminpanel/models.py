@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Coalesce
 
 
 class AdminSetting(models.Model):
@@ -17,6 +18,31 @@ class AdminSetting(models.Model):
 
     def __str__(self):
         return f"{self.key}={self.value}"
+
+
+# 키: (최솟값, 최댓값, 기본값). 게임 로직은 setting_values 로 읽어 운영 중 변경이 바로 적용된다.
+SETTING_SPECS = {
+    "board.dice_rolls_per_reset": (1, 20, 3),
+    "board.dice_reset_interval_minutes": (1, 1440, 15),
+    "board.solve_deadline_minutes": (1, 180, 15),
+    "flag.max_attempts": (1, 10, 3),
+    "flag.lock_seconds": (1, 3600, 30),
+}
+
+
+def setting_values(*keys):
+    """저장값이 없으면 기본값. 여러 키를 한 번의 조회로 읽는다."""
+    # ponytail: 요청마다 DB 에서 읽는다(작은 테이블 1회). 부하가 문제되면 Redis 캐시와 변경 시 무효화로 바꾼다.
+    stored = dict(
+        AdminSetting.objects.filter(key__in=keys).values_list("key", "value")
+    )
+    return [stored.get(key, SETTING_SPECS[key][2]) for key in keys]
+
+
+def setting_subquery(key):
+    """다른 조회에 붙여 쿼리 수를 늘리지 않고 설정값을 읽는 annotate 식."""
+    stored = AdminSetting.objects.filter(key=key).values("value")[:1]
+    return Coalesce(models.Subquery(stored), models.Value(SETTING_SPECS[key][2]))
 
 
 class AdminEvent(models.Model):

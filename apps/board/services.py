@@ -6,6 +6,7 @@ from django.db.models import Count, Exists, F, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from apps.accounts.models import Team
+from apps.adminpanel.models import setting_subquery, setting_values
 from apps.teams.models import MileageHistory, MileageType
 
 from .exceptions import (
@@ -53,7 +54,6 @@ FIRST_CELL_INDEX = 1
 LAST_CELL_INDEX = FIRST_CELL_INDEX + BOARD_SIZE - 1
 START_CELL_INDEX = 1
 CHALLENGE_CANDIDATE_COUNT = 3
-SOLVE_LIMIT_SECONDS = 900
 START_PASS_MILEAGE_REWARD = 100
 START_ROLL_BONUS = 1
 CHANCE_DRAW_ROLL_BONUS = 1
@@ -61,8 +61,24 @@ MOVE_OFFSET_MIN = -3
 MOVE_OFFSET_MAX = 3
 ROULETTE_REWARDS = (50, 100, 150, 200)
 ROULETTE_REASON_PREFIX = "ROULETTE_CELL"
-DICE_RECHARGE_INTERVAL = timedelta(minutes=15)
-MAX_DICE_ROLLS = 3
+
+
+def max_dice_rolls():
+    (max_rolls,) = setting_values("board.dice_rolls_per_reset")
+    return max_rolls
+
+
+def dice_settings():
+    """(최대 보유 주사위 수, 충전 간격). 운영 중 /admin/settings 로 바뀐다."""
+    max_rolls, minutes = setting_values(
+        "board.dice_rolls_per_reset", "board.dice_reset_interval_minutes"
+    )
+    return max_rolls, timedelta(minutes=minutes)
+
+
+def solve_limit_seconds():
+    (minutes,) = setting_values("board.solve_deadline_minutes")
+    return minutes * 60
 
 
 DEFAULT_TEAM_NAME = "test-team"
@@ -86,7 +102,8 @@ def _board_state_queryset():
 def _board_state_read_queryset(
     *, include_completion=False, include_pending=False, include_cards=False
 ):
-    annotations = {}
+    # 조회 경로의 충전 판단에 쓴다. 같은 쿼리에 붙여 조회 횟수를 늘리지 않는다.
+    annotations = {"max_dice_rolls": setting_subquery("board.dice_rolls_per_reset")}
     if include_completion:
         completed_consumptions = (
             TeamCellConsumption.objects.filter(
@@ -147,7 +164,7 @@ def get_board_state_for_read(
     now = timezone.now()
     recharge_update_required = (
         state.next_dice_reset_at is not None
-        if state.dice_rolls_left >= MAX_DICE_ROLLS
+        if state.dice_rolls_left >= state.max_dice_rolls
         else state.next_dice_reset_at is None or now >= state.next_dice_reset_at
     )
     if recharge_update_required:
@@ -156,30 +173,29 @@ def get_board_state_for_read(
     return state
 
 
-def _update_dice_recharge(state, now):
+def _update_dice_recharge(state, now, dice=None):
     """Update a locked state's recharge clock in memory; the caller saves it."""
-    if state.dice_rolls_left >= MAX_DICE_ROLLS or is_board_completed(state.team_id):
+    max_rolls, interval = dice or dice_settings()
+    if state.dice_rolls_left >= max_rolls or is_board_completed(state.team_id):
         state.next_dice_reset_at = None
         return
     if state.next_dice_reset_at is None:
-        state.next_dice_reset_at = now + DICE_RECHARGE_INTERVAL
+        state.next_dice_reset_at = now + interval
         return
     if now < state.next_dice_reset_at:
         return
 
-    elapsed_intervals = (now - state.next_dice_reset_at) // DICE_RECHARGE_INTERVAL + 1
-    state.dice_rolls_left = min(
-        MAX_DICE_ROLLS, state.dice_rolls_left + elapsed_intervals
-    )
+    elapsed_intervals = (now - state.next_dice_reset_at) // interval + 1
+    state.dice_rolls_left = min(max_rolls, state.dice_rolls_left + elapsed_intervals)
     state.next_dice_reset_at = (
-        state.next_dice_reset_at + elapsed_intervals * DICE_RECHARGE_INTERVAL
-        if state.dice_rolls_left < MAX_DICE_ROLLS
+        state.next_dice_reset_at + elapsed_intervals * interval
+        if state.dice_rolls_left < max_rolls
         else None
     )
 
 
 def apply_pending_dice_recharge(state):
-    """Apply elapsed 15-minute recharges up to capacity, under the board lock."""
+    """Apply elapsed recharges up to capacity, under the board lock."""
     previous = (state.dice_rolls_left, state.next_dice_reset_at)
     _update_dice_recharge(state, timezone.now())
     if previous != (state.dice_rolls_left, state.next_dice_reset_at):
@@ -197,10 +213,11 @@ def grant_dice_roll(state, amount):
         state.next_dice_reset_at = None
         return 0
     now = timezone.now()
-    _update_dice_recharge(state, now)
-    granted = max(0, min(amount, MAX_DICE_ROLLS - state.dice_rolls_left))
+    dice = dice_settings()
+    _update_dice_recharge(state, now, dice)
+    granted = max(0, min(amount, dice[0] - state.dice_rolls_left))
     state.dice_rolls_left += granted
-    _update_dice_recharge(state, now)
+    _update_dice_recharge(state, now, dice)
     return granted
 
 
@@ -235,7 +252,8 @@ def is_board_completed(team, *, consumed_indexes=None):
 
 
 def challenge_solve_deadline(access):
-    return access.opened_at + timedelta(seconds=SOLVE_LIMIT_SECONDS)
+    # 마감은 저장하지 않고 개방 시각에서 계산하므로, 설정을 바꾸면 진행 중인 문제에도 바로 적용된다.
+    return access.opened_at + timedelta(seconds=solve_limit_seconds())
 
 
 def is_challenge_timer_running(access):
@@ -939,7 +957,7 @@ def build_cell_states(team):
 
 
 def _card_usable_now(card, state, blocked_reason, has_pending):
-    if card.effect == "GRANT_EXTRA_ROLL" and state.dice_rolls_left >= MAX_DICE_ROLLS:
+    if card.effect == "GRANT_EXTRA_ROLL" and state.dice_rolls_left >= max_dice_rolls():
         return False
     if card.usage_timing == ChanceCard.UsageTiming.POST_ROLL:
         return has_pending

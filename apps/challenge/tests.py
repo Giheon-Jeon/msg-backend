@@ -239,6 +239,28 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(self.team.mileage, 0)
         self.assertFalse(MileageHistory.objects.filter(team=self.team).exists())
 
+    def test_flag_lock_follows_admin_settings(self):
+        # 관리자 설정의 오답 허용 횟수와 잠금 시간이 실제 제출에 적용된다
+        from apps.adminpanel.models import AdminSetting
+
+        AdminSetting.objects.create(key="flag.max_attempts", value=2)
+        AdminSetting.objects.create(key="flag.lock_seconds", value=120)
+
+        self.assertEqual(self.submit().data["code"], "INCORRECT_FLAG")
+        res = self.submit()
+
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.data["data"]["retry_after_seconds"], 120)
+        self.assertEqual(
+            res.data["message"],
+            "잘못된 플래그를 2회 연속 제출했습니다. 120초 후 다시 시도해주세요.",
+        )
+        flag_lock = FlagSubmissionLock.objects.get(
+            team=self.team, challenge=self.challenge
+        )
+        remaining = (flag_lock.locked_until - timezone.now()).total_seconds()
+        self.assertGreater(remaining, 110)
+
     def test_locked_submission_is_rejected_without_scoring(self):
         # 락 상태에서는 정답을 제출해도 채점하지 않고 429를 반환한다
         FlagSubmissionLock.objects.create(

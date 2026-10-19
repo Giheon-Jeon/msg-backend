@@ -31,12 +31,12 @@ from apps.board.models import (
 from apps.board.services import (
     FIRST_CELL_INDEX,
     LAST_CELL_INDEX,
-    MAX_DICE_ROLLS,
     apply_pending_dice_recharge,
     get_or_create_board_state,
+    max_dice_rolls,
 )
 from apps.timer.models import Contest
-from .models import AdminEvent, AdminSetting
+from .models import SETTING_SPECS, AdminEvent, AdminSetting
 from .challenge_deployment import deployment_summaries
 
 from apps.teams.models import (
@@ -100,13 +100,6 @@ MILEAGE_TYPES = set(MileageType.values)
 DICE_ADJUST_MIN = -20
 DICE_ADJUST_MAX = 20
 
-SETTING_SPECS = {
-    "board.dice_rolls_per_reset": (1, 20, 3),
-    "board.dice_reset_interval_minutes": (1, 1440, 15),
-    "board.solve_deadline_minutes": (1, 180, 15),
-    "flag.max_attempts": (1, 10, 3),
-    "flag.lock_seconds": (1, 3600, 30),
-}
 SETTINGS_UPDATED_KEY = "_meta.updated"
 EVENT_TYPES = set(AdminEvent.EventType.values)
 
@@ -1468,7 +1461,7 @@ def board_dice(request, team_id):
             )
         # 보드 보상(grant_dice_roll)과 같은 규칙으로 보유 상한을 넘기지 않는다.
         applied = (
-            max(0, min(amount, MAX_DICE_ROLLS - previous)) if amount > 0 else amount
+            max(0, min(amount, max_dice_rolls() - previous)) if amount > 0 else amount
         )
         state.dice_rolls_left = previous + applied
         state.save(update_fields=["dice_rolls_left", "updated_at"])
