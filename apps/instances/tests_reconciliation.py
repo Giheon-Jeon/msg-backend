@@ -154,6 +154,28 @@ class InstanceHistoryTests(Fixtures, TestCase):
         summary = reconcile_instances_once()
         self.assertEqual((summary["error"], summary["updated"]), (1, 1))
 
+    @override_settings(SCHEDULER_BASE_URL="https://scheduler.example")
+    @patch("apps.instances.services.urlopen")
+    def test_malformed_http_payload_does_not_starve_healthy_history(self, urlopen):
+        for payload in (b"private-invalid-json", b"[]", b'{"data": []}', b"\xff"):
+            with self.subTest(payload=payload):
+                Instance.objects.all().delete()
+                cache.clear()
+                invalid = self.instance()
+                healthy = self.instance()
+                urlopen.side_effect = [
+                    io.BytesIO(payload),
+                    io.BytesIO(json.dumps({"data": self.snapshot(healthy)}).encode()),
+                ]
+                with self.assertLogs("apps.instances.reconciliation", level="WARNING") as logs:
+                    summary = reconcile_instances_once()
+                self.assertEqual((summary["error"], summary["updated"]), (1, 1))
+                self.assertNotIn("private-invalid-json", "\n".join(logs.output))
+                invalid.refresh_from_db()
+                healthy.refresh_from_db()
+                self.assertEqual(invalid.status, InstanceStatus.STOPPING)
+                self.assertEqual(healthy.status, InstanceStatus.CLEANED)
+
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_pending_state_advances_only_from_scheduler_and_failed_status_is_preserved(self, detail):
         row = self.instance()

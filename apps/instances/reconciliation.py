@@ -122,6 +122,11 @@ def reconcile_instances_once(*, batch_size=100, max_seconds=20, instance_ids=())
                     summary["error"] += 1
                     logger.warning("instance history lookup failed: instance_id=%s http_status=%s", snapshot.pk, error.status_code)
                     stop = error.status_code in (401, 403, 502, 503, 504)
+            except (ValueError, TypeError, AttributeError):
+                # 정상 HTTP 응답이어도 JSON이나 공통 응답 형식이 깨질 수 있다
+                # 본문은 기록하지 않고 다음 행을 확인한다
+                summary["error"] += 1
+                logger.warning("instance history payload rejected: instance_id=%s", snapshot.pk)
             else:
                 try:
                     _validate_snapshot(snapshot, data)
