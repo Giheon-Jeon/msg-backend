@@ -34,6 +34,10 @@ urlpatterns = [
         "admin/teams/<uuid:team_id>/board/cells/<str:cell_index>",
         views.board_cell_status,
     ),
+    path(
+        "admin/teams/<uuid:team_id>/line_monopolies/<str:line_number>",
+        views.line_monopoly_score,
+    ),
     path("admin/settings", views.settings_view),
     path("admin/events", views.event_list),
     path("admin/resources", views.admin_resources),

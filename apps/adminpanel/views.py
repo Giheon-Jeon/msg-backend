@@ -1,4 +1,6 @@
+import math
 import uuid
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
@@ -35,6 +37,7 @@ from apps.board.services import (
     apply_pending_dice_recharge,
     get_or_create_board_state,
 )
+from apps.ranking.models import LineMonopoly
 from apps.timer.models import Contest
 from .models import AdminEvent, AdminSetting
 from .challenge_deployment import deployment_summaries
@@ -109,6 +112,11 @@ SETTING_SPECS = {
 }
 SETTINGS_UPDATED_KEY = "_meta.updated"
 EVENT_TYPES = set(AdminEvent.EventType.values)
+
+FIRST_LINE_NUMBER = 1
+LAST_LINE_NUMBER = 6
+# line_monopolies.earned_score 는 DecimalField(max_digits=12, decimal_places=2)
+MAX_LINE_SCORE = Decimal("9999999999.99")
 
 CELL_STATUS_UNVISITED = "UNVISITED"
 CELL_STATUS_CONSUMED = "CONSUMED"
@@ -2184,4 +2192,70 @@ def admin_resources(request):
             "total_count": len(accounts),
             "collected_at": generated_at,
         }
+    )
+
+
+def _parse_line_number(raw):
+    """URL 에서 받은 라인 번호. 음수나 문자도 404 가 아니라 400 으로 돌려준다."""
+    if not raw.isascii() or not raw.isdigit():
+        raise InvalidRequest("line_number 는 정수여야 합니다")
+    line_number = int(raw)
+    if not (FIRST_LINE_NUMBER <= line_number <= LAST_LINE_NUMBER):
+        raise InvalidRequest(
+            f"line_number 는 {FIRST_LINE_NUMBER} ~ {LAST_LINE_NUMBER} 범위여야 합니다"
+        )
+    return line_number
+
+
+def _parse_line_score(raw):
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise InvalidRequest("earned_score 는 숫자여야 합니다")
+    if isinstance(raw, float) and not math.isfinite(raw):
+        raise InvalidRequest("earned_score 는 숫자여야 합니다")
+    score = Decimal(str(raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if not (0 <= score <= MAX_LINE_SCORE):
+        raise InvalidRequest(f"earned_score 는 0 ~ {MAX_LINE_SCORE} 범위여야 합니다")
+    return score
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAdmin])
+def line_monopoly_score(request, team_id, line_number):
+    line_number = _parse_line_number(line_number)
+    body = _json_object(request)
+    earned_score = _parse_line_score(body.get("earned_score"))
+    reason = _require_reason(body)
+
+    with transaction.atomic():
+        team = _get_team(team_id)
+        monopoly = (
+            LineMonopoly.objects.select_for_update()
+            .filter(team=team, line_number=line_number)
+            .first()
+        )
+        if monopoly is None:
+            raise InvalidRequest("이 팀은 해당 라인을 독점하지 않았습니다")
+
+        previous_score = monopoly.earned_score
+        monopoly.earned_score = earned_score
+        monopoly.save(update_fields=["earned_score"])
+        _record_event(
+            AdminEvent.EventType.LINE_MONOPOLY_SCORE_CHANGED,
+            f"{line_number}번 라인 독점 점수"
+            f" {num(previous_score)} → {num(earned_score)}: {reason}",
+            request.user.login_id,
+            severity=AdminEvent.Severity.WARNING,
+            team=team,
+        )
+
+    return ok(
+        {
+            "line_number": line_number,
+            "team_id": str(team.team_id),
+            "team_name": team.team_name,
+            "earned_score": num(earned_score),
+            "is_category_bonus": monopoly.is_category_bonus,
+            "monopolized_at": monopoly.monopolized_at,
+        },
+        message="라인 독점 점수가 변경되었습니다",
     )
