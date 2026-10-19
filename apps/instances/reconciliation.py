@@ -14,11 +14,18 @@ from apps.instances.services import (
     SchedulerError,
     call_scheduler_detail,
     scheduler_auth_header,
+    scheduler_delete_reason,
 )
 
 logger = logging.getLogger(__name__)
-PENDING_STATUSES = (InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING)
-RESULT_STATUSES = (*PENDING_STATUSES, InstanceStatus.STOPPED, InstanceStatus.CLEANED, InstanceStatus.FAILED)
+ACTIVE_STATUSES = (
+    InstanceStatus.REQUESTED, InstanceStatus.SCHEDULING, InstanceStatus.PROVISIONING,
+    InstanceStatus.RUNNING, InstanceStatus.RESTARTING, InstanceStatus.RESETTING,
+)
+PENDING_STATUSES = (*ACTIVE_STATUSES, InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING,
+                    InstanceStatus.EXPIRED, InstanceStatus.STOPPED)
+FINAL_STATUSES = (InstanceStatus.CLEANED, InstanceStatus.FAILED)
+RESULT_STATUSES = (*PENDING_STATUSES, *FINAL_STATUSES)
 # 다른 기능의 advisory lock과 키를 공유하지 않는다
 LOCK_NAMESPACE = 0x4D534749
 LOCK_ID = 1
@@ -55,6 +62,11 @@ def _validate_snapshot(instance, data):
         or ("user_id" in data and data["user_id"] != str(instance.user_id))
         or data.get("status") not in RESULT_STATUSES
         or (
+            data.get("status") in ACTIVE_STATUSES
+            and (instance.status not in ACTIVE_STATUSES or data.get("delete_reason") is not None)
+        )
+        or (instance.status in FINAL_STATUSES and data.get("status") != instance.status)
+        or (
             instance.release_id is not None
             and data.get("release_id") != str(instance.release_id)
         )
@@ -62,6 +74,7 @@ def _validate_snapshot(instance, data):
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "종료 이력 응답의 소유 정보나 상태가 일치하지 않습니다", 503,
         )
+    scheduler_delete_reason(data)
 
 
 def _apply_snapshot(snapshot, data):
@@ -73,7 +86,10 @@ def _apply_snapshot(snapshot, data):
             .filter(pk=snapshot.pk)
             .first()
         )
-        if current is None or current.status not in PENDING_STATUSES:
+        if current is None or (
+            current.status not in PENDING_STATUSES
+            and not (current.status in FINAL_STATUSES and current.delete_reason is None)
+        ):
             return "skipped"
         if current.updated_at != snapshot.updated_at or any(
             getattr(current, field) != getattr(snapshot, field)
@@ -81,11 +97,21 @@ def _apply_snapshot(snapshot, data):
         ):
             return "skipped"
         _validate_snapshot(current, data)
-        if current.status == data["status"]:
+        if data["status"] in ACTIVE_STATUSES:
+            # 생성 중인 행의 주소·수명은 기존 조회 경로가 맡는다 종료만 자동 반영한다
             return "pending"
-        # 실행 설정과 삭제 사유는 생성·삭제 시점의 기록을 보존한다
-        current.status = data["status"]
-        current.save(update_fields=["status", "updated_at"])
+        fields = []
+        if current.status != data["status"]:
+            current.status = data["status"]
+            fields.append("status")
+        reason = scheduler_delete_reason(data)
+        if current.delete_reason is None and reason is not None:
+            current.delete_reason = reason
+            fields.append("delete_reason")
+        if not fields:
+            return "pending"
+        # 실행 설정과 이미 기록된 삭제 사유는 보존한다
+        current.save(update_fields=[*fields, "updated_at"])
         return "updated"
 
 
@@ -101,7 +127,11 @@ def reconcile_instances_once(*, batch_size=100, max_seconds=20, instance_ids=())
         return {**summary, "busy": True}
     try:
         key = _cursor_key(instance_ids)
-        queryset = Instance.objects.filter(status__in=PENDING_STATUSES).order_by("created_at", "instance_id")
+        states = Q(status__in=PENDING_STATUSES)
+        if instance_ids:
+            # 명시한 과거 기록은 상태를 바꾸지 않고 누락된 종료 사유도 보충할 수 있다
+            states |= Q(status__in=FINAL_STATUSES, delete_reason__isnull=True)
+        queryset = Instance.objects.filter(states).order_by("created_at", "instance_id")
         if instance_ids:
             queryset = queryset.filter(pk__in=instance_ids)
         cursor = cache.get(key)

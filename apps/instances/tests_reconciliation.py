@@ -52,7 +52,7 @@ class Fixtures:
 @override_settings(CACHES=LOCMEM, SCHEDULER_API_TOKEN="test-history-token")
 class InstanceHistoryTests(Fixtures, TestCase):
     @patch("apps.instances.reconciliation.call_scheduler_detail")
-    def test_release_identity_must_match_and_active_or_terminal_rows_are_not_polled(self, detail):
+    def test_release_identity_must_match_and_terminal_rows_are_not_polled(self, detail):
         release = ChallengeRelease.objects.create(
             challenge=self.challenge, version=1, registry_revision=1,
             cpu_millicores=500, memory_mib=256, ephemeral_storage_mib=512,
@@ -60,7 +60,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
         row = self.instance(release=release)
         untouched = [
             self.instance(status=status)
-            for status in (InstanceStatus.RUNNING, InstanceStatus.REQUESTED, InstanceStatus.CLEANED, InstanceStatus.FAILED)
+            for status in (InstanceStatus.CLEANED, InstanceStatus.FAILED)
         ]
         for value in (None, str(uuid.uuid4())):
             detail.return_value = {**self.snapshot(row), "release_id": value}
@@ -74,19 +74,20 @@ class InstanceHistoryTests(Fixtures, TestCase):
     def test_reconciles_replaced_history_while_new_instance_is_running(self, detail):
         old = self.instance()
         current = self.instance(status=InstanceStatus.RUNNING, replaced_instance=old)
-        detail.return_value = self.snapshot(old)
+        detail.side_effect = lambda row, _: self.snapshot(row, row.status if row.pk == current.pk else InstanceStatus.CLEANED)
         before = Instance.objects.values().get(pk=old.pk)
 
         summary = reconcile_instances_once()
 
         old.refresh_from_db()
         current.refresh_from_db()
-        self.assertEqual((summary["checked"], summary["updated"]), (1, 1))
+        self.assertEqual((summary["checked"], summary["updated"], summary["pending"]), (2, 1, 1))
         self.assertEqual(old.status, InstanceStatus.CLEANED)
         self.assertEqual(current.status, InstanceStatus.RUNNING)
         for field in ("host", "endpoints", "expires_at", "extend_count", "delete_reason"):
             self.assertEqual(getattr(old, field), before[field])
-        detail.assert_called_once_with(old, "Bearer test-history-token")
+        self.assertEqual(detail.call_count, 2)
+        self.assertEqual(detail.call_args_list[0].args, (old, "Bearer test-history-token"))
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_reconciles_all_pending_history_without_active_instance_or_http_polling(self, detail):
