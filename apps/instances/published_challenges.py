@@ -26,6 +26,7 @@ NAME = re.compile(r"^(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)-(?P<run>[1-9][0-9]*)-[1-
 SHA = re.compile(r"^[a-f0-9]{40}$")
 SALT = "admin-published-challenge-v1"
 PREVIEW_SECONDS = 1200
+MAX_PUBLICATION_BUNDLE_BYTES = 16 * 1024 * 1024
 
 
 class PublishedImportError(APIError):
@@ -119,6 +120,8 @@ def _metadata(slug, sha):
         raise ReleaseValidationError("info.yaml 형식을 확인해주세요")
     title, description, flag = value.get("name"), value.get("description", ""), value.get("flag")
     category = value.get("category", "").upper() if isinstance(value.get("category"), str) else ""
+    # Existing CI publications use the plural spelling for forensic challenges.
+    category = {"FORENSICS": "FORENSIC"}.get(category, category)
     if (not isinstance(title, str) or not 1 <= len(title.strip()) <= 200
             or category not in Challenge.CategoryType.values
             or not isinstance(description, str) or len(description) > 100000
@@ -130,8 +133,9 @@ def _metadata(slug, sha):
 
 
 def _release_artifact(artifact):
+    # The ZIP also contains scan reports and SBOMs; only the manifest is parsed below.
     raw = poller.github_request(f"/repos/{settings.RELEASE_POLL_REPO}/actions/artifacts/{artifact['id']}/zip",
-        token=settings.RELEASE_POLL_GITHUB_TOKEN, timeout=30, max_bytes=2 * 1024 * 1024)
+        token=settings.RELEASE_POLL_GITHUB_TOKEN, timeout=30, max_bytes=MAX_PUBLICATION_BUNDLE_BYTES)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entries = [entry for entry in archive.infolist() if entry.filename.split("/")[-1] == poller.BUNDLE_FILE_NAME]
         if len(entries) != 1 or entries[0].file_size > 1024 * 1024:
