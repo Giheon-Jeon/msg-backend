@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll MSG instance cleanup history
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=msg-instance-reconcile.service
+
+[Install]
+WantedBy=timers.target
