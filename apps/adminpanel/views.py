@@ -1,8 +1,19 @@
 import uuid
 
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Prefetch, Q, Sum
+from django.db.models import (
+    Count,
+    DecimalField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce
 from django.db.models.deletion import SET_NULL
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -18,7 +29,11 @@ from apps.common.utils import num
 from apps.common.jwt import hash_token
 from apps.common.idempotency import run_idempotent
 from apps.challenge.models import Challenge, Solve
-from apps.challenge.services import hash_flag, update_dynamic_score_and_team_scores
+from apps.challenge.services import (
+    get_team_total_score,
+    hash_flag,
+    update_dynamic_score_and_team_scores,
+)
 from apps.board.models import (
     Cell,
     PendingDiceRoll,
@@ -35,6 +50,9 @@ from apps.board.services import (
     apply_pending_dice_recharge,
     get_or_create_board_state,
 )
+from apps.koth.models import KothSolve
+from apps.ranking.models import LineMonopoly
+from apps.signature.models import SignatureSolve
 from apps.timer.models import Contest
 from .models import AdminEvent, AdminSetting
 from .challenge_deployment import deployment_summaries
@@ -87,7 +105,7 @@ from .resource_broker import fetch_resource_targets
 from .serializers import ChallengeCreateSerializer, ChallengeUpdateSerializer
 
 SORT_FIELDS = {
-    "score": "-team_score",
+    "score": "-total_score",
     "name": "team_name",
 }
 
@@ -96,6 +114,9 @@ MAX_PAGE_SIZE = 100
 MAX_PAGE = 10_000
 MAX_BAN_REASON_LENGTH = 500
 MILEAGE_TYPES = set(MileageType.values)
+# teams.mileage · mileage_history.amount 가 PostgreSQL integer 라 넘으면 500 DataError 가 된다.
+MAX_MILEAGE = 2_147_483_647
+MAX_ITEM_NAME_LENGTH = 100
 
 DICE_ADJUST_MIN = -20
 DICE_ADJUST_MAX = 20
@@ -136,6 +157,31 @@ def _page_number(raw, default, maximum=None):
     return value
 
 
+def _score_subquery(model, field):
+    totals = (
+        model.objects.filter(team_id=OuterRef("pk"))
+        .order_by()
+        .values("team_id")
+        .annotate(total=Sum(field))
+        .values("total")
+    )
+    return Coalesce(
+        Subquery(totals),
+        Value(0),
+        output_field=DecimalField(max_digits=20, decimal_places=2),
+    )
+
+
+def _annotate_total_score(queryset):
+    """랭킹·get_team_total_score 와 같은 합계. 목록 정렬에도 쓰므로 DB 에서 계산한다."""
+    return queryset.annotate(
+        total_score=_score_subquery(Solve, "challenge__current_score")
+        + _score_subquery(KothSolve, "earned_score")
+        + _score_subquery(SignatureSolve, "earned_score")
+        + _score_subquery(LineMonopoly, "earned_score")
+    )
+
+
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def team_list(request):
@@ -150,7 +196,7 @@ def team_list(request):
         _page_number(request.query_params.get("size"), DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE
     )
 
-    queryset = Team.objects.prefetch_related(
+    queryset = _annotate_total_score(Team.objects).prefetch_related(
         Prefetch("members", queryset=User.objects.order_by("-is_leader", "nickname"))
     )
     if search:
@@ -168,7 +214,7 @@ def team_list(request):
             {
                 "team_id": str(team.team_id),
                 "team_name": team.team_name,
-                "team_score": num(team.team_score),
+                "team_score": num(team.total_score),
                 "mileage": team.mileage,
                 # 보드 앱이 생기면 team_board_states.position 으로 채운다.
                 "board_position_states": None,
@@ -241,38 +287,41 @@ def _record_event(
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def account_create(request):
-    login_id = request.data.get("login_id")
+    body = _json_object(request)
+    login_id = body.get("login_id")
     if not isinstance(login_id, str) or not login_id.strip():
         raise InvalidRequest("필수 항목이 누락되었습니다: login_id")
     login_id = login_id.strip()
     if len(login_id) > 50:
         raise InvalidRequest("login_id 는 50자 이하여야 합니다")
 
-    password = request.data.get("password")
+    password = body.get("password")
     if not isinstance(password, str) or not (8 <= len(password) <= 128):
         raise InvalidRequest("password 는 8자 이상 128자 이하여야 합니다")
 
-    nickname = request.data.get("nickname")
+    nickname = body.get("nickname")
     if not isinstance(nickname, str) or not nickname.strip():
         raise InvalidRequest("필수 항목이 누락되었습니다: nickname")
     nickname = nickname.strip()
     if len(nickname) > 50:
         raise InvalidRequest("nickname 은 50자 이하여야 합니다")
 
-    role = request.data.get("role", Role.PARTICIPANT)
+    role = body.get("role", Role.PARTICIPANT)
     if role not in Role.values:
         raise InvalidRequest("role 이 올바르지 않습니다")
 
-    is_leader = request.data.get("is_leader", False)
+    is_leader = body.get("is_leader", False)
     if not isinstance(is_leader, bool):
         raise InvalidRequest("is_leader 는 boolean 이어야 합니다")
 
     if role == Role.ADMIN and is_leader:
         raise InvalidRequest("관리자 계정은 팀장이 될 수 없습니다")
 
-    team_id = request.data.get("team_id")
-    team_name = request.data.get("team_name")
-    if "team_id" in request.data and "team_name" in request.data:
+    team_id = body.get("team_id")
+    team_name = body.get("team_name")
+    if role == Role.ADMIN and (team_id is not None or team_name is not None):
+        raise InvalidRequest("관리자 계정은 팀에 소속될 수 없습니다")
+    if "team_id" in body and "team_name" in body:
         raise InvalidRequest("team_id 와 team_name 은 함께 보낼 수 없습니다")
 
     team = None
@@ -289,6 +338,12 @@ def account_create(request):
             raise InvalidRequest("team_name 은 100자 이하여야 합니다")
         if Team.objects.filter(team_name=team_name).exists():
             raise TeamNameTaken()
+
+    try:
+        # settings.AUTH_PASSWORD_VALIDATORS. 흔한 비밀번호와 숫자만으로 된 비밀번호를 거절한다.
+        validate_password(password)
+    except ValidationError:
+        raise InvalidRequest("password 가 너무 단순합니다 (흔한 비밀번호이거나 숫자로만 됨)")
 
     if User.objects.filter(login_id=login_id).exists():
         raise LoginIdTaken()
@@ -351,7 +406,8 @@ def team_ban(request, team_id):
 
 
 def _ban(request, team_id):
-    reason = request.data.get("ban_reason")
+    body = _json_object(request)
+    reason = body.get("ban_reason")
     if reason is None:
         raise InvalidRequest("필수 항목이 누락되었습니다: ban_reason")
     if not isinstance(reason, str):
@@ -408,11 +464,12 @@ def _ban(request, team_id):
 @api_view(["PATCH"])
 @permission_classes([IsAdmin])
 def challenge_visibility(request, challenge_id):
-    is_published = request.data.get("is_published")
+    body = _json_object(request)
+    is_published = body.get("is_published")
     if not isinstance(is_published, bool):
         raise InvalidRequest("is_published 는 boolean 이어야 합니다")
 
-    reason = request.data.get("reason")
+    reason = body.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         raise InvalidRequest("필수 항목이 누락되었습니다: reason")
     reason = reason.strip()
@@ -493,15 +550,18 @@ def _unban(request, team_id):
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def team_mileage(request, team_id):
-    amount = request.data.get("amount")
+    body = _json_object(request)
+    amount = body.get("amount")
     if amount is None:
         raise InvalidRequest("필수 항목이 누락되었습니다: amount")
     if not isinstance(amount, int) or isinstance(amount, bool):
         raise InvalidRequest("amount 는 정수여야 합니다")
     if amount == 0:
         raise InvalidAmount()
+    if abs(amount) > MAX_MILEAGE:
+        raise InvalidAmount(f"조정액은 ±{MAX_MILEAGE} 범위여야 합니다")
 
-    reason = request.data.get("reason")
+    reason = body.get("reason")
     if reason is None:
         raise InvalidRequest("필수 항목이 누락되었습니다: reason")
     if not isinstance(reason, str):
@@ -516,6 +576,8 @@ def team_mileage(request, team_id):
         team = _get_team_for_update(team_id)
         previous = team.mileage
 
+        if previous + amount > MAX_MILEAGE:
+            raise InvalidAmount(f"조정 후 마일리지가 최대값 {MAX_MILEAGE} 를 넘습니다")
         if amount < 0 and previous + amount < 0:
             raise InsufficientMileage(
                 data={
@@ -611,11 +673,12 @@ def mileage_history(request):
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def payment_checkout(request):
-    raw_token = request.data.get("payment_token")
+    body = _json_object(request)
+    raw_token = body.get("payment_token")
     if not raw_token or not isinstance(raw_token, str):
         raise InvalidRequest("필수 항목이 누락되었습니다: payment_token")
 
-    amount = request.data.get("amount")
+    amount = body.get("amount")
     if amount is None:
         raise InvalidRequest("필수 항목이 누락되었습니다: amount")
     if not isinstance(amount, int) or isinstance(amount, bool):
@@ -623,10 +686,12 @@ def payment_checkout(request):
     if amount <= 0:
         raise InvalidAmount("결제 금액은 1 이상이어야 합니다")
 
-    item_name = request.data.get("item_name")
+    item_name = body.get("item_name")
     if not item_name or not isinstance(item_name, str) or not item_name.strip():
         raise InvalidRequest("필수 항목이 누락되었습니다: item_name")
     item_name = item_name.strip()
+    if len(item_name) > MAX_ITEM_NAME_LENGTH:
+        raise InvalidRequest(f"item_name 은 {MAX_ITEM_NAME_LENGTH}자 이하여야 합니다")
 
     now = timezone.now().replace(microsecond=0)
     token_hash = hash_token(raw_token)
@@ -719,7 +784,7 @@ def payment_history(request):
     total_count = queryset.count()
 
     offset = (page - 1) * size
-    rows = list(queryset.order_by("-created_at")[offset : offset + size])
+    rows = list(queryset.order_by("-created_at", "-history_id")[offset : offset + size])
 
     history = [
         {
@@ -1111,7 +1176,7 @@ def team_detail(request, team_id):
         {
             "team_id": str(team.team_id),
             "team_name": team.team_name,
-            "team_score": num(team.team_score),
+            "team_score": num(get_team_total_score(team.pk)),
             "mileage": team.mileage,
             "board_position_states": board_position,
             "is_banned": team.is_banned,
@@ -1437,7 +1502,8 @@ def challenge_list(request):
 @api_view(["POST"])
 @permission_classes([IsAdmin])
 def board_dice(request, team_id):
-    amount = request.data.get("amount")
+    body = _json_object(request)
+    amount = body.get("amount")
     if not isinstance(amount, int) or isinstance(amount, bool):
         raise InvalidRequest("amount 는 정수여야 합니다")
     if amount == 0:
@@ -1447,7 +1513,7 @@ def board_dice(request, team_id):
             f"amount 는 {DICE_ADJUST_MIN} ~ {DICE_ADJUST_MAX} 범위여야 합니다"
         )
 
-    reason = request.data.get("reason")
+    reason = body.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         raise InvalidRequest("필수 항목이 누락되었습니다: reason")
     reason = reason.strip()
@@ -1518,7 +1584,8 @@ def _settings_payload():
 
     contest = Contest.objects.filter(is_active=True).first()
     if contest is None:
-        contest_data = {"status": "BEFORE", "started_at": None, "ends_at": None}
+        # 타이머·대시보드와 같이 활성 대회가 없으면 null.
+        contest_data = None
     else:
         contest_data = {
             "status": contest.snapshot()["status"],
@@ -1609,16 +1676,15 @@ def settings_view(request):
                 defaults={"value": changes[key], "updated_by": request.user.login_id},
             )
 
-        AdminSetting.objects.update_or_create(
-            key=SETTINGS_UPDATED_KEY,
-            defaults={"value": 0, "updated_by": request.user.login_id},
-        )
-
         changed = [f"{key}={changes[key]}" for key in sorted(changes)]
         if contest_body:
             changed.extend(f"contest.{name}" for name in sorted(contest_body))
-        # 빈 그룹만 보낸 요청은 아무것도 바꾸지 않으므로 이벤트도 남기지 않는다.
+        # 빈 그룹만 보낸 요청은 아무것도 바꾸지 않으므로 수정 기록도 이벤트도 남기지 않는다.
         if changed:
+            AdminSetting.objects.update_or_create(
+                key=SETTINGS_UPDATED_KEY,
+                defaults={"value": 0, "updated_by": request.user.login_id},
+            )
             _record_event(
                 AdminEvent.EventType.SETTINGS_CHANGED,
                 "설정 변경: " + ", ".join(changed),
@@ -2156,7 +2222,13 @@ def admin_resources(request):
         return ok(None, message="수집된 리소스 정보가 없습니다")
 
     accounts = {}
+    seen_targets = set()
     for target in targets:
+        # offset 페이지 사이에 목록이 바뀌면 같은 VM 이 두 페이지에 걸쳐 올 수 있다.
+        target_id = target.get("resource_target_id")
+        if target_id in seen_targets:
+            continue
+        seen_targets.add(target_id)
         account = accounts.setdefault(
             target.get("account_id"),
             {

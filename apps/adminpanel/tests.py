@@ -2412,9 +2412,7 @@ class AdminSettingsTests(TestCase):
     def test_get_without_active_contest(self):
         self.auth("root")
         d = self.client.get(self.url).data["data"]
-        self.assertEqual(d["contest"]["status"], "BEFORE")
-        self.assertIsNone(d["contest"]["started_at"])
-        self.assertIsNone(d["contest"]["ends_at"])
+        self.assertIsNone(d["contest"])
 
     def test_get_reflects_active_contest(self):
         self._contest()
