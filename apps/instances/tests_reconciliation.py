@@ -42,7 +42,7 @@ class Fixtures:
 
     def snapshot(self, instance, status=InstanceStatus.CLEANED):
         return {
-            "instance_id": str(instance.pk), "user_id": str(instance.user_id),
+            "instance_id": str(instance.pk),
             "team_id": str(instance.team_id), "challenge_id": str(instance.challenge_id),
             "release_id": str(instance.release_id) if instance.release_id else None,
             "status": status,

@@ -45,12 +45,14 @@ def _after_cursor(queryset, cursor):
 
 def _validate_snapshot(instance, data):
     expected = {
-        "instance_id": instance.pk, "user_id": instance.user_id,
+        "instance_id": instance.pk,
         "team_id": instance.team_id, "challenge_id": instance.challenge_id,
     }
     if (
         not isinstance(data, dict)
         or any(data.get(key) != str(value) for key, value in expected.items())
+        # 현재 단건 응답에는 user_id가 없다 포함되는 경우에는 반드시 대조한다
+        or ("user_id" in data and data["user_id"] != str(instance.user_id))
         or data.get("status") not in RESULT_STATUSES
         or (
             instance.release_id is not None
