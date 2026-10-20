@@ -1322,7 +1322,7 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(challenge.challenge_slug, "sql-injection-basic")
         self.assertEqual(res.data["data"]["challenge_slug"], "sql-injection-basic")
         self.assertEqual(challenge.initial_score, 1000)
-        self.assertEqual(challenge.minimum_score, 600)
+        self.assertEqual(challenge.minimum_score, 100)
         self.assertEqual(challenge.decay, 70)
         self.assertEqual(challenge.score, challenge.initial_score)
         self.assertEqual(challenge.current_score, challenge.initial_score)
@@ -1415,7 +1415,7 @@ class AdminChallengeTests(TestCase):
         challenge = self.create_challenge()
 
         for body in (
-            {"initial_score": 599},
+            {"initial_score": 99},
             {"minimum_score": 1001},
             {"decay": 0},
             {"initial_score": 1000.5},
@@ -1431,7 +1431,7 @@ class AdminChallengeTests(TestCase):
 
         challenge.refresh_from_db()
         self.assertEqual(challenge.initial_score, 1000)
-        self.assertEqual(challenge.minimum_score, 600)
+        self.assertEqual(challenge.minimum_score, 100)
         self.assertEqual(challenge.decay, 70)
 
     def test_challenge_update_rejects_empty_and_managed_fields(self):

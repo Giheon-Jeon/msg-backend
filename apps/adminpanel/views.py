@@ -422,6 +422,8 @@ def challenge_visibility(request, challenge_id):
     try:
         with transaction.atomic():
             challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
+            if is_published and challenge.difficulty == Challenge.DifficultyType.UNASSIGNED:
+                return fail("CHALLENGE_DIFFICULTY_REQUIRED", "난이도를 정한 뒤 문제를 공개해주세요", 409)
             previous = challenge.is_published
             challenge.is_published = is_published
             challenge.save(update_fields=["is_published"])
