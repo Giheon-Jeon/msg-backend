@@ -188,7 +188,9 @@ class PublishedChallengeTests(ReleaseTestBase):
 
     def test_flag_conflict_is_visible_and_blocks_import(self):
         self.import_body(self.body())
-        self.metadata["flag"] = "MSG{changed}"
+        challenge = Challenge.objects.get(challenge_slug=SLUG)
+        challenge.flag_hash = hash_flag("MSG{changed}")
+        challenge.save(update_fields=["flag_hash"])
         preview = self.preview()
         self.assertEqual(preview.data["data"]["flag_status"], "mismatch")
         self.assertFalse(preview.data["data"]["can_import"])
