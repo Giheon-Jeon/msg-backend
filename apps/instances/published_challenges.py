@@ -18,7 +18,7 @@ from apps.challenge.models import Challenge
 from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.exceptions import APIError
 from apps.instances import poller, user_files
-from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, RuntimeSecret
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
 from apps.instances.releases import ReleaseValidationError, create_release, validate_release_payload
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 
@@ -296,6 +296,18 @@ def save_publication(prepared, user, difficulty, update_metadata=False):
             "difficulty": difficulty, "score": 1000, "flag_hash": hash_flag(meta["flag"]), "is_published": False,
         })
         challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
+        if created:
+            # The periodic poller may have seen this slug before its first
+            # reviewed import. Revisit its earlier image and file revisions.
+            candidates = PollerArtifact.objects.filter(payload__name__startswith=prepared["slug"] + "-")
+            ids = []
+            for artifact_id, payload in candidates.values_list("artifact_id", "payload"):
+                name = payload.get("name") if isinstance(payload, dict) else None
+                match = NAME.fullmatch(name) if isinstance(name, str) else None
+                if match and match["slug"] == prepared["slug"]:
+                    ids.append(artifact_id)
+            if ids:
+                PollerArtifact.objects.filter(artifact_id__in=ids).update(processed_at=None)
         if update_metadata:
             expected = prepared.get("expected_challenge_state")
             if (created and expected is not None) or (not created and metadata_state(challenge) != expected):

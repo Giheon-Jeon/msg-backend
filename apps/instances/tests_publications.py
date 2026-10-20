@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet
 from django.core import signing
 from django.core.cache import cache
 from django.test import override_settings
+from django.utils import timezone
 from google.api_core.exceptions import ServiceUnavailable
 from google.auth.exceptions import RefreshError
 
@@ -19,7 +20,7 @@ from apps.challenge.models import Challenge
 from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.models import IdempotencyRecord
 from apps.instances import published_challenges as publications
-from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, RuntimeSecret
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
 from apps.instances.tests_user_files import user_archive, user_manifest
@@ -163,6 +164,19 @@ class PublishedChallengeTests(ReleaseTestBase):
         self.assertEqual(decrypt_runtime_secret(secret), self.metadata["flag"])
         self.assertNotIn(self.metadata["flag"], secret.encrypted_value)
         self.assertEqual(release.containers.get().secret_env, {"FLAG": str(secret.pk)})
+
+    def test_first_import_requeues_only_this_problems_earlier_publications(self):
+        for item, kind in zip(self.artifacts, (PollerArtifact.Kind.RELEASE, PollerArtifact.Kind.USER_FILES)):
+            PollerArtifact.objects.create(artifact_id=item["id"], kind=kind, payload=item, processed_at=timezone.now())
+        other = artifact(13, "publish")
+        other["name"] = "web-imported-extra-88-1-abcdef-publish-bundle"
+        PollerArtifact.objects.create(artifact_id=13, kind=PollerArtifact.Kind.RELEASE, payload=other, processed_at=timezone.now())
+
+        response = self.import_body(self.body())
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(PollerArtifact.objects.get(pk=11).processed_at)
+        self.assertIsNone(PollerArtifact.objects.get(pk=12).processed_at)
+        self.assertIsNotNone(PollerArtifact.objects.get(pk=13).processed_at)
 
     def test_existing_metadata_visibility_and_active_release_are_preserved(self):
         first = self.import_body(self.body()).data["data"]

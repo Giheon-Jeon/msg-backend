@@ -341,8 +341,9 @@ def poll_user_files_once(token=None):
             summary["error"] += 1
             continue
         summary[status] += 1
-        if status != "unmatched":
-            mark_artifact_processed(artifact)
+        # First-time publication import requeues this slug after its challenge
+        # record exists, so unmatched bundles need no repeated downloads.
+        mark_artifact_processed(artifact)
         if status == "registered":
             logger.info(
                 "user-files poller 등록: challenge=%s revision=%s present=%s",

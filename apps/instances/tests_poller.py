@@ -399,6 +399,21 @@ class PollOnceTests(PollerTestBase):
         self.assertEqual(sum("/zip" in url for url in requested_urls), 1)
         self.assertIsNotNone(PollerArtifact.objects.get(pk=11).processed_at)
 
+    def test_unknown_problem_is_recorded_once_until_first_import(self):
+        artifact = publish_artifact(11, "web-new-100-1-x-publish-bundle")
+        payload = bundle(revision=1, slug="web-new")
+        responses = [
+            json.dumps({"artifacts": [artifact]}).encode("utf-8"),
+            workflow_run(11), bundle_zip(payload),
+            json.dumps({"artifacts": [artifact]}).encode("utf-8"),
+        ]
+        with patch("apps.instances.poller.urlopen", fake_urlopen(responses)):
+            first = poll_once(token="test-token")
+            second = poll_once(token="test-token")
+        self.assertEqual(first["unmatched"], 1)
+        self.assertEqual(second["unmatched"], 0)
+        self.assertIsNotNone(PollerArtifact.objects.get(pk=11).processed_at)
+
     def test_poll_once_rejects_failed_workflow_run(self):
         artifacts_page = json.dumps(
             {"artifacts": [publish_artifact(11, "web-basic-100-1-x-publish-bundle")]}
