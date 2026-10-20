@@ -86,6 +86,7 @@ def _prepare_import(request):
     prepared = publications.prepare_publication(selected["artifact_id"])
     if not constant_time_compare(selected["fingerprint"], prepared["fingerprint"]):
         raise publications.PublishedImportError("PUBLICATION_CHANGED", "발행 내용이 변경됐습니다 발행본을 다시 선택해주세요", 409)
+    prepared["expected_challenge_state"] = selected.get("challenge_state")
     return prepared
 
 
@@ -97,7 +98,9 @@ def _prepare_import(request):
 @sensitive_variables()
 def publication_import(request):
     data = request.data
-    if (not isinstance(data, dict) or set(data) != {"preview_token", "difficulty"}
+    if (not isinstance(data, dict) or not {"preview_token", "difficulty"} <= set(data)
+            or set(data) - {"preview_token", "difficulty", "update_metadata"}
+            or type(data.get("update_metadata", False)) is not bool
             or not isinstance(data.get("preview_token"), str) or not 1 <= len(data["preview_token"]) <= 2048
             or data.get("difficulty") not in Challenge.DifficultyType.values):
         raise InvalidRequest("선택한 발행본과 난이도를 확인해주세요")
@@ -108,7 +111,7 @@ def publication_import(request):
         raise InvalidRequest("요청 키가 너무 깁니다")
 
     def save(prepared):
-        return publications.save_publication(prepared, request.user, data["difficulty"])
+        return publications.save_publication(prepared, request.user, data["difficulty"], data.get("update_metadata", False))
 
     # A completed retry stays valid even after GitHub expires the artifact or preview.
     # The shared helper still verifies the body hash and serializes concurrent retries.

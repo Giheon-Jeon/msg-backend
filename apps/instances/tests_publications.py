@@ -16,11 +16,11 @@ from google.api_core.exceptions import ServiceUnavailable
 from google.auth.exceptions import RefreshError
 
 from apps.challenge.models import Challenge
-from apps.challenge.services import is_correct_flag
+from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.models import IdempotencyRecord
 from apps.instances import published_challenges as publications
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, RuntimeSecret
-from apps.instances.runtime_secrets import decrypt_runtime_secret
+from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
 from apps.instances.tests_user_files import user_archive, user_manifest
 
@@ -150,6 +150,8 @@ class PublishedChallengeTests(ReleaseTestBase):
         self.assertEqual(response.status_code, 200, response.data)
         challenge = Challenge.objects.get(challenge_slug=SLUG)
         self.assertFalse(challenge.is_published)
+        self.assertEqual(challenge.minimum_score, 100)
+        self.assertEqual(challenge.initial_score, 1000)
         self.assertEqual(challenge.difficulty, "MEDIUM")
         self.assertEqual(challenge.title, self.metadata["name"])
         self.assertTrue(is_correct_flag(self.metadata["flag"], challenge.flag_hash))
@@ -186,13 +188,97 @@ class PublishedChallengeTests(ReleaseTestBase):
 
     def test_flag_conflict_is_visible_and_blocks_import(self):
         self.import_body(self.body())
-        self.metadata["flag"] = "MSG{changed}"
+        challenge = Challenge.objects.get(challenge_slug=SLUG)
+        challenge.flag_hash = hash_flag("MSG{changed}")
+        challenge.save(update_fields=["flag_hash"])
         preview = self.preview()
         self.assertEqual(preview.data["data"]["flag_status"], "mismatch")
         self.assertFalse(preview.data["data"]["can_import"])
         response = self.import_body(self.body(), "conflict")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(RuntimeSecret.objects.filter(challenge__challenge_slug=SLUG).count(), 1)
+
+    def test_operator_flag_is_preserved_and_used_by_a_new_publication(self):
+        first = self.import_body(self.body()).data["data"]
+        challenge = Challenge.objects.get(pk=first["challenge_id"])
+        previous = challenge.releases.get().containers.get().secret_env.copy()
+        challenge.flag_hash = hash_flag("MSG{operator-selected}")
+        challenge.save(update_fields=["flag_hash"])
+        secret = create_runtime_secret(challenge, "flag", "MSG{operator-selected}", self.admin.login_id)
+        self.release.update(revision=2, registry_revision=2)
+        self.manifest["registry_revision"] = 2
+        self.artifacts = [dict(item, id=item["id"] + 100) for item in self.artifacts]
+        preview = self.preview().data["data"]
+        self.assertEqual(preview["flag_status"], "mismatch")
+        self.assertTrue(preview["can_import"])
+        response = self.import_body(self.body(), "operator-flag")
+        self.assertEqual(response.status_code, 200, response.data)
+        latest = challenge.releases.get(registry_revision=2)
+        self.assertEqual(latest.containers.get().secret_env, {"FLAG": str(secret.pk)})
+        self.assertEqual(challenge.releases.get(registry_revision=1).containers.get().secret_env, previous)
+        challenge.refresh_from_db()
+        self.assertTrue(is_correct_flag("MSG{operator-selected}", challenge.flag_hash))
+        self.assertNotIn("operator-selected", json.dumps(response.data))
+
+    def test_metadata_refresh_is_explicit_and_preserves_operator_settings_and_history(self):
+        first = self.import_body(self.body()).data["data"]
+        challenge = Challenge.objects.get(pk=first["challenge_id"])
+        challenge.title, challenge.description = "관리자 제목", "관리자 지문"
+        challenge.minimum_score, challenge.difficulty, challenge.is_published = 250, "HARD", True
+        challenge.save()
+        config = challenge.runtime_config
+        config.current_release_id = first["release_id"]
+        config.save()
+        previous_file = challenge.user_file_bundles.get().sha256
+        preview = self.preview().data["data"]
+        self.assertEqual(preview["metadata_changes"], ["title", "description"])
+        body = {"preview_token": preview["preview_token"], "difficulty": "UNASSIGNED", "update_metadata": True}
+        response = self.import_body(body, "refresh")
+        self.assertEqual(response.status_code, 200, response.data)
+        challenge.refresh_from_db()
+        config.refresh_from_db()
+        self.assertEqual((challenge.title, challenge.description), (self.metadata["name"], self.metadata["description"]))
+        self.assertEqual(challenge.minimum_score, 250)
+        self.assertEqual(challenge.difficulty, "HARD")
+        self.assertTrue(challenge.is_published)
+        self.assertEqual(str(config.current_release_id), first["release_id"])
+        self.assertEqual(challenge.releases.count(), 1)
+        self.assertEqual(challenge.user_file_bundles.get().sha256, previous_file)
+        self.assertEqual(response.data["data"]["metadata_updated"], ["title", "description"])
+        self.assertEqual(self.import_body(body, "refresh").json(), response.json())
+
+    def test_preview_cannot_overwrite_a_later_admin_edit(self):
+        self.import_body(self.body())
+        body = {**self.body(), "update_metadata": True}
+        challenge = Challenge.objects.get(challenge_slug=SLUG)
+        challenge.description = "미리보기 이후 다른 관리자가 저장한 지문"
+        challenge.save(update_fields=["description"])
+        response = self.import_body(body, "stale-metadata")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "PUBLICATION_CHALLENGE_CHANGED")
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.description, "미리보기 이후 다른 관리자가 저장한 지문")
+
+    def test_unassigned_challenge_is_a_private_draft_until_difficulty_is_selected(self):
+        preview = self.preview().data["data"]
+        self.assertEqual(preview["defaults"]["difficulty"], "UNASSIGNED")
+        self.assertEqual(preview["defaults"]["minimum_score"], 100)
+        response = self.import_body({"preview_token": preview["preview_token"], "difficulty": "UNASSIGNED"})
+        self.assertEqual(response.status_code, 200, response.data)
+        path = "/api/v1/admin/challenges/" + response.data["data"]["challenge_id"]
+        rejected = self.client.patch(path + "/visibility", {"is_published": True, "reason": "공개 검증"}, format="json")
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.data["code"], "CHALLENGE_DIFFICULTY_REQUIRED")
+        self.assertEqual(self.client.patch(path, {"difficulty": "EASY"}, format="json").status_code, 200)
+        self.assertEqual(self.client.patch(path + "/visibility", {"is_published": True, "reason": "공개 검증"}, format="json").status_code, 200)
+        self.assertEqual(self.client.patch(path, {"difficulty": "UNASSIGNED"}, format="json").status_code, 400)
+
+    def test_metadata_option_requires_a_boolean_before_network_access(self):
+        body = self.body()
+        self.calls.clear()
+        for value in ("false", 1, None):
+            self.assertEqual(self.import_body({**body, "update_metadata": value}).status_code, 400)
+        self.assertEqual(self.calls, [])
 
     def test_identical_retry_returns_same_response_without_github_even_after_preview_expiry(self):
         body = self.body()

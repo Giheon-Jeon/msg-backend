@@ -20,7 +20,7 @@ from apps.common.exceptions import APIError
 from apps.instances import poller, user_files
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, RuntimeSecret
 from apps.instances.releases import ReleaseValidationError, create_release, validate_release_payload
-from apps.instances.runtime_secrets import create_runtime_secret
+from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 
 NAME = re.compile(r"^(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)-(?P<run>[1-9][0-9]*)-[1-9][0-9]*-[a-f0-9]+-(?P<kind>publish|user-files)-bundle$")
 SHA = re.compile(r"^[a-f0-9]{40}$")
@@ -216,15 +216,28 @@ def existing_problem(prepared, lock=False):
     return query.filter(challenge_slug=prepared["slug"]).first()
 
 
+@sensitive_variables()
 def conflict_reason(prepared, challenge):
     if challenge is None:
         return None
     if not is_correct_flag(prepared["metadata"]["flag"], challenge.flag_hash):
-        return "저장된 채점 플래그와 발행본의 플래그가 다릅니다 기본 정보에서 먼저 확인해주세요"
+        # Runtime flags belong to the backend. Author placeholders must not block
+        # later images when the operator has a matching, injectable flag version.
+        secret = RuntimeSecret.objects.filter(challenge=challenge, name="flag").order_by("-version").first()
+        if (not prepared["release"] or secret is None
+                or not is_correct_flag(decrypt_runtime_secret(secret), challenge.flag_hash)):
+            return "채점 플래그와 주입할 비밀값이 다릅니다 기본 정보와 비밀값 설정을 먼저 확인해주세요"
     if not prepared["release"] and (ChallengeRuntimeConfig.objects.filter(challenge=challenge).exists()
                                     or ChallengeRelease.objects.filter(challenge=challenge).exists()):
         return "실행 문제로 등록된 항목에 정적 파일 발행본을 가져올 수 없습니다"
     return None
+
+
+def metadata_state(challenge):
+    if challenge is None:
+        return None
+    return {"challenge_id": str(challenge.pk), "fingerprint": salted_hmac(SALT + ":metadata", json.dumps(
+        [challenge.title, challenge.description, challenge.category], ensure_ascii=False)).hexdigest()}
 
 
 def preview_publication(prepared, user):
@@ -235,10 +248,13 @@ def preview_publication(prepared, user):
     existing_release = ChallengeRelease.objects.filter(challenge=challenge, registry_revision=prepared["revision"], derived_from__isnull=True).first() if challenge else None
     if release and existing_release and not _same_release(existing_release, validate_release_payload({"artifact": release})):
         blocked_reason = blocked_reason or "같은 발행번호로 다른 실행 설정이 등록되어 있습니다 배포 이력을 확인해주세요"
-    token = signing.dumps({"artifact_id": prepared["artifact_id"], "fingerprint": prepared["fingerprint"], "user_id": str(user.pk)}, salt=SALT)
+    token = signing.dumps({"artifact_id": prepared["artifact_id"], "fingerprint": prepared["fingerprint"],
+                          "user_id": str(user.pk), "challenge_state": metadata_state(challenge)}, salt=SALT)
     return {"preview_token": token, "challenge_slug": prepared["slug"], "registry_revision": prepared["revision"],
         "title": prepared["metadata"]["title"], "description": prepared["metadata"]["description"], "category": prepared["metadata"]["category"],
         "challenge_id": str(challenge.pk) if challenge else None, "existing_title": challenge.title if challenge else None,
+        "metadata_changes": [name for name in ("title", "description", "category")
+                             if challenge and getattr(challenge, name) != prepared["metadata"][name]],
         "existing_release_id": str(existing_release.pk) if existing_release else None,
         "can_import": blocked_reason is None, "blocked_reason": blocked_reason,
         "flag_status": "mismatch" if challenge and not is_correct_flag(prepared["metadata"]["flag"], challenge.flag_hash) else "match" if challenge else "from_repository",
@@ -249,7 +265,7 @@ def preview_publication(prepared, user):
                   "file_count": file_data["file_count"] if file_data else 0, "size_bytes": file_data["size_bytes"] if file_data else 0},
         "source_sha": prepared["source_sha"],
         "run_url": f"https://github.com/{settings.RELEASE_POLL_REPO}/actions/runs/{prepared['run_id']}",
-        "defaults": {"difficulty": "EASY", "initial_score": 1000, "minimum_score": 600, "decay": 70}}
+        "defaults": {"difficulty": "UNASSIGNED", "initial_score": 1000, "minimum_score": 100, "decay": 70}}
 
 
 def _same_release(release, validated):
@@ -272,7 +288,7 @@ def _same_release(release, validated):
 
 
 @sensitive_variables()
-def save_publication(prepared, user, difficulty):
+def save_publication(prepared, user, difficulty, update_metadata=False):
     meta = prepared["metadata"]
     with transaction.atomic():
         challenge, created = Challenge.objects.get_or_create(challenge_slug=prepared["slug"], defaults={
@@ -280,9 +296,20 @@ def save_publication(prepared, user, difficulty):
             "difficulty": difficulty, "score": 1000, "flag_hash": hash_flag(meta["flag"]), "is_published": False,
         })
         challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
+        if update_metadata:
+            expected = prepared.get("expected_challenge_state")
+            if (created and expected is not None) or (not created and metadata_state(challenge) != expected):
+                raise PublishedImportError("PUBLICATION_CHALLENGE_CHANGED", "문제 정보가 변경됐습니다 발행본을 다시 확인해주세요", 409)
         reason = conflict_reason(prepared, challenge)
         if reason:
             raise PublishedImportError("PUBLICATION_CONFLICT", reason, 409)
+        metadata_updated = []
+        if not created and update_metadata:
+            metadata_updated = [name for name in ("title", "description", "category") if getattr(challenge, name) != meta[name]]
+            for name in metadata_updated:
+                setattr(challenge, name, meta[name])
+            if metadata_updated:
+                challenge.save(update_fields=metadata_updated)
         if not RuntimeSecret.objects.filter(challenge=challenge, name="flag").exists():
             create_runtime_secret(challenge, "flag", meta["flag"], user.login_id)
         release = None
@@ -311,5 +338,6 @@ def save_publication(prepared, user, difficulty):
                 raise PublishedImportError("PUBLICATION_CONFLICT", "같은 발행번호의 파일 기록이 다릅니다 기존 기록을 확인해주세요", 409)
         return {"challenge_id": str(challenge.pk), "challenge_slug": challenge.challenge_slug, "title": challenge.title, "category": challenge.category,
                 "difficulty": challenge.difficulty, "is_published": challenge.is_published,
-                "challenge_created": created, "release_id": str(release.pk) if release else None,
+                "challenge_created": created, "metadata_updated": metadata_updated,
+                "release_id": str(release.pk) if release else None,
                 "release_status": release_status, "files_status": file_status, "registry_revision": prepared["revision"]}
