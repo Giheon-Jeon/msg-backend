@@ -1347,6 +1347,33 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(challenge.score, 1500)
         self.assertEqual(challenge.current_score, 1500)
 
+    def test_publishing_a_new_challenge_registers_it_in_the_board_catalog_once(self):
+        from apps.board.models import BoardChallenge
+
+        challenge = self.create_challenge()
+        self.assertFalse(BoardChallenge.objects.filter(challenge=challenge).exists())
+        path = f"/api/v1/admin/challenges/{challenge.pk}/visibility"
+        response = self.client.patch(path, {"is_published": True, "reason": "문제 공개"}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        entry = BoardChallenge.objects.get(challenge=challenge)
+        self.assertTrue(Challenge.objects.filter(pk=challenge.pk, is_published=True, board_meta__isnull=False).exists())
+        entry.club_name = "출제자 설정"
+        entry.save(update_fields=["club_name"])
+        for value in (False, True, True):
+            self.assertEqual(self.client.patch(path, {"is_published": value, "reason": "공개 재설정"}, format="json").status_code, 200)
+        self.assertEqual(BoardChallenge.objects.filter(challenge=challenge).count(), 1)
+        entry.refresh_from_db()
+        self.assertEqual(entry.club_name, "출제자 설정")
+
+    def test_unassigned_draft_is_not_added_to_the_participant_board_catalog(self):
+        from apps.board.models import BoardChallenge
+
+        challenge = self.create_challenge(difficulty="UNASSIGNED")
+        response = self.client.patch(f"/api/v1/admin/challenges/{challenge.pk}/visibility",
+                                     {"is_published": True, "reason": "아직 미정"}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(BoardChallenge.objects.filter(challenge=challenge).exists())
+
     def test_challenge_update_changes_editable_fields_and_hashes_flag(self):
         from apps.challenge.services import is_correct_flag
 
