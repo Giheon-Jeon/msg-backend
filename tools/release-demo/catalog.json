@@ -1,0 +1,148 @@
+[
+  {
+    "slug": "web-notebook",
+    "flag": "msgctf2026{demo_web_notebook}",
+    "title": "Notebook",
+    "category": "WEB",
+    "is_koth": false,
+    "has_deployment": true,
+    "runtime_type": "KUBERNETES",
+    "architecture": "AMD64",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "web",
+        "ports": [
+          8080
+        ],
+        "expose": true
+      },
+      {
+        "name": "db",
+        "ports": [
+          5432
+        ],
+        "expose": false
+      }
+    ],
+    "resource_profile": {
+      "cpu_millicores": 700,
+      "memory_mib": 768,
+      "ephemeral_storage_mib": 1024
+    }
+  },
+  {
+    "slug": "crypto-reused-seal",
+    "flag": "msgctf2026{demo_crypto_reused_seal}",
+    "title": "Reused Seal",
+    "category": "CRYPTO",
+    "is_koth": false,
+    "has_deployment": true,
+    "runtime_type": "KUBERNETES",
+    "architecture": "AMD64",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "chall",
+        "ports": [
+          31337
+        ],
+        "expose": true
+      }
+    ],
+    "resource_profile": {
+      "cpu_millicores": 500,
+      "memory_mib": 512,
+      "ephemeral_storage_mib": 1024
+    }
+  },
+  {
+    "slug": "pwn-random6",
+    "flag": "msgctf2026{demo_pwn_random6}",
+    "title": "random6",
+    "category": "PWN",
+    "is_koth": false,
+    "has_deployment": true,
+    "runtime_type": "DOCKER",
+    "architecture": "AMD64",
+    "isolation_profile": "PWN",
+    "containers": [
+      {
+        "name": "random6",
+        "ports": [
+          6666
+        ],
+        "expose": true
+      }
+    ],
+    "resource_profile": {
+      "cpu_millicores": 500,
+      "memory_mib": 256,
+      "ephemeral_storage_mib": 512
+    }
+  },
+  {
+    "slug": "koth-dependency-hell",
+    "flag": "msgctf2026{demo_koth_dependency_hell}",
+    "title": "DEPENDENCY HELL",
+    "category": "KOTH",
+    "is_koth": true,
+    "has_deployment": true,
+    "runtime_type": "KUBERNETES",
+    "architecture": "AMD64",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "service",
+        "ports": [
+          8080,
+          9090
+        ],
+        "expose": true
+      },
+      {
+        "name": "backend",
+        "ports": [
+          8081
+        ],
+        "expose": false
+      },
+      {
+        "name": "score-service",
+        "ports": [
+          8082
+        ],
+        "expose": false
+      },
+      {
+        "name": "judge-coordinator",
+        "ports": [
+          8090
+        ],
+        "expose": false
+      }
+    ],
+    "resource_profile": {
+      "cpu_millicores": 5500,
+      "memory_mib": 3072,
+      "ephemeral_storage_mib": 4096
+    }
+  },
+  {
+    "slug": "rev-ezpz",
+    "flag": "msgctf2026{demo_rev_ezpz}",
+    "title": "ezpz",
+    "category": "REV",
+    "is_koth": false,
+    "has_deployment": false,
+    "runtime_type": null,
+    "architecture": null,
+    "isolation_profile": "WEB",
+    "containers": [],
+    "resource_profile": {
+      "cpu_millicores": 500,
+      "memory_mib": 512,
+      "ephemeral_storage_mib": 1024
+    }
+  }
+]

@@ -299,7 +299,6 @@ class BoardApiTestCase(TestCase):
     # ---------------------------------------------------------------- GET /board
 
     def test_board_returns_notion_shape(self):
-        self.client.credentials()
         response = self.client.get("/api/v1/board")
 
         self.assertEqual(response.status_code, 200)
@@ -490,7 +489,6 @@ class BoardApiTestCase(TestCase):
     def test_board_returns_load_failed_when_not_seeded(self):
         TeamBoardState.objects.all().delete()
         Cell.objects.all().delete()
-        self.client.credentials()
 
         response = self.client.get("/api/v1/board")
 
@@ -1233,8 +1231,7 @@ class BoardApiTestCase(TestCase):
 
     # ---------------------------------------------------------------- chance/catalog
 
-    def test_chance_catalog_returns_five_cards_without_auth(self):
-        self.client.credentials()
+    def test_chance_catalog_returns_five_cards_after_login(self):
         response = self.client.get("/api/v1/board/chance/catalog")
 
         self.assertEqual(set(response.json()), {"code", "message", "data"})

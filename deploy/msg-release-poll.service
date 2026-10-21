@@ -1,0 +1,10 @@
+[Unit]
+Description=MSG challenge publication and participant file poller
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/msg-dev
+ExecStart=/usr/bin/docker compose --project-name msg-dev --file /opt/msg-dev/compose.yml --env-file /opt/msg-dev/.env exec -T backend python manage.py poll_releases
+TimeoutStartSec=15min

@@ -23,7 +23,7 @@ class SignatureCreateSerializer(serializers.Serializer):
 
 class SignatureUpdateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200, allow_blank=False, required=False)
-    description = serializers.CharField(allow_blank=False, required=False)
+    description = serializers.CharField(allow_blank=True, required=False)
     flag = serializers.CharField(
         min_length=1,
         max_length=512,
@@ -41,6 +41,8 @@ class SignatureUpdateSerializer(serializers.Serializer):
     def validate(self, attrs):
         if not attrs:
             raise serializers.ValidationError("수정할 항목이 하나 이상 필요합니다")
+        if self.context.get("is_published") and "description" in attrs and not attrs["description"].strip():
+            raise serializers.ValidationError("공개 중인 문제의 설명은 비울 수 없습니다")
         return attrs
 
 

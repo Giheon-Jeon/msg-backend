@@ -10,4 +10,5 @@ e1d2cbfde2a3d1490691cfe951c17f49e6565449:.env.save:generic-api-key:10
 645ce65eb0f8ca6e5bd2cc4efb13e25dcd7223bb:.env.save:generic-api-key:10
 8e9d52915ef274703ae9246b810a853674db65a6:apps/board/tests.py:generic-api-key:532
 8e9d52915ef274703ae9246b810a853674db65a6:apps/board/tests.py:generic-api-key:535
+# 정답 제출 동시성 테스트의 active_challenge_access=access는 ORM 관계 대입이며 비밀값이 아니다
 712f1fe2430afecb2d13235816307c5ac85b4f15:apps/challenge/tests.py:generic-api-key:662

@@ -2,6 +2,7 @@ import jwt
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.permissions import AllowAny
 from apps.common.throttling import LoginRateThrottle
 
 from apps.common.exceptions import InvalidRequest
@@ -26,6 +27,7 @@ from .serializers import LoginSerializer, RefreshTokenSerializer
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
 @throttle_classes([LoginRateThrottle])
 def login(request):
     serializer = LoginSerializer(data=request.data)
@@ -107,6 +109,7 @@ def logout(request):
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
 def refresh(request):
     serializer = RefreshTokenSerializer(data=request.data)
     if not serializer.is_valid():

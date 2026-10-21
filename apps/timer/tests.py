@@ -4,9 +4,14 @@ from rest_framework.test import APITestCase
 from apps.timer.models import Contest
 from django.db import IntegrityError
 from datetime import datetime, timedelta, timezone as datetime_timezone
+from apps.accounts.models import User
 
 
 class TimerAPITest(APITestCase):
+    def setUp(self):
+        user = User.objects.create_user(login_id="timer-reader", password="pw1234", nickname="타이머 참가자")
+        self.client.force_authenticate(user=user)
+
     def test_running_when_contest_in_progress(self):
         now = timezone.now()
         Contest.objects.create(
