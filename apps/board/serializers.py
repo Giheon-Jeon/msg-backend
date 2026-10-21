@@ -10,6 +10,10 @@ from apps.board.models import (
 from apps.challenge.models import Challenge
 
 
+class DiceRollRequestAckSerializer(serializers.Serializer):
+    request_key = serializers.CharField(max_length=255)
+
+
 class CellSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cell

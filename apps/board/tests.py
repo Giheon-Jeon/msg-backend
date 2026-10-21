@@ -367,8 +367,10 @@ class BoardApiTestCase(TestCase):
                 "blocked_reason",
                 "server_time",
                 "next_dice_reset_at",
+                "unconfirmed_roll_request_key",
             },
         )
+        self.assertIsNone(status["unconfirmed_roll_request_key"])
         self.assertTrue(status["can_roll"])
         self.assertIsNone(status["blocked_reason"])
         self.assertEqual(

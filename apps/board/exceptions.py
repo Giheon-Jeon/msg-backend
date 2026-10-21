@@ -39,6 +39,18 @@ class IdempotencyInProgress(APIError):
     message = "같은 Idempotency-Key 요청이 처리 중입니다. 잠시 후 다시 시도해주세요."
 
 
+class DiceRequestUnconfirmed(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "DICE_REQUEST_UNCONFIRMED"
+    message = "이전 주사위 요청을 먼저 확인해 주세요"
+
+
+class DiceRequestExpired(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "DICE_REQUEST_EXPIRED"
+    message = "이미 확인한 주사위 요청입니다 보드를 새로 불러와 주세요"
+
+
 class RequestBodyNotAllowed(APIError):
     status_code = status.HTTP_400_BAD_REQUEST
     code = "REQUEST_BODY_NOT_ALLOWED"

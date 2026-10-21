@@ -14,15 +14,17 @@ from apps.common.response import ok
 
 from .exceptions import BoardLoadFailed, ChallengeIdRequired, RequestBodyNotAllowed
 from .idempotency import idempotent
-from .models import Cell, ChanceCard
+from .models import Cell, ChanceCard, DiceRollRequest
 from .permissions import IsTeamLeader
 from .serializers import (
     CellSerializer,
     ChallengeCandidateSerializer,
     ChanceCardSerializer,
+    DiceRollRequestAckSerializer,
 )
 from .services import (
     build_cell_states,
+    acknowledge_dice_roll_request,
     build_chance_cards_view,
     challenge_solve_deadline,
     compute_blocked_reason,
@@ -38,6 +40,7 @@ from .services import (
     solve_active_challenge,
     open_current_cell_challenge,
     roll_dice,
+    prepare_dice_roll_request,
     spin_roulette,
     use_chance_card,
 )
@@ -183,7 +186,9 @@ class CellOpenView(APIView):
             raise ChallengeIdRequired()
 
         access, solve_deadline_at = open_current_cell_challenge(team, challenge_id)
-        remaining_seconds = max(0, int((solve_deadline_at - timezone.now()).total_seconds()))
+        remaining_seconds = max(
+            0, int((solve_deadline_at - timezone.now()).total_seconds())
+        )
 
         return ok(
             {
@@ -218,7 +223,10 @@ class DiceStatusView(APIView):
     def get(self, request, *args, **kwargs):
         team = _get_team(request)
         state = get_board_state_for_read(
-            team, include_completion=True, include_pending=True
+            team,
+            include_completion=True,
+            include_pending=True,
+            dice_request_user=request.user,
         )
         blocked_reason = compute_blocked_reason(
             team,
@@ -242,6 +250,11 @@ class DiceStatusView(APIView):
                 "blocked_reason": blocked_reason,
                 "server_time": timezone.now(),
                 "next_dice_reset_at": state.next_dice_reset_at,
+                "unconfirmed_roll_request_key": (
+                    DiceRollRequest.KEY_PREFIX + str(state.unconfirmed_dice_request_id)
+                    if state.unconfirmed_dice_request_id
+                    else None
+                ),
             }
         )
 
@@ -255,7 +268,33 @@ class DiceRollView(APIView):
     def post(self, request, *args, **kwargs):
         _assert_no_body(request)
         team = _get_team(request)
-        return ok(roll_dice(team))
+        return ok(
+            roll_dice(
+                team,
+                user=request.user,
+                request_key=request.headers.get("Idempotency-Key"),
+            )
+        )
+
+
+class DiceRollRequestView(APIView):
+    permission_classes = [IsAuthenticated, IsTeamLeader]
+
+    def post(self, request, *args, **kwargs):
+        _assert_no_body(request)
+        return ok(prepare_dice_roll_request(_get_team(request), request.user))
+
+
+class DiceRollRequestAckView(APIView):
+    permission_classes = [IsAuthenticated, IsTeamLeader]
+
+    def post(self, request, *args, **kwargs):
+        serializer = DiceRollRequestAckSerializer(data=_request_object(request))
+        serializer.is_valid(raise_exception=True)
+        acknowledge_dice_roll_request(
+            _get_team(request), request.user, **serializer.validated_data
+        )
+        return ok({"acknowledged": True})
 
 
 class DiceConfirmView(APIView):
