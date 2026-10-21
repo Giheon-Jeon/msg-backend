@@ -376,6 +376,29 @@ class TeamBoardState(models.Model):
         return f"{self.team_id}: {self.position_id}"
 
 
+class DiceRollRequest(models.Model):
+    """Keep one unacknowledged roll across the leader's browser sessions."""
+
+    KEY_PREFIX = "dice-roll-request-"
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team = models.ForeignKey("accounts.Team", on_delete=models.CASCADE)
+    user = models.ForeignKey("accounts.User", on_delete=models.CASCADE)
+    response_data = models.JSONField(null=True, blank=True, encoder=DjangoJSONEncoder)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "dice_roll_requests"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "user"], name="one_pending_dice_request_per_leader"
+            )
+        ]
+
+    @property
+    def request_key(self):
+        return self.KEY_PREFIX + str(self.pk)
+
+
 class DiceRoll(models.Model):
     """Audit log for dice rolls."""
 

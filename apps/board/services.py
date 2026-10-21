@@ -1,4 +1,5 @@
 import random
+import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 
@@ -24,6 +25,8 @@ from .exceptions import (
     ChanceCardNotFound,
     ChanceCardWrongTiming,
     ChanceConfirmNotFound,
+    DiceRequestExpired,
+    DiceRequestUnconfirmed,
     InvalidDestinationIndex,
     NoCardToDiscard,
     NoPendingRoll,
@@ -42,6 +45,7 @@ from .models import (
     Cell,
     ChanceCard,
     DiceRoll,
+    DiceRollRequest,
     PendingDiceRoll,
     TeamBoardState,
     TeamCellCandidate,
@@ -101,10 +105,20 @@ def _board_state_queryset():
 
 
 def _board_state_read_queryset(
-    *, include_completion=False, include_pending=False, include_cards=False
+    *,
+    include_completion=False,
+    include_pending=False,
+    include_cards=False,
+    dice_request_user=None,
 ):
     # 조회 경로의 충전 판단에 쓴다. 같은 쿼리에 붙여 조회 횟수를 늘리지 않는다.
     annotations = {"max_dice_rolls": setting_subquery("board.dice_rolls_per_reset")}
+    if dice_request_user is not None:
+        annotations["unconfirmed_dice_request_id"] = Subquery(
+            DiceRollRequest.objects.filter(
+                team_id=OuterRef("team_id"), user=dice_request_user
+            ).values("pk")[:1]
+        )
     if include_completion:
         completed_consumptions = (
             TeamCellConsumption.objects.filter(
@@ -163,13 +177,19 @@ def get_or_create_board_state(team):
 
 
 def get_board_state_for_read(
-    team, *, include_completion=False, include_pending=False, include_cards=False
+    team,
+    *,
+    include_completion=False,
+    include_pending=False,
+    include_cards=False,
+    dice_request_user=None,
 ):
     """Avoid a write transaction when a read cannot change recharge state."""
     read_states = _board_state_read_queryset(
         include_completion=include_completion,
         include_pending=include_pending,
         include_cards=include_cards,
+        dice_request_user=dice_request_user,
     )
     state = read_states.filter(team=team).first()
     if state is None:
@@ -362,7 +382,9 @@ def compute_start_reward(start_pass_count, landed_on_start):
     }
 
 
-def finalize_landing(team, state, cell, start_pass_count, landed_on_start, *, dice=None):
+def finalize_landing(
+    team, state, cell, start_pass_count, landed_on_start, *, dice=None
+):
     """칸 도착을 확정한다: 위치 갱신, 칸 소모, START 보상 지급."""
     state.position = cell
     if start_pass_count:
@@ -465,8 +487,51 @@ def _assert_can_roll(team, state):
         raise NoRollLeft()
 
 
-def roll_dice(team):
+def prepare_dice_roll_request(team, user):
+    with board_state_for_update(team):
+        pending, _ = DiceRollRequest.objects.get_or_create(team=team, user=user)
+        return {"request_key": pending.request_key}
+
+
+def acknowledge_dice_roll_request(team, user, request_key):
+    if not request_key.startswith(DiceRollRequest.KEY_PREFIX):
+        return  # A retained request from a client deployed before this protocol.
+    try:
+        request_id = uuid.UUID(request_key[len(DiceRollRequest.KEY_PREFIX) :])
+    except ValueError:
+        raise DiceRequestExpired()
+    with board_state_for_update(team):
+        pending = DiceRollRequest.objects.filter(
+            team=team, user=user, pk=request_id
+        ).first()
+        if pending is None:
+            return  # A late acknowledgement must not remove a newer request.
+        if pending.response_data is None:
+            raise DiceRequestUnconfirmed()
+        pending.delete()
+
+
+def _save_dice_receipt(pending, result):
+    if pending is not None:
+        pending.response_data = result
+        pending.save(update_fields=["response_data"])
+    return result
+
+
+def roll_dice(team, *, user=None, request_key=None):
     with board_state_for_update(team) as (state, dice):
+        pending_request = (
+            DiceRollRequest.objects.filter(team=team, user=user).first()
+            if user
+            else None
+        )
+        if pending_request is not None:
+            if pending_request.request_key != request_key:
+                raise DiceRequestUnconfirmed()
+            if pending_request.response_data is not None:
+                return pending_request.response_data
+        elif request_key and request_key.startswith(DiceRollRequest.KEY_PREFIX):
+            raise DiceRequestExpired()
         _assert_can_roll(team, state)
 
         dice_a = random.randint(1, 6)
@@ -512,7 +577,35 @@ def roll_dice(team):
                 },
             )
             start_reward = compute_start_reward(start_pass_count, landed_on_start)
-            return {
+            return _save_dice_receipt(
+                pending_request,
+                {
+                    "dice_a": dice_a,
+                    "dice_b": dice_b,
+                    "rolled_number": rolled_number,
+                    "previous_position": previous_position,
+                    "current_position": destination,
+                    "movement_path": movement_path,
+                    "skipped_cells": skipped_cells,
+                    "passed_start": passed_start,
+                    "start_reward": start_reward,
+                    "board_event_code": board_event_code,
+                    "pending_confirm": True,
+                    "usable_chance_card": {
+                        "card_id": held_card.card_id,
+                        "team_card_id": str(held_card.pk),
+                        "effect": held_card.card.effect,
+                    },
+                },
+            )
+
+        start_reward = finalize_landing(
+            team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
+        )
+
+        return _save_dice_receipt(
+            pending_request,
+            {
                 "dice_a": dice_a,
                 "dice_b": dice_b,
                 "rolled_number": rolled_number,
@@ -523,32 +616,10 @@ def roll_dice(team):
                 "passed_start": passed_start,
                 "start_reward": start_reward,
                 "board_event_code": board_event_code,
-                "pending_confirm": True,
-                "usable_chance_card": {
-                    "card_id": held_card.card_id,
-                    "team_card_id": str(held_card.pk),
-                    "effect": held_card.card.effect,
-                },
-            }
-
-        start_reward = finalize_landing(
-            team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
+                "pending_confirm": False,
+                "usable_chance_card": None,
+            },
         )
-
-    return {
-        "dice_a": dice_a,
-        "dice_b": dice_b,
-        "rolled_number": rolled_number,
-        "previous_position": previous_position,
-        "current_position": destination,
-        "movement_path": movement_path,
-        "skipped_cells": skipped_cells,
-        "passed_start": passed_start,
-        "start_reward": start_reward,
-        "board_event_code": board_event_code,
-        "pending_confirm": False,
-        "usable_chance_card": None,
-    }
 
 
 def confirm_dice_roll(team):
@@ -1252,8 +1323,8 @@ def _effect_move_offset(team, state, draw, payload, *, dice=None):
     base_position = pending.candidate_position
     consumed = get_consumed_indexes(team)
     direction = 1 if offset > 0 else -1
-    destination, movement_path, skipped_cells, extra_start_pass_count = compute_movement(
-        consumed, base_position, abs(offset), direction=direction
+    destination, movement_path, skipped_cells, extra_start_pass_count = (
+        compute_movement(consumed, base_position, abs(offset), direction=direction)
     )
     start_pass_count = (
         pending.start_pass_count or int(pending.passed_start)
