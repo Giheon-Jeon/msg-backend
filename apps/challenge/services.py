@@ -2,7 +2,8 @@ import hashlib
 from decimal import Decimal
 
 from django.contrib.auth.hashers import check_password
-from django.db.models import Sum
+from django.db.models import OuterRef, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 
 from apps.accounts.models import Team
 from apps.koth.models import KothSolve
@@ -28,8 +29,10 @@ def is_correct_flag(flag, flag_hash):
     return False
 
 
-def update_dynamic_score_and_team_scores(challenge):
-    """Recalculate a challenge and every affected team's stored Jeopardy score."""
+def update_dynamic_score_and_team_scores(
+    challenge, *, newly_solved_team_id=None, teams_already_locked=False
+):
+    """Recalculate scores; prelocked callers must hold all affected teams in PK order."""
     solved_team_count = Solve.objects.filter(challenge=challenge).count()
     current_score = Decimal(
         calculate_dynamic_score(
@@ -39,19 +42,35 @@ def update_dynamic_score_and_team_scores(challenge):
             solved_team_count,
         )
     )
+    score_unchanged = challenge.current_score == current_score
     challenge.current_score = current_score
-    challenge.save(update_fields=["current_score"])
+    if not score_unchanged or newly_solved_team_id is None:
+        challenge.save(update_fields=["current_score"])
 
-    affected_team_ids = (
-        Solve.objects.filter(challenge=challenge)
-        .order_by("team_id")
-        .values_list("team_id", flat=True)
+    affected_team_ids = Solve.objects.filter(challenge=challenge).values("team_id")
+    team_totals = (
+        Solve.objects.filter(team_id=OuterRef("pk"))
+        .order_by()
+        .values("team_id")
+        .annotate(total=Sum("challenge__current_score"))
+        .values("total")
     )
-    for team_id in affected_team_ids:
-        jeopardy_score = Solve.objects.filter(team_id=team_id).aggregate(
-            total=Sum("challenge__current_score")
-        )["total"] or Decimal("0")
-        Team.objects.filter(pk=team_id).update(team_score=jeopardy_score)
+    # Admin edits/deletions still recalculate all affected teams by default.
+    if score_unchanged and newly_solved_team_id is not None:
+        affected_teams = Team.objects.filter(pk=newly_solved_team_id)
+    else:
+        affected_teams = Team.objects.filter(pk__in=affected_team_ids)
+
+    # Submission holds these locks in the same transaction before awarding mileage.
+    if not teams_already_locked:
+        list(affected_teams.select_for_update(no_key=True).order_by("pk"))
+    affected_teams.update(
+        team_score=Coalesce(
+            Subquery(team_totals),
+            Value(Decimal("0")),
+            output_field=Team._meta.get_field("team_score"),
+        )
+    )
 
     return current_score
 

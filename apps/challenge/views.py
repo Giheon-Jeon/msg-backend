@@ -36,6 +36,7 @@ from apps.adminpanel.models import setting_values
 from apps.board.models import TeamBoardState, TeamChallengeAccess
 from apps.board.services import complete_challenge_from_submission
 from apps.ranking.services import check_and_record_line_monopoly
+from apps.ranking.scoring import calculate_dynamic_score
 from apps.teams.models import MileageHistory, MileageType
 
 
@@ -172,7 +173,7 @@ class ChallengeSubmitView(APIView):
             return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
 
         flag = request.data.get("flag")
-        if not flag:
+        if not isinstance(flag, str) or not flag or len(flag) > 512:
             return fail("INVALID_REQUEST", "요청 값이 올바르지 않습니다", 400)
 
         challenge = Challenge.objects.filter(challenge_id=challenge_id).first()
@@ -186,43 +187,40 @@ class ChallengeSubmitView(APIView):
             return fail("CHALLENGE_LOCKED", "아직 개방되지 않은 문제입니다.", 403)
 
         now = timezone.now()
-        submitted_flag_hash = hash_flag(flag)
+        initial_flag_hash = challenge.flag_hash
+        existing_flag_lock = FlagSubmissionLock.objects.filter(
+            team=team,
+            challenge=challenge,
+        ).first()
+        submitted_flag_hash = None
+        is_flag_correct = None
+        if not (
+            existing_flag_lock
+            and existing_flag_lock.locked_until
+            and existing_flag_lock.locked_until > now
+        ):
+            submitted_flag_hash = hash_flag(flag)
+            is_flag_correct = is_correct_flag(flag, initial_flag_hash)
 
         with transaction.atomic():
             # Match board mutations: state precedes access and team locks.
             TeamBoardState.objects.select_for_update().filter(team=team).first()
             challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
-            # Lock all affected teams in UUID order before any mileage/score writes
-            # or FK inserts. NO KEY UPDATE allows unrelated FK references on PG.
-            affected_team_ids = set(
-                Solve.objects.filter(challenge=challenge).values_list(
-                    "team_id", flat=True
-                )
-            )
-            affected_team_ids.add(team.pk)
-            list(
-                Team.objects.select_for_update(no_key=True)
-                .filter(pk__in=affected_team_ids)
-                .order_by("pk")
-            )
             flag_lock, _ = FlagSubmissionLock.objects.select_for_update().get_or_create(
                 team=team,
                 challenge=challenge,
             )
 
-            if Solve.objects.filter(team=team, challenge=challenge).exists():
-                return fail("ALREADY_SOLVED", "이미 정답을 맞춘 문제입니다.", 409)
-
             if flag_lock.locked_until and flag_lock.locked_until > now:
-                retry_after_seconds = int(
-                    (flag_lock.locked_until - now).total_seconds()
-                )
                 FlagSubmission.objects.create(
                     team=team,
                     user=request.user,
                     challenge=challenge,
-                    submitted_flag_hash=submitted_flag_hash,
+                    submitted_flag_hash="",
                     result=FlagSubmission.SubmissionResult.TOO_MANY_ATTEMPTS,
+                )
+                retry_after_seconds = int(
+                    (flag_lock.locked_until - now).total_seconds()
                 )
                 return fail(
                     "TOO_MANY_ATTEMPTS",
@@ -235,7 +233,36 @@ class ChallengeSubmitView(APIView):
                 flag_lock.failed_count = 0
                 flag_lock.locked_until = None
 
-            if not is_correct_flag(flag, challenge.flag_hash):
+            if submitted_flag_hash is None:
+                submitted_flag_hash = hash_flag(flag)
+                is_flag_correct = is_correct_flag(flag, initial_flag_hash)
+            if challenge.flag_hash != initial_flag_hash:
+                is_flag_correct = is_correct_flag(flag, challenge.flag_hash)
+
+            # The challenge lock stabilizes the next score before selecting team locks.
+            next_score = calculate_dynamic_score(
+                challenge.initial_score,
+                challenge.minimum_score,
+                challenge.decay,
+                Solve.objects.filter(challenge=challenge).count() + 1,
+            )
+            affected_team_ids = {team.pk}
+            if next_score != challenge.current_score:
+                affected_team_ids.update(
+                    Solve.objects.filter(challenge=challenge).values_list(
+                        "team_id", flat=True
+                    )
+                )
+            # Preserve UUID lock order; NO KEY UPDATE permits unrelated FK inserts.
+            list(
+                Team.objects.select_for_update(no_key=True)
+                .filter(pk__in=affected_team_ids)
+                .order_by("pk")
+            )
+            if Solve.objects.filter(team=team, challenge=challenge).exists():
+                return fail("ALREADY_SOLVED", "이미 정답을 맞춘 문제입니다.", 409)
+
+            if not is_flag_correct:
                 flag_lock.failed_count += 1
                 flag_lock.last_failed_at = now
 
@@ -319,7 +346,9 @@ class ChallengeSubmitView(APIView):
                 result=FlagSubmission.SubmissionResult.CORRECT,
             )
 
-            update_dynamic_score_and_team_scores(challenge)
+            update_dynamic_score_and_team_scores(
+                challenge, newly_solved_team_id=team.pk, teams_already_locked=True
+            )
             check_and_record_line_monopoly(team, challenge)
             team_score = get_team_total_score(team.pk)
             team.refresh_from_db(fields=["mileage"])
