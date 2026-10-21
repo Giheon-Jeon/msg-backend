@@ -5001,6 +5001,157 @@ class AdminResourcesTests(TestCase):
         )
 
 
+class AdminLineMonopolyTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.team = Team.objects.create(team_name="감자는외로워", team_score=0)
+        User.objects.create_user(
+            login_id="root",
+            password="pw1234",
+            nickname="운영자",
+            team=None,
+            role=Role.ADMIN,
+        )
+        User.objects.create_user(
+            login_id="player", password="pw1234", nickname="참가자", team=self.team
+        )
+        self.auth("root")
+
+    def auth(self, login_id):
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": login_id, "password": "pw1234"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
+        )
+
+    def events(self, event_type):
+        from apps.adminpanel.models import AdminEvent
+
+        return list(AdminEvent.objects.filter(type=event_type))
+
+    def monopolize(self, line_number=3, score="150.00", category=False):
+        from apps.ranking.models import LineMonopoly
+
+        return LineMonopoly.objects.create(
+            team=self.team,
+            line_number=line_number,
+            earned_score=Decimal(score),
+            is_category_bonus=category,
+        )
+
+    def patch(self, body, line_number=3, team_id=None):
+        return self.client.patch(
+            f"/api/v1/admin/teams/{team_id or self.team.team_id}"
+            f"/line_monopolies/{line_number}",
+            body,
+            format="json",
+        )
+
+    def test_award_records_system_event(self):
+        self.monopolize(category=True)
+
+        (event,) = self.events("LINE_MONOPOLIZED")
+        self.assertEqual(event.actor, "system")
+        self.assertEqual(event.severity, "INFO")
+        self.assertEqual(event.team_id, self.team.team_id)
+        self.assertEqual(event.message, "3번 라인 독점: +150점 (카테고리 보너스)")
+
+    def test_patch_changes_score_and_records_event(self):
+        from apps.challenge.services import get_team_total_score
+
+        self.monopolize()
+        res = self.patch({"earned_score": 99.5, "reason": "동적 점수 보정"})
+
+        self.assertEqual(res.status_code, 200)
+        data = res.data["data"]
+        self.assertEqual(data["line_number"], 3)
+        self.assertEqual(data["team_id"], str(self.team.team_id))
+        self.assertEqual(data["earned_score"], 99.5)
+        self.assertFalse(data["is_category_bonus"])
+        self.assertEqual(get_team_total_score(self.team.team_id), Decimal("99.50"))
+
+        (event,) = self.events("LINE_MONOPOLY_SCORE_CHANGED")
+        self.assertEqual(event.actor, "root")
+        self.assertEqual(event.severity, "WARNING")
+        self.assertEqual(event.message, "3번 라인 독점 점수 150 → 99.5: 동적 점수 보정")
+        # 점수 수정은 새 독점이 아니다.
+        self.assertEqual(len(self.events("LINE_MONOPOLIZED")), 1)
+
+    def test_score_is_rounded_to_cents(self):
+        self.monopolize()
+        res = self.patch({"earned_score": 10.005, "reason": "보정"})
+        self.assertEqual(res.data["data"]["earned_score"], 10.01)
+
+    def test_score_accepts_upper_storage_boundary(self):
+        monopoly = self.monopolize()
+        res = self.patch({"earned_score": 9999999999.99, "reason": "보정"})
+
+        self.assertEqual(res.status_code, 200)
+        monopoly.refresh_from_db()
+        self.assertEqual(monopoly.earned_score, Decimal("9999999999.99"))
+
+    def test_line_not_monopolized_by_team_is_rejected(self):
+        self.monopolize(line_number=2)
+        res = self.patch({"earned_score": 1, "reason": "보정"}, line_number=3)
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data["code"], "INVALID_REQUEST")
+        self.assertEqual(self.events("LINE_MONOPOLY_SCORE_CHANGED"), [])
+
+    def test_invalid_input_is_rejected_without_change(self):
+        from apps.ranking.models import LineMonopoly
+
+        self.monopolize()
+        cases = [
+            ({"earned_score": 1, "reason": "보정"}, "0"),
+            ({"earned_score": 1, "reason": "보정"}, "7"),
+            ({"earned_score": 1, "reason": "보정"}, "abc"),
+            ({"earned_score": True, "reason": "보정"}, "3"),
+            ({"earned_score": "10", "reason": "보정"}, "3"),
+            ({"earned_score": -1, "reason": "보정"}, "3"),
+            ({"earned_score": -0.001, "reason": "보정"}, "3"),
+            ({"earned_score": 1e13, "reason": "보정"}, "3"),
+            ({"earned_score": 10**100, "reason": "보정"}, "3"),
+            ({"earned_score": 1e100, "reason": "보정"}, "3"),
+            ({"earned_score": -1e100, "reason": "보정"}, "3"),
+            ({"reason": "보정"}, "3"),
+            ({"earned_score": 1}, "3"),
+            ({"earned_score": 1, "reason": "   "}, "3"),
+        ]
+        for body, line_number in cases:
+            with self.subTest(body=body, line_number=line_number):
+                res = self.patch(body, line_number=line_number)
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+
+        res = self.client.patch(
+            f"/api/v1/admin/teams/{self.team.team_id}/line_monopolies/3",
+            '{"earned_score": NaN, "reason": "보정"}',
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+        self.assertEqual(
+            LineMonopoly.objects.get(team=self.team).earned_score, Decimal("150.00")
+        )
+        self.assertEqual(self.events("LINE_MONOPOLY_SCORE_CHANGED"), [])
+
+    def test_unknown_team_is_404(self):
+        res = self.patch({"earned_score": 1, "reason": "보정"}, team_id=uuid.uuid4())
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.data["code"], "TEAM_NOT_FOUND")
+
+    def test_requires_admin(self):
+        self.monopolize()
+        self.auth("player")
+        res = self.patch({"earned_score": 1, "reason": "보정"})
+        self.assertEqual(res.status_code, 403)
+
+
 class AdminSettingsAppliedTests(TestCase):
     """/admin/settings 에 저장한 값이 보드 규칙에 실제로 쓰이는지 확인한다."""
 
