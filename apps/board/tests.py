@@ -365,6 +365,7 @@ class BoardApiTestCase(TestCase):
             {
                 "can_roll",
                 "dice_rolls_left",
+                "max_dice_rolls",
                 "timer_running",
                 "blocked_reason",
                 "server_time",
@@ -515,6 +516,7 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(data["position"], 1)
         self.assertEqual(data["type"], Cell.CellType.START)
         self.assertEqual(data["dice_rolls_left"], 3)
+        self.assertEqual(data["max_dice_rolls"], 3)
         self.assertIsNone(data["next_dice_reset_at"])
         self.assertFalse(data["board_completed"])
         self.assertEqual(data["consumed_cell_indexes"], [])
@@ -527,6 +529,7 @@ class BoardApiTestCase(TestCase):
                 "position",
                 "type",
                 "dice_rolls_left",
+                "max_dice_rolls",
                 "next_dice_reset_at",
                 "airport_move_used",
                 "has_passed_start",

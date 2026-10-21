@@ -9,7 +9,13 @@ Source: [Notion Board API](https://app.notion.com/p/3ab0f19c72be80ab9e57e3776b67
 
 ## Consecutive dice rolls
 
-Teams may spend all three stored rolls without waiting for the 15-minute challenge reward window or dice recharge. A challenge must still be selected on arrival before the next roll. The `timer_running` field reports the current challenge reward window independently of `can_roll`; it no longer produces a `TIMER_RUNNING` block. Empty dice, an unconfirmed roll, and board completion still block rolling. Further rolls preserve the existing recharge deadline, and opened challenges remain available after moving.
+Teams may spend stored rolls without waiting for the challenge reward window or dice recharge. A challenge must still be selected on arrival before the next roll. The `timer_running` field reports the current challenge reward window independently of `can_roll`; it no longer produces a `TIMER_RUNNING` block. Empty dice, an unconfirmed roll, and board completion still block rolling. Further rolls preserve the existing recharge deadline, and opened challenges remain available after moving.
+
+## Configured dice capacity and reward window
+
+`GET /api/v1/board/me` and `GET /api/v1/board/dice/status` both return `max_dice_rolls`, the current `board.dice_rolls_per_reset` setting (default 3). New teams start with that many dice. Existing balances are preserved when the setting changes; raising capacity starts recharge when necessary and does not restart an existing recharge deadline.
+
+The client displays `dice_rolls_left / max_dice_rolls` and uses `next_dice_reset_at` for recharge. For the challenge reward countdown, use `active_challenge.solve_deadline_at` from `/board/me` or `solve_deadline_at` from `/board/cell/open`. Do not derive a fixed 15-minute deadline from `opened_at`: changing `board.solve_deadline_minutes` also affects already opened challenges.
 
 ## START and board completion (#31)
 

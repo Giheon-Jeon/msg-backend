@@ -142,7 +142,7 @@ def get_or_create_board_state(team):
                 raise BoardNotReady()
             state, _ = locked_states.get_or_create(
                 team=team,
-                defaults={"position": start_cell},
+                defaults={"position": start_cell, "dice_rolls_left": max_dice_rolls()},
             )
         return apply_pending_dice_recharge(state)
 
