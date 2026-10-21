@@ -5,7 +5,7 @@ from django.test import TransactionTestCase
 
 class CellLineMigrationTestCase(TransactionTestCase):
     migrate_from = [("board", "0005_exclude_start_from_completion")]
-    migrate_to = [("board", "0006_cell_line_number")]
+    migrate_to = [("board", "0009_correct_cell_line_numbers")]
 
     def setUp(self):
         executor = MigrationExecutor(connection)
@@ -17,7 +17,7 @@ class CellLineMigrationTestCase(TransactionTestCase):
     def restore_latest_schema(self):
         MigrationExecutor(connection).migrate(self.latest_migrations)
 
-    def test_existing_challenge_cells_are_assigned_to_six_lines(self):
+    def test_existing_board_cells_are_assigned_to_six_color_lines(self):
         Cell = self.old_apps.get_model("board", "Cell")
         special_cells = {
             1: "START",
@@ -46,9 +46,9 @@ class CellLineMigrationTestCase(TransactionTestCase):
         expected_lines = {
             1: [2, 3, 4, 5, 6],
             2: [8, 9, 10, 11, 12],
-            3: [13, 14, 15, 17, 18],
-            4: [19, 20, 22, 23, 24],
-            5: [26, 27, 28, 29, 31],
+            3: [13, 14, 15, 16, 17, 18],
+            4: [19, 20, 21, 22, 23, 24],
+            5: [26, 27, 28, 29, 30, 31],
             6: [32, 33, 34, 35, 36],
         }
         for line_number, cell_indexes in expected_lines.items():
@@ -66,7 +66,7 @@ class CellLineMigrationTestCase(TransactionTestCase):
                     "line_number", flat=True
                 )
             ),
-            [None] * 6,
+            [None, None, 3, 4, None, 5],
         )
 
 

@@ -251,6 +251,28 @@ def is_board_completed(team, *, consumed_indexes=None):
     )
 
 
+def is_line_monopoly_completed(team, line_number):
+    """Check a line using solved challenge cells only."""
+    line_challenge_indexes = set(
+        Cell.objects.filter(
+            line_number=line_number,
+            type=Cell.CellType.CHALLENGE,
+        ).values_list("cell_index", flat=True)
+    )
+    if not line_challenge_indexes:
+        return False
+
+    cleared_challenge_indexes = set(
+        TeamChallengeAccess.objects.filter(
+            team=team,
+            status=TeamChallengeAccess.Status.CLEARED,
+            source_cell__line_number=line_number,
+            source_cell__type=Cell.CellType.CHALLENGE,
+        ).values_list("source_cell_id", flat=True)
+    )
+    return line_challenge_indexes == cleared_challenge_indexes
+
+
 def challenge_solve_deadline(access):
     # 마감은 저장하지 않고 개방 시각에서 계산하므로, 설정을 바꾸면 진행 중인 문제에도 바로 적용된다.
     return access.opened_at + timedelta(seconds=solve_limit_seconds())

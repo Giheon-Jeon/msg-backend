@@ -35,37 +35,34 @@ LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"
 
 
 class CellLineNumberValidationTestCase(TestCase):
-    def test_challenge_cell_requires_a_line_number(self):
-        cell = Cell(cell_index=2, type=Cell.CellType.CHALLENGE, name="문제")
+    def test_cell_requires_its_fixed_line_number(self):
+        cell = Cell(cell_index=16, type=Cell.CellType.ROULETTE, name="룰렛")
 
         with self.assertRaises(ValidationError) as raised:
             cell.full_clean()
 
         self.assertIn("line_number", raised.exception.message_dict)
 
-    def test_special_cell_rejects_a_line_number(self):
+    def test_special_cell_accepts_its_fixed_line_number(self):
         cell = Cell(
-            cell_index=7,
-            type=Cell.CellType.CHANCE,
-            line_number=1,
-            name="찬스",
+            cell_index=16,
+            type=Cell.CellType.ROULETTE,
+            line_number=3,
+            name="룰렛",
         )
 
-        with self.assertRaises(ValidationError) as raised:
-            cell.full_clean()
-
-        self.assertIn("line_number", raised.exception.message_dict)
+        cell.full_clean()
 
 
 class CellLineNumberDatabaseConstraintTestCase(TestCase):
-    def test_special_cell_with_line_number_cannot_be_saved(self):
+    def test_line_number_outside_six_lines_cannot_be_saved(self):
         with transaction.atomic():
             with self.assertRaises(IntegrityError):
                 Cell.objects.create(
-                    cell_index=7,
-                    type=Cell.CellType.CHANCE,
-                    line_number=1,
-                    name="찬스",
+                    cell_index=16,
+                    type=Cell.CellType.ROULETTE,
+                    line_number=7,
+                    name="룰렛",
                 )
 
 
@@ -314,9 +311,9 @@ class BoardApiTestCase(TestCase):
         expected_lines = {
             1: [2, 3, 4, 5, 6],
             2: [8, 9, 10, 11, 12],
-            3: [13, 14, 15, 17, 18],
-            4: [19, 20, 22, 23, 24],
-            5: [26, 27, 28, 29, 31],
+            3: [13, 14, 15, 16, 17, 18],
+            4: [19, 20, 21, 22, 23, 24],
+            5: [26, 27, 28, 29, 30, 31],
             6: [32, 33, 34, 35, 36],
         }
         for line_number, cell_indexes in expected_lines.items():
@@ -342,10 +339,10 @@ class BoardApiTestCase(TestCase):
             {
                 1: ("START", "출발", None, None),
                 7: ("CHANCE", "찬스", None, None),
-                16: ("ROULETTE", "룰렛", None, None),
-                21: ("AIRPORT", "세계여행", None, None),
+                16: ("ROULETTE", "룰렛", None, 3),
+                21: ("AIRPORT", "세계여행", None, 4),
                 25: ("ROULETTE", "룰렛", None, None),
-                30: ("CHANCE", "황금열쇠", None, None),
+                30: ("CHANCE", "황금열쇠", None, 5),
             },
         )
 
