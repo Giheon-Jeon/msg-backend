@@ -14,7 +14,8 @@ GCP IAM 조건이나 서버 방화벽을 변경하지 않는다
 - 서버는 현재 MSG-CTF/msg-backend main SHA만 배포하고 임의 저장소·명령·파일 경로·helper를 받지 않음
 - 서버의 root 소유 trusted-central.json은 중앙 배포 SHA와 shell·프록시 helper checksum을 고정
 
-중앙 배포 버전은 0a9fc98c36cb8b4ce5a7a8ea55280bbf24d2a0f9다
+중앙 배포 버전은 96dc1511b7f8770052b0919a5c8c0367696a9f8c다
+동적 DNS를 사용하는 프론트 프록시도 후보 전환과 복원을 검증한다
 검토한 deploy-development-vm.sh와 backend_proxy_bridge.py를 서버 고정 경로에 설치한 뒤 사용한다
 CI에서 배포 코드를 업로드하지 않으며 고정된 root 진입점에 배포 식별자만 보낸다
 서버의 앱 환경변수와 DB·Redis 인증 정보는 기존 서버 설정에 유지한다
