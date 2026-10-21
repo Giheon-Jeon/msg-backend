@@ -15,6 +15,7 @@ from apps.board.models import (
     TeamChanceCard,
 )
 from apps.accounts.models import User
+from apps.board.line_rules import CELL_LINE_NUMBERS
 from apps.board.services import MAX_DICE_ROLLS, get_default_team
 from apps.challenge.models import Challenge
 from apps.challenge.services import hash_flag
@@ -30,20 +31,6 @@ SPECIAL_CELLS = {
     21: (Cell.CellType.AIRPORT, "세계여행"),
     25: (Cell.CellType.ROULETTE, "룰렛"),
     30: (Cell.CellType.CHANCE, "황금열쇠"),
-}
-
-BOARD_LINES = (
-    (2, 3, 4, 5, 6),
-    (8, 9, 10, 11, 12),
-    (13, 14, 15, 17, 18),
-    (19, 20, 22, 23, 24),
-    (26, 27, 28, 29, 31),
-    (32, 33, 34, 35, 36),
-)
-CELL_LINE_NUMBERS = {
-    cell_index: line_number
-    for line_number, cell_indexes in enumerate(BOARD_LINES, start=1)
-    for cell_index in cell_indexes
 }
 
 DIFFICULTY_COUNTS = {
@@ -188,9 +175,10 @@ class Command(BaseCommand):
                 f"challenge cells({len(challenge_indexes)}) != difficulty map({len(CELL_DIFFICULTY)})"
             )
             return
-        if set(challenge_indexes) != set(CELL_LINE_NUMBERS):
+        expected_line_indexes = set(board_indexes) - {1, 7, 25}
+        if expected_line_indexes != set(CELL_LINE_NUMBERS):
             self.stderr.write(
-                f"challenge cells({len(challenge_indexes)}) != line map({len(CELL_LINE_NUMBERS)})"
+                f"line cells({len(expected_line_indexes)}) != line map({len(CELL_LINE_NUMBERS)})"
             )
             return
 
@@ -208,7 +196,14 @@ class Command(BaseCommand):
         for cell_index in board_indexes:
             if cell_index in SPECIAL_CELLS:
                 cell_type, name = SPECIAL_CELLS[cell_index]
-                cells.append(Cell(cell_index=cell_index, type=cell_type, name=name))
+                cells.append(
+                    Cell(
+                        cell_index=cell_index,
+                        type=cell_type,
+                        line_number=CELL_LINE_NUMBERS.get(cell_index),
+                        name=name,
+                    )
+                )
                 continue
 
             difficulty = CELL_DIFFICULTY[cell_index]

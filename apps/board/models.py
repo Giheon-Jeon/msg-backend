@@ -4,6 +4,8 @@ from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 
+from .line_rules import CELL_LINE_NUMBERS
+
 
 class IdempotencyRequest(models.Model):
     class Status(models.TextChoices):
@@ -67,11 +69,11 @@ class Cell(models.Model):
 
     def clean(self):
         super().clean()
-
-        if self.type == self.CellType.CHALLENGE and self.line_number is None:
-            raise ValidationError({"line_number": "문제 칸에는 라인 번호가 필요합니다."})
-        if self.type != self.CellType.CHALLENGE and self.line_number is not None:
-            raise ValidationError({"line_number": "라인 번호는 문제 칸에만 지정할 수 있습니다."})
+        expected = CELL_LINE_NUMBERS.get(self.cell_index)
+        if 1 <= self.cell_index <= 36 and self.line_number != expected:
+            raise ValidationError(
+                {"line_number": f"{self.cell_index}번 칸의 라인 번호는 {expected}이어야 합니다."}
+            )
 
     class Meta:
         db_table = "cells"
@@ -81,12 +83,6 @@ class Cell(models.Model):
                 condition=models.Q(line_number__isnull=True)
                 | models.Q(line_number__gte=1, line_number__lte=6),
                 name="cell_line_number_between_1_and_6",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(line_number__isnull=True) | models.Q(type="CHALLENGE")
-                ),
-                name="cell_line_number_matches_type",
             ),
         ]
 

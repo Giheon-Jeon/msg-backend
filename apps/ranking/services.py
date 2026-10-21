@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.db import IntegrityError, models, transaction
 
-from apps.board.models import Cell, TeamChallengeAccess
+from apps.board.models import TeamChallengeAccess
 from apps.challenge.models import Solve
 from apps.ranking.models import LineMonopoly
 
@@ -11,30 +11,20 @@ LINE_BONUS_RATE = Decimal("0.30")
 LINE_CATEGORY_BONUS_RATE = Decimal("0.45")
 
 
-def check_and_record_line_monopoly(team, challenge):
-    access = (
-        TeamChallengeAccess.objects.filter(team=team, challenge=challenge)
-        .select_related("source_cell")
-        .first()
-    )
-    if access is None or access.source_cell.line_number is None:
-        return None
-
-    line_number = access.source_cell.line_number
-
-    line_cell_indexes = set(
-        Cell.objects.filter(line_number=line_number).values_list(
-            "cell_index", flat=True
+def check_and_record_line_monopoly(team, challenge=None, *, line_number=None):
+    if line_number is None:
+        access = (
+            TeamChallengeAccess.objects.filter(team=team, challenge=challenge)
+            .select_related("source_cell")
+            .first()
         )
-    )
-    cleared_cell_indexes = set(
-        TeamChallengeAccess.objects.filter(
-            team=team,
-            status=TeamChallengeAccess.Status.CLEARED,
-            source_cell__line_number=line_number,
-        ).values_list("source_cell_id", flat=True)
-    )
-    if line_cell_indexes != cleared_cell_indexes:
+        if access is None or access.source_cell.line_number is None:
+            return None
+        line_number = access.source_cell.line_number
+
+    from apps.board.services import is_line_monopoly_completed
+
+    if not is_line_monopoly_completed(team, line_number):
         return None
 
     cleared_accesses = TeamChallengeAccess.objects.filter(
