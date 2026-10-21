@@ -1,6 +1,7 @@
 import jwt
 from django.db import transaction
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from apps.common.throttling import LoginRateThrottle
@@ -26,6 +27,7 @@ from .models import RefreshToken, User
 from .serializers import LoginSerializer, RefreshTokenSerializer
 
 
+@never_cache
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([LoginRateThrottle])
@@ -108,6 +110,7 @@ def logout(request):
     return ok(None, message="로그아웃 성공")
 
 
+@never_cache
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def refresh(request):
