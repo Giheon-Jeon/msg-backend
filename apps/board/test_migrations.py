@@ -137,8 +137,11 @@ class BoardSpecMigrationTestCase(TransactionTestCase):
         # Continue through the real API from the migrated pending landing.
         client = APIClient()
         client.force_authenticate(user=User.objects.get(pk=user.pk))
+        from apps.board.models import PendingDiceRoll
+
         confirmed = client.post(
-            "/api/v1/board/dice/confirm", HTTP_IDEMPOTENCY_KEY="migrated-confirm"
+            "/api/v1/board/dice/confirm",
+            HTTP_IDEMPOTENCY_KEY=PendingDiceRoll.objects.get(team_id=team.pk).request_key,
         )
         self.assertEqual(confirmed.status_code, 200)
         self.assertEqual(confirmed.data["data"]["board_event_code"], "ROULETTE")

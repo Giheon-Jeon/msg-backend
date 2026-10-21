@@ -51,6 +51,12 @@ class DiceRequestExpired(APIError):
     message = "이미 확인한 주사위 요청입니다 보드를 새로 불러와 주세요"
 
 
+class DiceConfirmRequestExpired(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "DICE_CONFIRM_REQUEST_EXPIRED"
+    message = "이전 이동의 확정 요청입니다 보드를 새로 불러와 현재 이동을 확인해 주세요"
+
+
 class RequestBodyNotAllowed(APIError):
     status_code = status.HTTP_400_BAD_REQUEST
     code = "REQUEST_BODY_NOT_ALLOWED"

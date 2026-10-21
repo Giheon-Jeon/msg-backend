@@ -25,6 +25,7 @@ from .exceptions import (
     ChanceCardNotFound,
     ChanceCardWrongTiming,
     ChanceConfirmNotFound,
+    DiceConfirmRequestExpired,
     DiceRequestExpired,
     DiceRequestUnconfirmed,
     InvalidDestinationIndex,
@@ -134,6 +135,10 @@ def _board_state_read_queryset(
     if include_pending:
         annotations["has_pending_roll"] = Exists(
             PendingDiceRoll.objects.filter(team_id=OuterRef("team_id"))
+        )
+        annotations["pending_confirmation_id"] = Subquery(
+            PendingDiceRoll.objects.filter(team_id=OuterRef("team_id"))
+            .values("confirmation_id")[:1]
         )
     if include_cards:
         annotations["has_chance_cards"] = Exists(
@@ -561,7 +566,7 @@ def roll_dice(team, *, user=None, request_key=None):
 
         held_card = get_usable_post_roll_card(team)
         if held_card is not None:
-            PendingDiceRoll.objects.update_or_create(
+            pending_roll, _ = PendingDiceRoll.objects.update_or_create(
                 team=team,
                 defaults={
                     "dice_a": dice_a,
@@ -591,6 +596,7 @@ def roll_dice(team, *, user=None, request_key=None):
                     "start_reward": start_reward,
                     "board_event_code": board_event_code,
                     "pending_confirm": True,
+                    "pending_confirm_request_key": pending_roll.request_key,
                     "usable_chance_card": {
                         "card_id": held_card.card_id,
                         "team_card_id": str(held_card.pk),
@@ -622,11 +628,13 @@ def roll_dice(team, *, user=None, request_key=None):
         )
 
 
-def confirm_dice_roll(team):
+def confirm_dice_roll(team, *, request_key):
     with board_state_for_update(team) as (state, dice):
         pending = PendingDiceRoll.objects.filter(team=team).first()
         if pending is None:
             raise NoPendingRoll()
+        if request_key != pending.request_key:
+            raise DiceConfirmRequestExpired()
         if TeamChanceCard.objects.filter(
             team=team,
             used_at__isnull=True,

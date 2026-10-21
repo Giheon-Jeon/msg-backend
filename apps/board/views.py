@@ -14,7 +14,7 @@ from apps.common.response import ok
 
 from .exceptions import BoardLoadFailed, ChallengeIdRequired, RequestBodyNotAllowed
 from .idempotency import idempotent
-from .models import Cell, ChanceCard, DiceRollRequest
+from .models import Cell, ChanceCard, DiceRollRequest, PendingDiceRoll
 from .permissions import IsTeamLeader
 from .serializers import (
     CellSerializer,
@@ -255,6 +255,11 @@ class DiceStatusView(APIView):
                     if state.unconfirmed_dice_request_id
                     else None
                 ),
+                "pending_confirm_request_key": (
+                    PendingDiceRoll.KEY_PREFIX + str(state.pending_confirmation_id)
+                    if state.pending_confirmation_id
+                    else None
+                ),
             }
         )
 
@@ -306,7 +311,9 @@ class DiceConfirmView(APIView):
     def post(self, request, *args, **kwargs):
         _assert_no_body(request)
         team = _get_team(request)
-        return ok(confirm_dice_roll(team))
+        return ok(
+            confirm_dice_roll(team, request_key=request.headers.get("Idempotency-Key"))
+        )
 
 
 class AirportMoveView(APIView):
