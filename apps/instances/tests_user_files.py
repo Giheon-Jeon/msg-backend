@@ -348,6 +348,22 @@ class UserFilesPollerTests(UserFilesTestBase):
         self.assertEqual(download.call_count, 1)
         self.assertIsNotNone(PollerArtifact.objects.get(pk=1).processed_at)
 
+    def test_unknown_problem_file_is_recorded_once_until_first_import(self):
+        archive_bytes = user_archive()
+        artifact = user_artifact(slug="web-new")
+        with (
+            patch("apps.instances.poller.list_artifacts_by_suffix", side_effect=[[artifact], []]),
+            patch("apps.instances.user_files.get_workflow_run", return_value=workflow_run()),
+            patch("apps.instances.user_files.download_user_files_bundle",
+                  return_value=(user_manifest(archive_bytes, slug="web-new"), archive_bytes)) as download,
+        ):
+            first = poll_user_files_once(token="token")
+            second = poll_user_files_once(token="token")
+        self.assertEqual(first["unmatched"], 1)
+        self.assertEqual(second["unmatched"], 0)
+        self.assertEqual(download.call_count, 1)
+        self.assertIsNotNone(PollerArtifact.objects.get(pk=1).processed_at)
+
     def test_failed_artifact_is_retried_without_rediscovery(self):
         archive_bytes = user_archive()
         artifact = user_artifact()

@@ -348,7 +348,9 @@ def poll_once(token=None):
             note="공급망 자동 등록: " + str(artifact.get("name", "")),
         )
         summary[status] += 1
-        if status not in ("unmatched", "error"):
+        # An unknown problem needs one reviewed first import. Do not download
+        # the same old bundle every five minutes; that import requeues its slug.
+        if status != "error":
             mark_artifact_processed(artifact)
         if status == "registered":
             logger.info(
