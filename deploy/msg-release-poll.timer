@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect MSG challenge publications from GitHub
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=msg-release-poll.service
+
+[Install]
+WantedBy=timers.target

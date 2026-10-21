@@ -20,7 +20,7 @@ from apps.challenge.services import (
     update_dynamic_score_and_team_scores,
 )
 from apps.common.response import fail, ok
-from apps.instances.models import Instance
+from apps.instances.models import ChallengeRuntimeConfig, Instance
 from apps.instances.user_files import current_user_file_bundle, serialize_user_file
 from apps.instances.services import (
     ACTIVE_INSTANCE_STATUSES,
@@ -103,6 +103,9 @@ class ChallengeDetailView(APIView):
                 "difficulty": challenge.difficulty,
                 "score": number_value(challenge.current_score),
                 "description": challenge.description,
+                "requires_instance": ChallengeRuntimeConfig.objects.filter(
+                    challenge=challenge, current_release__isnull=False
+                ).exists(),
                 "files": (
                     [serialize_user_file(challenge, bundle)]
                     if (bundle := current_user_file_bundle(challenge, release=instance.release if instance else None)) is not None

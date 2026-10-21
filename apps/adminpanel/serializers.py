@@ -33,7 +33,7 @@ class ChallengeCreateSerializer(serializers.Serializer):
     minimum_score = serializers.IntegerField(
         min_value=0,
         max_value=9_999_999_999,
-        default=600,
+        default=100,
     )
     decay = serializers.IntegerField(min_value=1, default=70)
 
@@ -90,6 +90,8 @@ class ChallengeUpdateSerializer(serializers.Serializer):
             )
         if not attrs:
             raise serializers.ValidationError("수정할 항목이 하나 이상 필요합니다")
+        if self.instance.is_published and attrs.get("difficulty") == Challenge.DifficultyType.UNASSIGNED:
+            raise serializers.ValidationError("난이도를 미정으로 바꾸려면 먼저 문제를 비공개로 전환해주세요")
 
         initial_score = attrs.get("initial_score", self.instance.initial_score)
         minimum_score = attrs.get("minimum_score", self.instance.minimum_score)

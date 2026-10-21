@@ -16,6 +16,7 @@ from apps.board.models import Cell, TeamBoardState, TeamChallengeAccess
 from apps.board.services import get_or_create_board_state
 from apps.challenge.models import Challenge, FlagSubmissionLock, Solve
 from apps.challenge.services import hash_flag
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig
 from apps.ranking.models import LineMonopoly
 from apps.teams.models import MileageHistory, MileageType
 
@@ -90,6 +91,22 @@ class ChallengeSubmitTests(TestCase):
         self.assertEqual(detail.data["code"], "CHALLENGE_LOCKED")
         self.assertEqual(submit.status_code, 403)
         self.assertEqual(submit.data["code"], "CHALLENGE_LOCKED")
+
+    def test_detail_only_requires_instance_when_a_runtime_release_is_selected(self):
+        path = f"/api/v1/challenges/{self.challenge.challenge_id}"
+        self.assertFalse(self.client.get(path).data["data"]["requires_instance"])
+
+        config = ChallengeRuntimeConfig.objects.create(challenge=self.challenge)
+        self.assertFalse(self.client.get(path).data["data"]["requires_instance"])
+
+        release = ChallengeRelease.objects.create(
+            challenge=self.challenge, version=1, registry_revision=1,
+            challenge_slug="web-basic", isolation_profile="WEB",
+            cpu_millicores=500, memory_mib=512, ephemeral_storage_mib=1024,
+        )
+        config.current_release = release
+        config.save(update_fields=["current_release"])
+        self.assertTrue(self.client.get(path).data["data"]["requires_instance"])
 
     def test_submission_deadline_is_derived_from_access_opened_at(self):
         TeamChallengeAccess.objects.filter(

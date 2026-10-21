@@ -57,6 +57,30 @@ class SchedulerError(Exception):
         self.status_code = status_code
 
 
+SCHEDULER_DELETE_REASONS = {
+    "USER_REQUESTED": DeleteReason.USER_REQUESTED,
+    "TTL_EXPIRED": DeleteReason.TTL_EXPIRED,
+    "IDLE_EXPIRED": DeleteReason.IDLE_EXPIRED,
+    "HARD_TIMEOUT_EXPIRED": DeleteReason.HARD_TIMEOUT,
+    "ADMIN_FORCED": DeleteReason.ADMIN_FORCED,
+    "CREATE_FAILED_CLEANUP": None,
+}
+
+
+def scheduler_delete_reason(data):
+    reason = data.get("delete_reason")
+    if reason is None:
+        return None
+    if not isinstance(reason, str) or reason not in SCHEDULER_DELETE_REASONS:
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "종료 사유가 올바르지 않습니다", 503)
+    if data.get("status") not in (
+        InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING, InstanceStatus.EXPIRED,
+        InstanceStatus.STOPPED, InstanceStatus.CLEANED, InstanceStatus.FAILED,
+    ):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "종료 사유와 상태가 일치하지 않습니다", 503)
+    return SCHEDULER_DELETE_REASONS[reason]
+
+
 def isoformat_z(value):
     # datetime 값을 API 응답용 UTC 문자열로 바꾼다
     if value is None:
@@ -294,7 +318,7 @@ def scheduler_network_values(scheduler_data):
     return service_url, endpoints
 
 
-def serialize_instance(instance, include_title=False, include_replaced=False):
+def serialize_instance(instance, include_title=False, include_replaced=False, include_termination=False):
     # 인스턴스 응답 데이터를 API 명세 형식으로 정리한다
     if instance is None:
         return None
@@ -321,6 +345,19 @@ def serialize_instance(instance, include_title=False, include_replaced=False):
             else None
         )
 
+    if include_termination:
+        data["delete_reason"] = instance.delete_reason
+
+    # A separate health port should link to its probe path, not an empty root.
+    if is_running and len(data["endpoints"]) > 1 and instance.release_id:
+        health = instance.release.healthcheck or {}
+        if health.get("path") and health["path"] != "/":
+            data["endpoints"] = [
+                {**endpoint, "healthcheck_path": health["path"]}
+                if endpoint.get("container_name") == health.get("container") and endpoint.get("port") == health.get("port")
+                else dict(endpoint)
+                for endpoint in data["endpoints"]
+            ]
     return data
 
 
@@ -512,6 +549,11 @@ def update_instance_from_scheduler(instance, scheduler_data):
             raise SchedulerError("SCHEDULER_UNAVAILABLE", "Scheduler가 실행 설정 버전을 반환하지 않았습니다.", 503)
 
     update_fields = ["updated_at"]
+
+    reason = scheduler_delete_reason(scheduler_data)
+    if instance.delete_reason is None and reason is not None:
+        instance.delete_reason = reason
+        update_fields.append("delete_reason")
 
     instance.status = scheduler_data.get("status", instance.status)
     update_fields.append("status")
