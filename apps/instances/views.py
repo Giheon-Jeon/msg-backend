@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import transaction
 from rest_framework.views import APIView
 
@@ -7,17 +9,21 @@ from apps.challenge.models import Challenge
 from apps.common.response import fail, ok
 from apps.instances.models import DeleteReason, Instance, InstanceLock, InstanceStatus
 from apps.instances.services import (
+    ACTIVE_INSTANCE_STATUSES,
     DELETABLE_INSTANCE_STATUSES,
     EXTENDABLE_INSTANCE_STATUSES,
+    FINAL_INSTANCE_STATUSES,
     RESETTABLE_INSTANCE_STATUSES,
     SchedulerError,
     call_scheduler_active,
     call_scheduler_create,
     call_scheduler_delete,
+    call_scheduler_detail,
     call_scheduler_extend,
     call_scheduler_reset,
     create_instance_from_scheduler,
     get_challenge_runtime_config,
+    mark_instance_replaced,
     scheduler_auth_header,
     serialize_instance,
     update_instance_from_scheduler,
@@ -31,32 +37,51 @@ def lock_instance_user(user):
     InstanceLock.objects.select_for_update().get_or_create(user=user)
 
 
+def can_create_instance_for_challenge(team, challenge):
+    if not challenge.is_published:
+        return False
+
+    return TeamChallengeAccess.objects.filter(
+        team=team,
+        challenge=challenge,
+    ).exists()
+
+
 class InstanceCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         # 새 인스턴스 생성을 Scheduler에 요청하고 응답값으로 DB row를 만든다
+        if not isinstance(request.data, dict) or set(request.data) != {"challenge_id"}:
+            return fail("INVALID_REQUEST", "문제 ID만 지정할 수 있습니다", 400)
         user = request.user
         team = getattr(user, "team", None)
         if team is None:
             return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
 
         challenge_id = request.data.get("challenge_id")
-        if not challenge_id:
+        try:
+            if not isinstance(challenge_id, str):
+                raise ValueError()
+            parsed_id = uuid.UUID(challenge_id)
+            if parsed_id.int == 0 or str(parsed_id) != challenge_id:
+                raise ValueError()
+        except ValueError:
             return fail("INVALID_REQUEST", "요청 값이 올바르지 않습니다", 400)
 
         challenge = Challenge.objects.filter(challenge_id=challenge_id).first()
         if challenge is None:
             return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
 
-        if not TeamChallengeAccess.objects.filter(
-            team=team, challenge=challenge
-        ).exists():
+        if not can_create_instance_for_challenge(team, challenge):
             return fail("CHALLENGE_LOCKED", "아직 개방되지 않은 문제입니다.", 403)
 
         runtime_config = get_challenge_runtime_config(challenge)
-        if runtime_config is None:
+        if runtime_config is None or runtime_config.current_release_id is None:
+            # 활성 릴리스가 없으면 배포할 이미지가 없는 문제다
             return fail("RUNTIME_CONFIG_NOT_FOUND", "문제 실행 설정이 없습니다.", 404)
+
+        release = runtime_config.current_release
 
         with transaction.atomic():
             lock_instance_user(user)
@@ -67,6 +92,7 @@ class InstanceCreateView(APIView):
                     team,
                     challenge,
                     runtime_config,
+                    release,
                     scheduler_auth_header(request),
                 )
             except SchedulerError as error:
@@ -81,13 +107,18 @@ class InstanceCreateView(APIView):
                     .first()
                 )
 
-            instance = create_instance_from_scheduler(
-                scheduler_data,
-                user=user,
-                team=team,
-                challenge=challenge,
-                replaced_instance=replaced_instance,
-            )
+            try:
+                instance = create_instance_from_scheduler(
+                    scheduler_data,
+                    user=user,
+                    team=team,
+                    challenge=challenge,
+                    replaced_instance=replaced_instance,
+                    release=release,
+                )
+            except SchedulerError as error:
+                return fail(error.code, error.message, error.status_code)
+            mark_instance_replaced(replaced_instance)
 
         message = "인스턴스 생성 요청이 접수되었습니다."
         if replaced_instance is not None:
@@ -118,8 +149,24 @@ class InstanceDeleteView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
+
+            if (
+                instance.status in ACTIVE_INSTANCE_STATUSES
+                and instance.status not in DELETABLE_INSTANCE_STATUSES
+            ):
+                # 생성 직후 GET을 거치지 않아도 Scheduler의 현재 상태로 종료를 판단한다
+                try:
+                    scheduler_data = call_scheduler_detail(
+                        instance, scheduler_auth_header(request)
+                    )
+                    update_instance_from_scheduler(instance, scheduler_data)
+                except SchedulerError as error:
+                    return fail(error.code, error.message, error.status_code)
 
             if instance.status not in DELETABLE_INSTANCE_STATUSES:
                 return fail(
@@ -164,7 +211,10 @@ class InstanceResetView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in RESETTABLE_INSTANCE_STATUSES:
@@ -181,13 +231,18 @@ class InstanceResetView(APIView):
             except SchedulerError as error:
                 return fail(error.code, error.message, error.status_code)
 
-            new_instance = create_instance_from_scheduler(
-                scheduler_data,
-                user=instance.user,
-                team=instance.team,
-                challenge=instance.challenge,
-                replaced_instance=instance,
-            )
+            try:
+                new_instance = create_instance_from_scheduler(
+                    scheduler_data,
+                    user=instance.user,
+                    team=instance.team,
+                    challenge=instance.challenge,
+                    replaced_instance=instance,
+                    release=instance.release,
+                )
+            except SchedulerError as error:
+                return fail(error.code, error.message, error.status_code)
+            mark_instance_replaced(instance)
             response_data = serialize_instance(new_instance, include_replaced=True)
 
         return ok(
@@ -216,7 +271,10 @@ class InstanceExtendView(APIView):
                     "INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다.", 404
                 )
 
-            if instance.user_id != request.user.user_id:
+            if (
+                instance.user_id != request.user.user_id
+                or instance.team_id != request.user.team_id
+            ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
             if instance.status not in EXTENDABLE_INSTANCE_STATUSES:
@@ -240,7 +298,10 @@ class InstanceExtendView(APIView):
             except SchedulerError as error:
                 return fail(error.code, error.message, error.status_code)
 
-            update_instance_from_scheduler(instance, scheduler_data)
+            try:
+                update_instance_from_scheduler(instance, scheduler_data)
+            except SchedulerError as error:
+                return fail(error.code, error.message, error.status_code)
             instance.extend_count += 1
             instance.save(update_fields=["extend_count", "updated_at"])
             response_data = serialize_instance(instance)
@@ -257,42 +318,113 @@ class MyInstanceView(APIView):
 
     def get(self, request):
         # 현재 access token의 user_id 기준 활성 인스턴스 한 개를 Scheduler와 동기화해 조회한다
+        team = getattr(request.user, "team", None)
+        if team is None:
+            return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
+
+        challenge_id = request.query_params.get("challenge_id")
+        if challenge_id is not None:
+            try:
+                challenge_id = uuid.UUID(challenge_id)
+            except (ValueError, TypeError, AttributeError):
+                return fail("INVALID_REQUEST", "문제 ID가 올바르지 않습니다", 400)
+
         try:
             scheduler_data = call_scheduler_active(
                 request.user, scheduler_auth_header(request)
             )
         except SchedulerError as error:
             if error.code == "INSTANCE_NOT_FOUND":
+                # active 조회에서는 실패·종료된 인스턴스가 빠진다
+                # 생성과 같은 사용자 잠금 아래 마지막 기록의 최종 상태를 확인한다
+                with transaction.atomic():
+                    lock_instance_user(request.user)
+                    pending = (
+                        Instance.objects.filter(user=request.user, team=team)
+                        .exclude(status__in=FINAL_INSTANCE_STATUSES)
+                        .select_related("challenge", "release")
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if pending is not None:
+                        try:
+                            terminal = call_scheduler_detail(
+                                pending, scheduler_auth_header(request),
+                            )
+                            if terminal.get("status") in FINAL_INSTANCE_STATUSES:
+                                update_instance_from_scheduler(pending, terminal)
+                        except SchedulerError as detail_error:
+                            if detail_error.code != "INSTANCE_NOT_FOUND":
+                                return fail(
+                                    detail_error.code, detail_error.message,
+                                    detail_error.status_code,
+                                )
+                if challenge_id is not None:
+                    latest = (
+                        Instance.objects.filter(
+                            user=request.user, team=team, challenge_id=challenge_id,
+                        )
+                        .select_related("challenge")
+                        .order_by("-created_at", "-instance_id")
+                        .first()
+                    )
+                    return ok(
+                        serialize_instance(
+                            latest, include_title=True, include_replaced=True,
+                            include_termination=True,
+                        ),
+                        message="인스턴스 상태 조회 성공",
+                    )
                 return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
 
             return fail(error.code, error.message, error.status_code)
 
+        try:
+            if not isinstance(scheduler_data, dict):
+                raise ValueError()
+            instance_id = uuid.UUID(scheduler_data["instance_id"])
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return fail("SCHEDULER_UNAVAILABLE", "인스턴스 서버 응답이 올바르지 않습니다.", 503)
+
         instance = (
             Instance.objects.filter(
-                instance_id=scheduler_data.get("instance_id"),
+                instance_id=instance_id,
                 user=request.user,
             )
             .select_related("challenge")
             .first()
         )
+        if instance is not None and instance.team_id != team.pk:
+            return ok(None, message="현재 실행 중인 인스턴스가 없습니다.")
+
         if instance is None:
-            team = getattr(request.user, "team", None)
+            # Active is queried by user; its documented summary omits user_id.
+            try:
+                if not {"team_id", "challenge_id"}.issubset(scheduler_data):
+                    raise ValueError()
+                challenge_id = uuid.UUID(scheduler_data["challenge_id"])
+            except (ValueError, TypeError, AttributeError):
+                return fail("SCHEDULER_UNAVAILABLE", "인스턴스 서버 응답이 올바르지 않습니다.", 503)
             challenge = Challenge.objects.filter(
-                challenge_id=scheduler_data.get("challenge_id")
+                challenge_id=challenge_id
             ).first()
-            if team is None:
-                return fail("USER_HAS_NO_TEAM", "소속된 팀이 없습니다", 404)
             if challenge is None:
                 return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
 
-            instance = create_instance_from_scheduler(
-                scheduler_data,
-                user=request.user,
-                team=team,
-                challenge=challenge,
-            )
+            try:
+                instance = create_instance_from_scheduler(
+                    scheduler_data,
+                    user=request.user,
+                    team=team,
+                    challenge=challenge,
+                )
+            except SchedulerError as error:
+                return fail(error.code, error.message, error.status_code)
         else:
-            update_instance_from_scheduler(instance, scheduler_data)
+            try:
+                update_instance_from_scheduler(instance, scheduler_data)
+            except SchedulerError as error:
+                return fail(error.code, error.message, error.status_code)
 
         return ok(
             serialize_instance(instance, include_title=True),

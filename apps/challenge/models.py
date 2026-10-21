@@ -16,6 +16,7 @@ class Challenge(models.Model):
         OSINT = "OSINT"
 
     class DifficultyType(models.TextChoices):
+        UNASSIGNED = "UNASSIGNED", "미정"
         EASY = "EASY"
         MEDIUM = "MEDIUM"
         HARD = "HARD"
@@ -31,7 +32,7 @@ class Challenge(models.Model):
     difficulty = models.CharField(max_length=20, choices=DifficultyType.choices)
     score = models.DecimalField(max_digits=12, decimal_places=2)
     initial_score = models.DecimalField(max_digits=12, decimal_places=2, default=1000)
-    minimum_score = models.DecimalField(max_digits=12, decimal_places=2, default=600)
+    minimum_score = models.DecimalField(max_digits=12, decimal_places=2, default=100)
     decay = models.IntegerField(default=70)
     current_score = models.DecimalField(max_digits=12, decimal_places=2, default=1000)
     description = models.TextField(blank=True, null=True)

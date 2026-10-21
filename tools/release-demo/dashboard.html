@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>릴리스 시뮬레이션</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #171d23; --line: #2a333c;
+    --text: #d7dee6; --dim: #8a97a3; --accent: #e8b750;
+    --good: #7fc98b; --bad: #e07a6a; --mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; padding: 18px; }
+  h1 { font-size: 16px; letter-spacing: 1px; margin-bottom: 4px; }
+  .sub { color: var(--dim); margin-bottom: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); padding: 12px; margin-bottom: 14px; }
+  .panel h2 { font-size: 12px; color: var(--accent); letter-spacing: 2px; margin-bottom: 10px; text-transform: uppercase; }
+  .grid { display: grid; grid-template-columns: 1fr 360px; gap: 14px; align-items: start; }
+  button { background: #202932; color: var(--text); border: 1px solid var(--line); padding: 5px 10px; font-family: var(--mono); font-size: 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #2c3a2e; border-color: #3d5541; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; font-size: 12px; }
+  th { color: var(--dim); font-weight: normal; }
+  tr.current td { background: #1d2a20; }
+  tr.selected td { background: #23282f; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: #202730; }
+  .tag { display: inline-block; padding: 1px 7px; border: 1px solid var(--line); font-size: 11px; }
+  .tag.ok { color: var(--good); border-color: #35503b; }
+  .tag.no { color: var(--bad); border-color: #56342f; }
+  .tag.cur { color: var(--accent); border-color: #5d4a22; }
+  .log { height: 340px; overflow-y: auto; background: #0c1013; border: 1px solid var(--line); padding: 8px; font-size: 11px; line-height: 1.8; }
+  .log div { border-bottom: 1px solid #161c22; padding: 3px 0; }
+  .ok { color: var(--good); }
+  .no { color: var(--bad); }
+  .dim { color: var(--dim); }
+  .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .digest { color: #9fb3c8; }
+  .challenge-name { color: var(--accent); }
+  .flag { color: var(--good); }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>문제 릴리스 시뮬레이션</h1>
+<div class="sub" id="subline">불러오는 중</div>
+
+<div class="panel">
+  <h2>문제 목록</h2>
+  <table id="challenge-table">
+    <thead>
+      <tr><th>문제</th><th>분류</th><th>유형</th><th>릴리스</th><th>현재 배포</th><th>실행 중 이미지</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>버전 이력: <span class="challenge-name" id="history-target">-</span></h2>
+    <div class="row">
+      <span class="dim">플래그</span>
+      <span class="flag" id="flag-line">-</span>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="simulatePush()">출제자 push 시뮬레이션</button>
+      <button onclick="createInstance()">참가자 인스턴스 생성</button>
+      <span id="action-result" class="dim"></span>
+    </div>
+    <div class="row dim" style="font-size:11px">
+      push마다 공급망이 새 digest bundle을 발행하고, 백엔드 폴러가 주기 수집해 이력에 자동 등록함. 전환을 누른 버전이 이후 인스턴스에 배포됨
+    </div>
+    <table id="release-table">
+      <thead>
+        <tr><th>버전</th><th>revision</th><th>등록 시각</th><th>컨테이너</th><th>배포 가능</th><th>상태</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>스케줄러가 받은 요청</h2>
+    <div class="log" id="sched-log"></div>
+  </div>
+</div>
+
+<script>
+var tokens = { root: null, player: null };
+var challenges = [];
+var selectedId = null;
+var releasesByChallenge = {};
+var runningByChallenge = {};
+
+function selected() {
+  for (var i = 0; i < challenges.length; i += 1) {
+    if (challenges[i].challenge_id === selectedId) { return challenges[i]; }
+  }
+  return null;
+}
+
+function short(value) {
+  if (!value) { return "-"; }
+  return String(value).slice(0, 8);
+}
+
+function digestTail(image) {
+  var at = String(image || "").split("@sha256:");
+  if (at.length < 2) { return image; }
+  return at[0].split("/").pop() + " @" + at[1].slice(0, 6);
+}
+
+function formatTime(iso) {
+  if (!iso) { return "-"; }
+  var when = new Date(iso);
+  function two(value) { return String(value).padStart(2, "0"); }
+  return two(when.getMonth() + 1) + "-" + two(when.getDate()) + " " +
+    two(when.getHours()) + ":" + two(when.getMinutes()) + ":" + two(when.getSeconds());
+}
+
+function typeLabel(challenge) {
+  if (!challenge.has_deployment) { return "<span class=\"tag no\">정적</span>"; }
+  var label = challenge.containers.length === 1
+    ? "<span class=\"tag ok\">단일</span>"
+    : "<span class=\"tag no\">멀티 " + challenge.containers.length + "</span>";
+  if (challenge.is_koth) {
+    label += " <span class=\"tag cur\">상시 운영</span>";
+  }
+  return label;
+}
+
+function api(method, path, body, who) {
+  var headers = { "Content-Type": "application/json" };
+  if (who && tokens[who]) { headers["Authorization"] = "Bearer " + tokens[who]; }
+  return fetch(path, {
+    method: method,
+    headers: headers,
+    body: body ? JSON.stringify(body) : undefined
+  }).then(function (res) {
+    return res.json().then(function (data) {
+      return { status: res.status, body: data };
+    });
+  });
+}
+
+function note(text, bad) {
+  var line = document.getElementById("action-result");
+  line.textContent = text;
+  line.className = bad ? "no" : "dim";
+}
+
+function login(id) {
+  return api("POST", "/api/v1/auth/login", { login_id: id, password: "pw1234" })
+    .then(function (res) { tokens[id] = res.body.data.access_token; });
+}
+
+function randomDigest() {
+  var bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  var out = "";
+  for (var i = 0; i < bytes.length; i += 1) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+function nextRevision() {
+  var rows = releasesByChallenge[selectedId] || [];
+  var max = 0;
+  rows.forEach(function (row) { if (row.registry_revision > max) { max = row.registry_revision; } });
+  return max + 1;
+}
+
+function simulatePush() {
+  // 출제자 push를 재현한다. 공급망이 bundle을 발행하면 백엔드 폴러가 수집해 자동 등록한다
+  var target = selected();
+  if (!target) { return; }
+  if (!target.has_deployment) {
+    note("정적 문제라 배포 이미지가 없음", true);
+    return;
+  }
+  var revision = nextRevision();
+  fetch("/fake-push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ challenge_id: selectedId, revision: revision })
+  }).then(function (res) {
+    if (res.ok) {
+      note("push 접수, 공급망이 revision " + revision + " 발행함, 폴러가 곧 수집");
+    } else {
+      note("push 실패", true);
+    }
+  });
+}
+
+function activateRelease(challengeId, releaseId) {
+  api("POST", "/api/v1/admin/challenges/" + challengeId + "/releases/" + releaseId + "/activate", null, "root")
+    .then(function (res) {
+      if (res.status === 200) {
+        note("v" + res.body.data.version + " 전환 완료, 다음 인스턴스부터 적용");
+      } else {
+        note(res.body.code + " " + res.body.message, true);
+      }
+      refreshAll();
+    });
+}
+
+function createInstance() {
+  var target = selected();
+  if (target && target.is_koth) {
+    note("KOTH는 상시 운영이라 참가자 인스턴스 생성 대상이 아님", true);
+    return;
+  }
+  if (target && !target.has_deployment) {
+    note("정적 문제라 인스턴스가 없음", true);
+    return;
+  }
+  api("POST", "/api/v1/instances", { challenge_id: selectedId }, "player")
+    .then(function (res) {
+      if (res.status === 202) {
+        var data = res.body.data;
+        note("인스턴스 " + short(data.instance_id) + " 생성 접수" +
+          (data.replaced_instance_id ? ", 기존 " + short(data.replaced_instance_id) + " 교체" : ""));
+      } else {
+        note(res.body.code + " " + res.body.message, true);
+      }
+      refreshAll();
+    });
+}
+
+function selectChallenge(challengeId) {
+  selectedId = challengeId;
+  var target = selected();
+  document.getElementById("history-target").textContent = target.title;
+  document.getElementById("flag-line").textContent = target.flag || "플래그 없음";
+  note("");
+  renderAll();
+}
+
+function currentSummary(rows) {
+  for (var i = 0; i < rows.length; i += 1) {
+    if (rows[i].is_current) {
+      var head = rows[i].containers[0];
+      return "v" + rows[i].version + " <span class=\"digest\">" + digestTail(head.image_ref) + "</span>";
+    }
+  }
+  return "<span class=\"dim\">없음</span>";
+}
+
+function runningImages(challengeId) {
+  var box = runningByChallenge[challengeId];
+  if (!box || !box.length) { return "<span class=\"dim\">-</span>"; }
+  return box.map(function (item) {
+    return "<span class=\"digest\">" + item + "</span>";
+  }).join(" ");
+}
+
+function renderChallengeTable() {
+  var tbody = document.querySelector("#challenge-table tbody");
+  tbody.innerHTML = "";
+  challenges.forEach(function (challenge) {
+    var rows = releasesByChallenge[challenge.challenge_id] || [];
+    var tr = document.createElement("tr");
+    tr.className = "pick" + (challenge.challenge_id === selectedId ? " selected" : "");
+    tr.onclick = function () { selectChallenge(challenge.challenge_id); };
+    tr.innerHTML = "<td>" + challenge.title + "</td><td>" + challenge.category +
+      "</td><td>" + typeLabel(challenge) + "</td><td>" + rows.length +
+      "</td><td>" + currentSummary(rows) + "</td><td>" + runningImages(challenge.challenge_id) + "</td>";
+    tbody.appendChild(tr);
+  });
+}
+
+function renderReleases() {
+  var tbody = document.querySelector("#release-table tbody");
+  tbody.innerHTML = "";
+  var rows = releasesByChallenge[selectedId] || [];
+  rows.forEach(function (release) {
+    var tr = document.createElement("tr");
+    if (release.is_current) { tr.className = "current"; }
+    var containers = release.containers.map(function (item) {
+      return "<span class=\"digest\">" + digestTail(item.image_ref) + "</span>";
+    }).join("<br>");
+    var deploy = release.is_deployable
+      ? "<span class=\"tag ok\">가능</span>"
+      : "<span class=\"tag no\">계약 확장 대기</span>";
+    var state = release.is_current ? "<span class=\"tag cur\">현재 배포</span>" : "";
+    var action = release.is_current
+      ? ""
+      : "<button onclick=\"activateRelease('" + selectedId + "','" + release.release_id + "')\">전환</button>";
+    var registered = formatTime(release.created_at) +
+      (release.note ? "<br><span class=\"dim\">" + release.note + "</span>" : "");
+    tr.innerHTML = "<td>v" + release.version + "</td><td>" + release.registry_revision +
+      "</td><td>" + registered + "</td><td>" + containers + "</td><td>" + deploy +
+      "</td><td>" + state + "</td><td>" + action + "</td>";
+    tbody.appendChild(tr);
+  });
+  if (!rows.length) {
+    tbody.innerHTML = "<tr><td colspan=\"7\" class=\"dim\">등록된 릴리스 없음, push 시뮬레이션으로 시작</td></tr>";
+  }
+}
+
+function renderSchedulerLog(rows) {
+  runningByChallenge = {};
+  var box = document.getElementById("sched-log");
+  box.innerHTML = "";
+  rows.slice().reverse().forEach(function (row) {
+    var body = row.body || {};
+    if (body.challenge_id) {
+      runningByChallenge[body.challenge_id] = [digestTail(body.container_image)];
+    }
+    var line = document.createElement("div");
+    line.innerHTML = "<span class=\"ok\">POST</span> " + row.path +
+      " <span class=\"dim\">challenge</span> " + short(body.challenge_id) +
+      "<br><span class=\"dim\">image</span> <span class=\"digest\">" + digestTail(body.container_image) + "</span>" +
+      " <span class=\"dim\">port</span> " + body.container_port +
+      " <span class=\"dim\">arch</span> " + body.architecture;
+    box.appendChild(line);
+  });
+  if (!rows.length) {
+    box.innerHTML = "<div class=\"dim\">아직 수신한 요청 없음</div>";
+  }
+}
+
+function renderAll() {
+  renderChallengeTable();
+  renderReleases();
+}
+
+function refreshAll() {
+  var jobs = challenges.map(function (challenge) {
+    return api("GET", "/api/v1/admin/challenges/" + challenge.challenge_id + "/releases", null, "root")
+      .then(function (res) {
+        releasesByChallenge[challenge.challenge_id] = res.body.data.releases;
+      });
+  });
+  jobs.push(
+    fetch("/scheduler-log").then(function (res) { return res.json(); }).then(renderSchedulerLog)
+  );
+  return Promise.all(jobs).then(renderAll);
+}
+
+fetch("/demo-info").then(function (res) { return res.json(); }).then(function (info) {
+  challenges = info.challenges;
+  document.getElementById("subline").textContent =
+    "실문제 " + challenges.length + "개 (2026_MSG_CTF info.yaml 기준) / 문제 행을 누르면 버전 이력이 열림";
+  return Promise.all([login("root"), login("player")]);
+}).then(function () {
+  return refreshAll();
+}).then(function () {
+  selectChallenge(challenges[0].challenge_id);
+  setInterval(refreshAll, 4000);
+});
+</script>
+</body>
+</html>

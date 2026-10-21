@@ -14,6 +14,7 @@ from apps.common.response import fail, ok
 from apps.common.utils import num
 
 from .exceptions import SignatureNotFound
+from .locks import lock_signature
 from .models import (
     SignatureChallenge,
     SignatureFlagSubmission,
@@ -107,12 +108,17 @@ def signature_submit(request, signature_id):
     with transaction.atomic():
         # Serialize submissions for one team so the unique solve and lock state move together.
         team = Team.objects.select_for_update().get(pk=team.pk)
-        try:
-            challenge = SignatureChallenge.objects.get(
-                pk=signature_id,
-                is_published=True,
-            )
-        except SignatureChallenge.DoesNotExist:
+        lock_signature(signature_id, shared=True)
+        # Shared row locks keep team submissions parallel but exclude admin edits.
+        challenge = next(
+            iter(SignatureChallenge.objects.raw(
+                'SELECT * FROM "signature_challenges" '
+                'WHERE "signature_id" = %s AND "is_published" = %s FOR SHARE',
+                [signature_id, True],
+            )),
+            None,
+        )
+        if challenge is None:
             raise SignatureNotFound()
 
         (

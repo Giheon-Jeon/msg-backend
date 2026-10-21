@@ -1,0 +1,90 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "MSG CTF release participant files", "version": "1.0.0"},
+  "security": [{"admin_bearer": []}],
+  "paths": {
+    "/api/v1/admin/challenges/{challenge_id}/files": {
+      "get": {
+        "operationId": "admin_release_files",
+        "parameters": [
+          {"name": "challenge_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "release_id", "in": "query", "schema": {"type": "string", "format": "uuid"}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 1}}
+        ],
+        "responses": {
+          "200": {"description": "Release file selection and paginated history; no storage access", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FilesEnvelope"}}}},
+          "400": {"description": "Invalid release_id or page"},
+          "401": {"description": "Login required"},
+          "403": {"description": "Admin role required"},
+          "404": {"description": "Challenge or scoped release not found"}
+        }
+      }
+    },
+    "/api/v1/admin/challenges/{challenge_id}/releases/{release_id}/files": {
+      "post": {
+        "operationId": "configure_release_files",
+        "parameters": [
+          {"name": "challenge_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "release_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 200}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"oneOf": [
+          {"type": "object", "required": ["mode"], "additionalProperties": false, "properties": {"mode": {"enum": ["MATCH_REVISION", "NONE"]}}},
+          {"type": "object", "required": ["mode", "file_id"], "additionalProperties": false, "properties": {"mode": {"const": "SELECTED"}, "file_id": {"type": "string", "format": "uuid"}}}
+        ]}}}},
+        "responses": {
+          "200": {"description": "New immutable release, not activated; same response on retry", "content": {"application/json": {"schema": {"type": "object", "required": ["code", "message", "data"], "properties": {
+            "code": {"type": "string"}, "message": {"type": "string"}, "data": {"allOf": [
+              {"$ref": "./environment-file.openapi.json#/components/schemas/ImportEnvelope/properties/data"},
+              {"type": "object", "required": ["user_files"], "properties": {"user_files": {"$ref": "#/components/schemas/ReleaseFiles"}}}
+            ]}
+          }}}}},
+          "400": {"description": "Invalid selection, nondeployable source, or missing idempotency key"},
+          "401": {"description": "Login required"},
+          "403": {"description": "Admin role required"},
+          "404": {"description": "Challenge, scoped release, or selectable ZIP not found"},
+          "409": {"description": "Same key used for a different request"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"admin_bearer": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}},
+    "schemas": {
+      "FileMetadata": {
+        "type": ["object", "null"],
+        "properties": {
+          "file_id": {"type": "string", "format": "uuid"}, "file_name": {"const": "user-files.zip"},
+          "present": {"type": "boolean"}, "download_available": {"type": "boolean"},
+          "registry_revision": {"type": "integer"}, "source_sha": {"type": "string"}, "sha256": {"type": "string"},
+          "file_size": {"type": "integer"}, "file_count": {"type": "integer"}, "uncompressed_size_bytes": {"type": "integer"},
+          "created_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "ReleaseFiles": {
+        "type": "object", "required": ["mode", "status", "file", "matches_image_revision"],
+        "properties": {
+          "mode": {"enum": ["MATCH_REVISION", "SELECTED", "NONE"]},
+          "status": {"enum": ["available", "pending", "none", "disabled", "unavailable"]},
+          "file": {"$ref": "#/components/schemas/FileMetadata"}, "matches_image_revision": {"type": ["boolean", "null"]}
+        }
+      },
+      "FilesEnvelope": {
+        "type": "object", "required": ["code", "message", "data"],
+        "properties": {
+          "code": {"type": "string"}, "message": {"type": "string"},
+          "data": {"type": "object", "properties": {
+            "status": {"enum": ["available", "pending", "none", "disabled", "unavailable", "no_release"]},
+            "mode": {"enum": ["MATCH_REVISION", "SELECTED", "NONE", "LATEST"]},
+            "release_id": {"type": ["string", "null"], "format": "uuid"}, "release_version": {"type": ["integer", "null"]},
+            "registry_revision": {"type": ["integer", "null"]}, "is_current": {"type": "boolean"},
+            "current_file": {"$ref": "#/components/schemas/FileMetadata"}, "matching_file": {"$ref": "#/components/schemas/FileMetadata"},
+            "history": {"type": "array", "items": {"$ref": "#/components/schemas/FileMetadata"}, "maxItems": 20},
+            "history_has_more": {"type": "boolean"}, "history_next_page": {"type": ["integer", "null"]},
+            "storage": {"type": "object", "properties": {"provider": {"enum": ["local", "gcs"]}, "bucket": {"type": ["string", "null"]}}}
+          }}
+        }
+      }
+    }
+  }
+}

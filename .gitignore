@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 db.sqlite3
+media/
 .env
 .env.*
 !.env.example
@@ -18,3 +19,5 @@ TODO.md
 # Local load-test artifacts and generated credentials
 loadtests/runtime/
 loadtests/results/
+gha-creds-*.json
+reports/gcs-smoke.json

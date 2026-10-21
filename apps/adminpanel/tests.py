@@ -26,10 +26,12 @@ from apps.teams.models import (
 )
 from apps.challenge.models import Challenge, FlagSubmission, Solve
 from apps.instances.models import (
+    ChallengeRelease,
     ChallengeRuntimeConfig,
     DeleteReason,
     Instance,
     InstanceStatus,
+    ReleaseContainer,
 )
 from unittest.mock import patch
 
@@ -1320,7 +1322,7 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(challenge.challenge_slug, "sql-injection-basic")
         self.assertEqual(res.data["data"]["challenge_slug"], "sql-injection-basic")
         self.assertEqual(challenge.initial_score, 1000)
-        self.assertEqual(challenge.minimum_score, 600)
+        self.assertEqual(challenge.minimum_score, 100)
         self.assertEqual(challenge.decay, 70)
         self.assertEqual(challenge.score, challenge.initial_score)
         self.assertEqual(challenge.current_score, challenge.initial_score)
@@ -1344,6 +1346,33 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(challenge.decay, 80)
         self.assertEqual(challenge.score, 1500)
         self.assertEqual(challenge.current_score, 1500)
+
+    def test_publishing_a_new_challenge_registers_it_in_the_board_catalog_once(self):
+        from apps.board.models import BoardChallenge
+
+        challenge = self.create_challenge()
+        self.assertFalse(BoardChallenge.objects.filter(challenge=challenge).exists())
+        path = f"/api/v1/admin/challenges/{challenge.pk}/visibility"
+        response = self.client.patch(path, {"is_published": True, "reason": "문제 공개"}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        entry = BoardChallenge.objects.get(challenge=challenge)
+        self.assertTrue(Challenge.objects.filter(pk=challenge.pk, is_published=True, board_meta__isnull=False).exists())
+        entry.club_name = "출제자 설정"
+        entry.save(update_fields=["club_name"])
+        for value in (False, True, True):
+            self.assertEqual(self.client.patch(path, {"is_published": value, "reason": "공개 재설정"}, format="json").status_code, 200)
+        self.assertEqual(BoardChallenge.objects.filter(challenge=challenge).count(), 1)
+        entry.refresh_from_db()
+        self.assertEqual(entry.club_name, "출제자 설정")
+
+    def test_unassigned_draft_is_not_added_to_the_participant_board_catalog(self):
+        from apps.board.models import BoardChallenge
+
+        challenge = self.create_challenge(difficulty="UNASSIGNED")
+        response = self.client.patch(f"/api/v1/admin/challenges/{challenge.pk}/visibility",
+                                     {"is_published": True, "reason": "아직 미정"}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(BoardChallenge.objects.filter(challenge=challenge).exists())
 
     def test_challenge_update_changes_editable_fields_and_hashes_flag(self):
         from apps.challenge.services import is_correct_flag
@@ -1413,7 +1442,7 @@ class AdminChallengeTests(TestCase):
         challenge = self.create_challenge()
 
         for body in (
-            {"initial_score": 599},
+            {"initial_score": 99},
             {"minimum_score": 1001},
             {"decay": 0},
             {"initial_score": 1000.5},
@@ -1429,7 +1458,7 @@ class AdminChallengeTests(TestCase):
 
         challenge.refresh_from_db()
         self.assertEqual(challenge.initial_score, 1000)
-        self.assertEqual(challenge.minimum_score, 600)
+        self.assertEqual(challenge.minimum_score, 100)
         self.assertEqual(challenge.decay, 70)
 
     def test_challenge_update_rejects_empty_and_managed_fields(self):
@@ -1517,7 +1546,7 @@ class AdminChallengeTests(TestCase):
         self.assertTrue(Challenge.objects.filter(pk=challenge.pk).exists())
 
     def test_challenge_delete_rejects_dependent_records(self):
-        dependency_types = ("solve", "submission", "board", "instance", "runtime")
+        dependency_types = ("solve", "submission", "board", "instance", "runtime", "release")
 
         for index, dependency_type in enumerate(dependency_types, start=1):
             with self.subTest(dependency_type=dependency_type):
@@ -1552,11 +1581,18 @@ class AdminChallengeTests(TestCase):
                         team=self.team,
                         challenge=challenge,
                     )
+                elif dependency_type == "runtime":
+                    ChallengeRuntimeConfig.objects.create(challenge=challenge)
                 else:
-                    ChallengeRuntimeConfig.objects.create(
+                    ChallengeRelease.objects.create(
                         challenge=challenge,
-                        container_image="ghcr.io/msg-ctf/test:latest",
-                        container_port=8080,
+                        version=1,
+                        registry_revision=1,
+                        challenge_slug=challenge.challenge_slug,
+                        isolation_profile="WEB",
+                        cpu_millicores=500,
+                        memory_mib=512,
+                        ephemeral_storage_mib=1024,
                     )
 
                 response = self.client.delete(
@@ -2116,6 +2152,7 @@ class PaymentTests(TestCase):
         self.assertEqual(res.data["code"], "INVALID_REQUEST")
 
 
+@override_settings(CACHES=LOCMEM, SCHEDULER_API_TOKEN="test-scheduler-token")
 class AdminInstanceTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -2139,6 +2176,30 @@ class AdminInstanceTests(TestCase):
             flag_hash="x",
             is_published=True,
         )
+        self.release = ChallengeRelease.objects.create(
+            challenge=self.challenge,
+            version=1,
+            registry_revision=1,
+            challenge_slug="web-basic",
+            cpu_millicores=500,
+            memory_mib=512,
+            ephemeral_storage_mib=1024,
+            isolation_profile="WEB",
+            source_ref="refs/heads/main",
+        )
+        ReleaseContainer.objects.create(
+            release=self.release,
+            name="web",
+            image_ref=(
+                "ghcr.io/msg-ctf/challenges/web-basic/web@sha256:"
+                + "a" * 64
+            ),
+            ports=[{"port": 8080, "public": True}],
+        )
+        ChallengeRuntimeConfig.objects.create(
+            challenge=self.challenge,
+            current_release=self.release,
+        )
         self.auth("root")
 
     def auth(self, login_id):
@@ -2157,6 +2218,7 @@ class AdminInstanceTests(TestCase):
             team=self.team,
             challenge=self.challenge,
             status=status,
+            release=self.release,
         )
 
     def test_list_returns_instances_and_summary(self):
@@ -2221,6 +2283,15 @@ class AdminInstanceTests(TestCase):
     @patch("apps.adminpanel.views.call_scheduler_reset")
     def test_force_reset_replaces_instance(self, mock_reset):
         old = self._instance(status=InstanceStatus.RUNNING)
+        old.endpoints = [
+            {
+                "container_name": "web",
+                "port": 8080,
+                "protocol": "HTTP",
+                "service_url": "https://old.instance.example",
+            }
+        ]
+        old.save(update_fields=["endpoints", "updated_at"])
         new_id = uuid.uuid4()
         mock_reset.return_value = {"instance_id": str(new_id), "status": "RESETTING"}
         res = self.client.post(f"/api/v1/admin/instances/{old.instance_id}/reset")
@@ -2228,9 +2299,15 @@ class AdminInstanceTests(TestCase):
         self.assertEqual(res.data["data"]["instance_id"], str(new_id))
         self.assertNotEqual(res.data["data"]["instance_id"], str(old.instance_id))
         self.assertEqual(res.data["data"]["status"], "RESETTING")
+        self.assertEqual(res.data["data"]["endpoints"], [])
         self.assertEqual(res.data["data"]["forced_by"], "root")
         new_inst = Instance.objects.get(pk=new_id)
         self.assertEqual(new_inst.replaced_instance_id, old.instance_id)
+        self.assertEqual(new_inst.release_id, self.release.release_id)
+        self.assertEqual(new_inst.endpoints, [])
+        old.refresh_from_db()
+        self.assertEqual(old.status, InstanceStatus.STOPPING)
+        self.assertEqual(old.delete_reason, DeleteReason.REPLACED_BY_NEW_INSTANCE)
 
     def test_force_reset_not_restartable(self):
         inst = self._instance(status=InstanceStatus.STOPPED)
@@ -2724,6 +2801,11 @@ class AdminEventTests(TestCase):
     def test_newest_first(self):
         first = self._event(message="먼저")
         second = self._event(message="나중")
+        now = timezone.now()
+        first.__class__.objects.filter(pk=first.pk).update(
+            created_at=now - timedelta(seconds=1)
+        )
+        second.__class__.objects.filter(pk=second.pk).update(created_at=now)
         self.auth("root")
         messages = [
             e["message"] for e in self.client.get(self.url).data["data"]["events"]
@@ -3033,7 +3115,7 @@ class AdminTeamLockCoverageTests(TestCase):
         self.assertEqual(self.team.mileage, 230)
 
 
-@override_settings(CACHES=LOCMEM)
+@override_settings(CACHES=LOCMEM, SCHEDULER_API_TOKEN="test-scheduler-token")
 class AdminEventRecordingTests(TestCase):
     """관리자 조작이 admin_events 에 남는지, 실패한 조작은 남지 않는지 확인한다."""
 
@@ -3251,7 +3333,24 @@ class AdminEventRecordingTests(TestCase):
     def test_force_reset_records_new_instance_id(self, mock_reset):
         from apps.adminpanel.models import AdminEvent
 
-        old = self.instance()
+        release = ChallengeRelease.objects.create(
+            challenge=self.challenge,
+            version=1,
+            registry_revision=1,
+            challenge_slug="web-basic",
+            cpu_millicores=500,
+            memory_mib=512,
+            ephemeral_storage_mib=1024,
+            isolation_profile="WEB",
+            source_ref="refs/heads/main",
+        )
+        old = Instance.objects.create(
+            user=self.player,
+            team=self.team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+            release=release,
+        )
         new_id = uuid.uuid4()
         mock_reset.return_value = {"instance_id": str(new_id), "status": "RESETTING"}
 
@@ -3259,6 +3358,8 @@ class AdminEventRecordingTests(TestCase):
 
         self.assertEqual(res.status_code, 202)
         event = self.only_event(AdminEvent.EventType.INSTANCE_FORCED)
+        replacement = Instance.objects.get(instance_id=new_id)
+        self.assertEqual(replacement.release_id, release.release_id)
         self.assertEqual(event.instance_id, new_id)
         self.assertIn(str(old.instance_id), event.message)
 
@@ -3459,12 +3560,23 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(self.events(), [])
 
     def test_recorded_events_visible_in_event_list(self):
+        from apps.adminpanel.models import AdminEvent
+
         self.client.post(
             f"/api/v1/admin/teams/{self.team.team_id}/ban",
             {"ban_reason": "플래그 공유"},
             format="json",
         )
         self.mileage({"amount": 10, "reason": "보상"})
+
+        events = {event.type: event for event in AdminEvent.objects.all()}
+        now = timezone.now()
+        AdminEvent.objects.filter(
+            pk=events[AdminEvent.EventType.TEAM_BANNED].pk
+        ).update(created_at=now - timedelta(seconds=1))
+        AdminEvent.objects.filter(
+            pk=events[AdminEvent.EventType.MILEAGE_ADJUSTED].pk
+        ).update(created_at=now)
 
         res = self.client.get("/api/v1/admin/events")
 
