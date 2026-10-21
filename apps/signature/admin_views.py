@@ -5,12 +5,13 @@ from rest_framework.decorators import api_view, permission_classes
 
 from apps.common.exceptions import ClubNotFound
 from apps.common.permissions import IsAdmin
-from apps.common.response import ok
+from apps.common.response import fail, ok
 from apps.common.utils import num
 from apps.koth.models import KothClub
 
 from .exceptions import SignatureAlreadyExists, SignatureInUse, SignatureNotFound
 from .models import SignatureChallenge, SignatureSolve
+from .drafts import missing_signature_fields
 from .serializers import (
     SignatureCreateSerializer,
     SignaturePublishSerializer,
@@ -33,6 +34,7 @@ def _serialize_signature(challenge, *, include_solved_count=False):
         "description": challenge.description,
         "score": num(challenge.score),
         "is_published": challenge.is_published,
+        "missing_fields": missing_signature_fields(challenge),
         "created_at": _isoformat_z(challenge.created_at),
         "updated_at": _isoformat_z(challenge.updated_at),
     }
@@ -125,7 +127,7 @@ def signature_detail(request, signature_id):
             challenge.delete()
             return ok(deleted, message="시그니처 문제 삭제 성공")
 
-        serializer = SignatureUpdateSerializer(data=request.data)
+        serializer = SignatureUpdateSerializer(data=request.data, context={"is_published": challenge.is_published})
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
 
@@ -167,6 +169,8 @@ def signature_publish(request, signature_id):
         except SignatureChallenge.DoesNotExist:
             raise SignatureNotFound()
 
+        if serializer.validated_data["is_published"] and missing_signature_fields(challenge):
+            return fail("SIGNATURE_NOT_READY", "지문과 플래그를 등록한 뒤 공개해주세요", 409)
         challenge.is_published = serializer.validated_data["is_published"]
         challenge.save(update_fields=["is_published", "updated_at"])
 

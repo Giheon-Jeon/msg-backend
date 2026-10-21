@@ -348,6 +348,16 @@ def serialize_instance(instance, include_title=False, include_replaced=False, in
     if include_termination:
         data["delete_reason"] = instance.delete_reason
 
+    # A separate health port should link to its probe path, not an empty root.
+    if is_running and len(data["endpoints"]) > 1 and instance.release_id:
+        health = instance.release.healthcheck or {}
+        if health.get("path") and health["path"] != "/":
+            data["endpoints"] = [
+                {**endpoint, "healthcheck_path": health["path"]}
+                if endpoint.get("container_name") == health.get("container") and endpoint.get("port") == health.get("port")
+                else dict(endpoint)
+                for endpoint in data["endpoints"]
+            ]
     return data
 
 
