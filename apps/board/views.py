@@ -126,6 +126,7 @@ class BoardMeView(APIView):
                 "position": state.position_id,
                 "type": state.position.type,
                 "dice_rolls_left": state.dice_rolls_left,
+                "max_dice_rolls": state.max_dice_rolls,
                 "next_dice_reset_at": state.next_dice_reset_at,
                 "airport_move_used": state.airport_move_used,
                 "has_passed_start": state.has_passed_start,
@@ -236,6 +237,7 @@ class DiceStatusView(APIView):
             {
                 "can_roll": blocked_reason is None,
                 "dice_rolls_left": state.dice_rolls_left,
+                "max_dice_rolls": state.max_dice_rolls,
                 "timer_running": timer_running,
                 "blocked_reason": blocked_reason,
                 "server_time": timezone.now(),

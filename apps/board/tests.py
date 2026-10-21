@@ -25,7 +25,7 @@ from apps.board.models import (
     TeamChallengeAccess,
     TeamChanceCard,
 )
-from apps.board.services import SOLVE_LIMIT_SECONDS, get_or_create_board_state
+from apps.board.services import get_or_create_board_state, solve_limit_seconds
 from apps.board.idempotency import idempotent
 from apps.board.exceptions import IdempotencyKeyConflict
 from apps.challenge.models import Challenge, Solve
@@ -362,6 +362,7 @@ class BoardApiTestCase(TestCase):
             {
                 "can_roll",
                 "dice_rolls_left",
+                "max_dice_rolls",
                 "timer_running",
                 "blocked_reason",
                 "server_time",
@@ -512,6 +513,7 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(data["position"], 1)
         self.assertEqual(data["type"], Cell.CellType.START)
         self.assertEqual(data["dice_rolls_left"], 3)
+        self.assertEqual(data["max_dice_rolls"], 3)
         self.assertIsNone(data["next_dice_reset_at"])
         self.assertFalse(data["board_completed"])
         self.assertEqual(data["consumed_cell_indexes"], [])
@@ -524,6 +526,7 @@ class BoardApiTestCase(TestCase):
                 "position",
                 "type",
                 "dice_rolls_left",
+                "max_dice_rolls",
                 "next_dice_reset_at",
                 "airport_move_used",
                 "has_passed_start",
@@ -561,12 +564,14 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(active_challenge["challenge_id"], str(challenge.challenge_id))
         self.assertEqual(
             active_challenge["solve_deadline_at"],
-            (access.opened_at + timedelta(seconds=SOLVE_LIMIT_SECONDS))
+            (access.opened_at + timedelta(seconds=solve_limit_seconds()))
             .isoformat()
             .replace("+00:00", "Z"),
         )
         self.assertGreater(active_challenge["remaining_seconds"], 0)
-        self.assertLessEqual(active_challenge["remaining_seconds"], SOLVE_LIMIT_SECONDS)
+        self.assertLessEqual(
+            active_challenge["remaining_seconds"], solve_limit_seconds()
+        )
 
     def test_board_me_active_challenge_remaining_seconds_floors_at_zero_past_deadline(
         self,
@@ -576,7 +581,9 @@ class BoardApiTestCase(TestCase):
         access = TeamChallengeAccess.objects.create(
             team=self.team, challenge=challenge, source_cell=cell
         )
-        access.opened_at = timezone.now() - timedelta(seconds=SOLVE_LIMIT_SECONDS + 30)
+        access.opened_at = timezone.now() - timedelta(
+            seconds=solve_limit_seconds() + 30
+        )
         access.save(update_fields=["opened_at"])
         self.state.active_challenge_access = access
         self.state.save(update_fields=["active_challenge_access"])
@@ -720,7 +727,7 @@ class BoardApiTestCase(TestCase):
         access = TeamChallengeAccess.objects.create(
             team=self.team, challenge=challenge, source_cell=cell
         )
-        access.opened_at = timezone.now() - timedelta(seconds=SOLVE_LIMIT_SECONDS + 1)
+        access.opened_at = timezone.now() - timedelta(seconds=solve_limit_seconds() + 1)
         access.save(update_fields=["opened_at"])
         self.state.active_challenge_access = access
         self.state.save(update_fields=["active_challenge_access"])
@@ -738,7 +745,7 @@ class BoardApiTestCase(TestCase):
         access = TeamChallengeAccess.objects.create(
             team=self.team, challenge=challenge, source_cell=cell
         )
-        access.opened_at = timezone.now() - timedelta(seconds=SOLVE_LIMIT_SECONDS + 1)
+        access.opened_at = timezone.now() - timedelta(seconds=solve_limit_seconds() + 1)
         access.save(update_fields=["opened_at"])
 
         with patch("apps.board.services.random.randint", side_effect=[1, 1]):

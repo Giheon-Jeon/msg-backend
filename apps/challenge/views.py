@@ -32,6 +32,7 @@ from apps.instances.services import (
 )
 from apps.common.permissions import IsAuthenticated
 from apps.accounts.models import Team
+from apps.adminpanel.models import setting_values
 from apps.board.models import TeamBoardState, TeamChallengeAccess
 from apps.board.services import complete_challenge_from_submission
 from apps.ranking.services import check_and_record_line_monopoly
@@ -151,6 +152,18 @@ class ChallengeFileDownloadView(APIView):
         return response
 
 
+
+def _flag_lock_settings():
+    """(연속 오답 허용 횟수, 잠금 초). 운영 중 /admin/settings 로 바뀐다."""
+    return setting_values("flag.max_attempts", "flag.lock_seconds")
+
+
+def _too_many_attempts_message(max_attempts, lock_seconds):
+    return (
+        f"잘못된 플래그를 {max_attempts}회 연속 제출했습니다. "
+        f"{lock_seconds}초 후 다시 시도해주세요."
+    )
+
 class ChallengeSubmitView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -211,7 +224,7 @@ class ChallengeSubmitView(APIView):
                 )
                 return fail(
                     "TOO_MANY_ATTEMPTS",
-                    "잘못된 플래그를 3회 연속 제출했습니다. 30초 후 다시 시도해주세요.",
+                    _too_many_attempts_message(*_flag_lock_settings()),
                     429,
                     {"retry_after_seconds": retry_after_seconds},
                 )
@@ -253,13 +266,14 @@ class ChallengeSubmitView(APIView):
                 flag_lock.failed_count += 1
                 flag_lock.last_failed_at = now
 
-                if flag_lock.failed_count >= 3:
-                    flag_lock.locked_until = now + timedelta(seconds=30)
+                max_attempts, lock_seconds = _flag_lock_settings()
+                if flag_lock.failed_count >= max_attempts:
+                    flag_lock.locked_until = now + timedelta(seconds=lock_seconds)
                     result = FlagSubmission.SubmissionResult.INCORRECT
                     status_code = 429
                     code = "TOO_MANY_ATTEMPTS"
-                    message = "잘못된 플래그를 3회 연속 제출했습니다. 30초 후 다시 시도해주세요."
-                    data = {"retry_after_seconds": 30}
+                    message = _too_many_attempts_message(max_attempts, lock_seconds)
+                    data = {"retry_after_seconds": lock_seconds}
                 else:
                     result = FlagSubmission.SubmissionResult.INCORRECT
                     status_code = 200

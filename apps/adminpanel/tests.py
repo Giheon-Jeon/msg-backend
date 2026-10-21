@@ -700,16 +700,16 @@ class AdminTests(TestCase):
     def test_board_dice_grant_does_not_exceed_board_cap(self):
         """보드 보상과 같이 보유 상한을 넘겨 지급하지 않는다."""
         from apps.board.models import TeamBoardState
-        from apps.board.services import MAX_DICE_ROLLS
+        from apps.board.services import max_dice_rolls
 
         self._dice_state(2, timezone.now() + timedelta(minutes=10))
         res = self._adjust(5)
         self.assertEqual(res.status_code, 200)
         d = res.data["data"]
-        self.assertEqual(d["dice_rolls_left"], MAX_DICE_ROLLS)
-        self.assertEqual(d["amount"], MAX_DICE_ROLLS - 2)
+        self.assertEqual(d["dice_rolls_left"], max_dice_rolls())
+        self.assertEqual(d["amount"], max_dice_rolls() - 2)
         state = TeamBoardState.objects.get(team=self.team)
-        self.assertEqual(state.dice_rolls_left, MAX_DICE_ROLLS)
+        self.assertEqual(state.dice_rolls_left, max_dice_rolls())
         self.assertIsNone(state.next_dice_reset_at)
 
     def test_board_dice_grant_keeps_existing_recharge_deadline(self):
@@ -5150,3 +5150,66 @@ class AdminLineMonopolyTests(TestCase):
         self.auth("player")
         res = self.patch({"earned_score": 1, "reason": "보정"})
         self.assertEqual(res.status_code, 403)
+
+
+class AdminSettingsAppliedTests(TestCase):
+    """/admin/settings 에 저장한 값이 보드 규칙에 실제로 쓰이는지 확인한다."""
+
+    def setUp(self):
+        from apps.board.services import get_or_create_board_state
+
+        Cell.objects.create(cell_index=1, type="START", name="출발")
+        self.team = Team.objects.create(team_name="감자는외로워")
+        self.state = get_or_create_board_state(self.team)
+
+    def set(self, key, value):
+        from apps.adminpanel.models import AdminSetting
+
+        AdminSetting.objects.update_or_create(key=key, defaults={"value": value})
+
+    def test_defaults_without_stored_values(self):
+        from apps.board.services import dice_settings, solve_limit_seconds
+
+        self.assertEqual(dice_settings(), (3, timedelta(minutes=15)))
+        self.assertEqual(solve_limit_seconds(), 900)
+
+    def test_dice_cap_follows_setting(self):
+        from apps.board.services import grant_dice_roll
+
+        self.set("board.dice_rolls_per_reset", 5)
+        self.state.dice_rolls_left = 1
+        self.assertEqual(grant_dice_roll(self.state, 10), 4)
+        self.assertEqual(self.state.dice_rolls_left, 5)
+
+    def test_recharge_interval_follows_setting(self):
+        from apps.board.services import apply_pending_dice_recharge
+
+        self.set("board.dice_reset_interval_minutes", 1)
+        due = timezone.now() - timedelta(seconds=90)
+        self.state.dice_rolls_left = 0
+        self.state.next_dice_reset_at = due
+        apply_pending_dice_recharge(self.state)
+
+        # 90초 지남 = 마감 시점 1회 + 1분 간격 1회
+        self.assertEqual(self.state.dice_rolls_left, 2)
+        self.assertEqual(self.state.next_dice_reset_at, due + timedelta(minutes=2))
+
+    def test_read_path_recharges_below_raised_cap(self):
+        from apps.board.services import get_board_state_for_read
+
+        # 기본 상한 3 에 차 있던 팀도 상한을 올리면 충전 시계가 다시 돈다.
+        self.assertEqual(self.state.dice_rolls_left, 3)
+        self.assertIsNone(self.state.next_dice_reset_at)
+        self.set("board.dice_rolls_per_reset", 5)
+
+        state = get_board_state_for_read(self.team)
+        self.assertIsNotNone(state.next_dice_reset_at)
+
+    def test_solve_deadline_follows_setting(self):
+        from apps.board.services import challenge_solve_deadline
+
+        self.set("board.solve_deadline_minutes", 30)
+        access = TeamChallengeAccess(opened_at=timezone.now())
+        self.assertEqual(
+            challenge_solve_deadline(access), access.opened_at + timedelta(minutes=30)
+        )
