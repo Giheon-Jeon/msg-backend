@@ -68,14 +68,14 @@ class ExtraRollRechargeBoundaryTests(TransactionTestCase):
         current_time = self.deadline - timedelta(microseconds=1)
         grants = []
 
-        def grant_after_deadline(state, amount):
+        def grant_after_deadline(state, amount, **kwargs):
             nonlocal current_time
             # The real eligibility check has passed; only time changes before
             # the real grant function applies the now-due automatic recharge.
             self.assertLess(state.dice_rolls_left, 3)
             self.assertEqual(current_time, self.deadline - timedelta(microseconds=1))
             current_time = self.deadline
-            granted = grant_dice_roll(state, amount)
+            granted = grant_dice_roll(state, amount, **kwargs)
             grants.append(granted)
             return granted
 

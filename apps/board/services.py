@@ -1,4 +1,5 @@
 import random
+from contextlib import contextmanager
 from datetime import timedelta
 
 from django.db import transaction
@@ -130,7 +131,9 @@ def _board_state_read_queryset(
     return _board_state_queryset().annotate(**annotations)
 
 
-def get_or_create_board_state(team):
+@contextmanager
+def board_state_for_update(team):
+    """Keep the team lock and one dice rule snapshot for the whole action."""
     with transaction.atomic():
         # Mutations and due recharges serialize on the team's state row.
         locked_states = _board_state_queryset().select_for_update(of=("self",))
@@ -140,11 +143,23 @@ def get_or_create_board_state(team):
             start_cell = Cell.objects.filter(cell_index=START_CELL_INDEX).first()
             if start_cell is None:
                 raise BoardNotReady()
-            state, _ = locked_states.get_or_create(
+            dice = dice_settings()
+            state, created = locked_states.get_or_create(
                 team=team,
-                defaults={"position": start_cell, "dice_rolls_left": max_dice_rolls()},
+                defaults={"position": start_cell, "dice_rolls_left": dice[0]},
             )
-        return apply_pending_dice_recharge(state)
+            if not created:
+                # Another request created the state while this one waited.
+                dice = dice_settings()
+        else:
+            dice = dice_settings()
+        apply_pending_dice_recharge(state, dice=dice)
+        yield state, dice
+
+
+def get_or_create_board_state(team):
+    with board_state_for_update(team) as (state, _):
+        return state
 
 
 def get_board_state_for_read(
@@ -194,10 +209,10 @@ def _update_dice_recharge(state, now, dice=None):
     )
 
 
-def apply_pending_dice_recharge(state):
+def apply_pending_dice_recharge(state, *, dice=None):
     """Apply elapsed recharges up to capacity, under the board lock."""
     previous = (state.dice_rolls_left, state.next_dice_reset_at)
-    _update_dice_recharge(state, timezone.now())
+    _update_dice_recharge(state, timezone.now(), dice)
     if previous != (state.dice_rolls_left, state.next_dice_reset_at):
         state.save(
             update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"]
@@ -205,7 +220,7 @@ def apply_pending_dice_recharge(state):
     return state
 
 
-def grant_dice_roll(state, amount):
+def grant_dice_roll(state, amount, *, dice=None):
     """Return the actual reward, preserving the recharge deadline below capacity."""
     if amount <= 0:
         return 0
@@ -213,7 +228,7 @@ def grant_dice_roll(state, amount):
         state.next_dice_reset_at = None
         return 0
     now = timezone.now()
-    dice = dice_settings()
+    dice = dice or dice_settings()
     _update_dice_recharge(state, now, dice)
     granted = max(0, min(amount, dice[0] - state.dice_rolls_left))
     state.dice_rolls_left += granted
@@ -221,9 +236,9 @@ def grant_dice_roll(state, amount):
     return granted
 
 
-def _consume_dice_roll(state):
+def _consume_dice_roll(state, *, dice=None):
     state.dice_rolls_left -= 1
-    _update_dice_recharge(state, timezone.now())
+    _update_dice_recharge(state, timezone.now(), dice)
     state.save(update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"])
 
 
@@ -347,7 +362,7 @@ def compute_start_reward(start_pass_count, landed_on_start):
     }
 
 
-def finalize_landing(team, state, cell, start_pass_count, landed_on_start):
+def finalize_landing(team, state, cell, start_pass_count, landed_on_start, *, dice=None):
     """칸 도착을 확정한다: 위치 갱신, 칸 소모, START 보상 지급."""
     state.position = cell
     if start_pass_count:
@@ -362,7 +377,7 @@ def finalize_landing(team, state, cell, start_pass_count, landed_on_start):
     if start_pass_count:
         update_fields.append("has_passed_start")
     if reward["roll_gained"]:
-        reward["roll_gained"] = grant_dice_roll(state, reward["roll_gained"])
+        reward["roll_gained"] = grant_dice_roll(state, reward["roll_gained"], dice=dice)
         update_fields += ["dice_rolls_left", "next_dice_reset_at"]
     state.save(update_fields=update_fields)
 
@@ -451,11 +466,7 @@ def _assert_can_roll(team, state):
 
 
 def roll_dice(team):
-    state = get_or_create_board_state(team)
-
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
-        apply_pending_dice_recharge(state)
+    with board_state_for_update(team) as (state, dice):
         _assert_can_roll(team, state)
 
         dice_a = random.randint(1, 6)
@@ -472,7 +483,7 @@ def roll_dice(team):
         destination_cell = Cell.objects.get(cell_index=destination)
         board_event_code = get_event_for_cell(destination_cell)
 
-        _consume_dice_roll(state)
+        _consume_dice_roll(state, dice=dice)
 
         DiceRoll.objects.create(
             team=team,
@@ -521,7 +532,7 @@ def roll_dice(team):
             }
 
         start_reward = finalize_landing(
-            team, state, destination_cell, start_pass_count, landed_on_start
+            team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
         )
 
     return {
@@ -541,9 +552,7 @@ def roll_dice(team):
 
 
 def confirm_dice_roll(team):
-    get_or_create_board_state(team)
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
+    with board_state_for_update(team) as (state, dice):
         pending = PendingDiceRoll.objects.filter(team=team).first()
         if pending is None:
             raise NoPendingRoll()
@@ -559,7 +568,7 @@ def confirm_dice_roll(team):
         landed_on_start = pending.candidate_position == START_CELL_INDEX
         start_pass_count = pending.start_pass_count or int(pending.passed_start)
         start_reward = finalize_landing(
-            team, state, destination_cell, start_pass_count, landed_on_start
+            team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
         )
 
         result = {
@@ -582,15 +591,12 @@ def confirm_dice_roll(team):
 
 
 def move_team_via_airport(team, destination_index):
-    state = get_or_create_board_state(team)
-
     if isinstance(destination_index, bool) or not isinstance(destination_index, int):
         raise InvalidDestinationIndex()
     if not (FIRST_CELL_INDEX <= destination_index <= LAST_CELL_INDEX):
         raise InvalidDestinationIndex()
 
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
+    with board_state_for_update(team) as (state, dice):
         if state.position.type != Cell.CellType.AIRPORT:
             raise NotAirportCell()
         if state.airport_move_used:
@@ -612,7 +618,7 @@ def move_team_via_airport(team, destination_index):
         state.save(update_fields=["airport_move_used", "updated_at"])
 
         start_reward = finalize_landing(
-            team, state, destination_cell, passed_start, landed_on_start
+            team, state, destination_cell, passed_start, landed_on_start, dice=dice
         )
 
     return {
@@ -978,9 +984,11 @@ def build_cell_states(team):
 # ---------------------------------------------------------------------------
 
 
-def _card_usable_now(card, state, blocked_reason, has_pending):
-    if card.effect == "GRANT_EXTRA_ROLL" and state.dice_rolls_left >= max_dice_rolls():
-        return False
+def _card_usable_now(card, state, blocked_reason, has_pending, *, dice=None):
+    if card.effect == "GRANT_EXTRA_ROLL":
+        cap = dice[0] if dice is not None else max_dice_rolls()
+        if state.dice_rolls_left >= cap:
+            return False
     if card.usage_timing == ChanceCard.UsageTiming.POST_ROLL:
         return has_pending
     # PRE_ROLL
@@ -1042,9 +1050,7 @@ def build_chance_cards_view(team, state, *, board_completed=None):
 
 
 def draw_chance_card(team):
-    get_or_create_board_state(team)
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
+    with board_state_for_update(team) as (state, dice):
         if PendingDiceRoll.objects.filter(team=team).exists():
             raise PendingRollUnresolved()
         cell = state.position
@@ -1059,7 +1065,7 @@ def draw_chance_card(team):
         draw = TeamChanceCard.objects.create(team=team, source_cell=cell, card=card)
 
         consume_cell(team, cell)
-        grant_dice_roll(state, CHANCE_DRAW_ROLL_BONUS)
+        grant_dice_roll(state, CHANCE_DRAW_ROLL_BONUS, dice=dice)
         state.save(
             update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"]
         )
@@ -1109,16 +1115,16 @@ def discard_chance_card(team, card_id, *, team_card_id=None):
     }
 
 
-def _assert_timing_ok(team, state, card):
+def _assert_timing_ok(team, state, card, *, dice=None):
     if _held_cards_queryset(team).count() >= 2:
         raise ChanceCardAwaitingDiscard()
     blocked_reason = compute_blocked_reason(team, state)
     has_pending = PendingDiceRoll.objects.filter(team=team).exists()
-    if not _card_usable_now(card, state, blocked_reason, has_pending):
+    if not _card_usable_now(card, state, blocked_reason, has_pending, dice=dice):
         raise ChanceCardWrongTiming()
 
 
-def _effect_reroll(team, state, draw, payload):
+def _effect_reroll(team, state, draw, payload, *, dice=None):
     pending = PendingDiceRoll.objects.select_for_update().filter(team=team).first()
     if pending is None:
         raise ChanceCardWrongTiming()
@@ -1147,7 +1153,9 @@ def _effect_reroll(team, state, draw, payload):
     draw.save(update_fields=["used_at"])
     pending.delete()
 
-    finalize_landing(team, state, destination_cell, start_pass_count, landed_on_start)
+    finalize_landing(
+        team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
+    )
 
     return {
         "card_id": draw.card_id,
@@ -1163,8 +1171,8 @@ def _effect_reroll(team, state, draw, payload):
     }
 
 
-def _effect_roll_twice_choose(team, state, draw, payload):
-    apply_pending_dice_recharge(state)
+def _effect_roll_twice_choose(team, state, draw, payload, *, dice=None):
+    apply_pending_dice_recharge(state, dice=dice)
     _assert_can_roll(team, state)
 
     first_a = random.randint(1, 6)
@@ -1183,7 +1191,7 @@ def _effect_roll_twice_choose(team, state, draw, payload):
     )
     destination_cell = Cell.objects.get(cell_index=destination)
 
-    _consume_dice_roll(state)
+    _consume_dice_roll(state, dice=dice)
 
     DiceRoll.objects.create(
         team=team,
@@ -1229,7 +1237,7 @@ def _effect_roll_twice_choose(team, state, draw, payload):
     }
 
 
-def _effect_move_offset(team, state, draw, payload):
+def _effect_move_offset(team, state, draw, payload, *, dice=None):
     """POST_ROLL 전용 카드. 방금 굴린(아직 미확정) 도착 후보 위치를 기준으로 추가 이동한다."""
     pending = PendingDiceRoll.objects.filter(team=team).first()
     if pending is None:
@@ -1257,7 +1265,9 @@ def _effect_move_offset(team, state, draw, payload):
     draw.save(update_fields=["used_at"])
     pending.delete()
 
-    finalize_landing(team, state, destination_cell, start_pass_count, landed_on_start)
+    finalize_landing(
+        team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
+    )
 
     return {
         "card_id": draw.card_id,
@@ -1270,7 +1280,7 @@ def _effect_move_offset(team, state, draw, payload):
     }
 
 
-def _effect_free_move(team, state, draw, payload):
+def _effect_free_move(team, state, draw, payload, *, dice=None):
     destination = payload.get("destination_index")
     if isinstance(destination, bool) or not isinstance(destination, int):
         raise InvalidDestinationIndex()
@@ -1291,7 +1301,9 @@ def _effect_free_move(team, state, draw, payload):
     draw.used_at = timezone.now()
     draw.save(update_fields=["used_at"])
 
-    finalize_landing(team, state, destination_cell, passed_start, passed_start)
+    finalize_landing(
+        team, state, destination_cell, passed_start, passed_start, dice=dice
+    )
 
     return {
         "card_id": draw.card_id,
@@ -1304,9 +1316,9 @@ def _effect_free_move(team, state, draw, payload):
     }
 
 
-def _effect_grant_extra_roll(team, state, draw, payload):
+def _effect_grant_extra_roll(team, state, draw, payload, *, dice=None):
     # Recharge may fill capacity after the timing check, even under the lock.
-    if grant_dice_roll(state, 1) == 0:
+    if grant_dice_roll(state, 1, dice=dice) == 0:
         raise ChanceCardWrongTiming()
     state.save(update_fields=["dice_rolls_left", "next_dice_reset_at", "updated_at"])
 
@@ -1355,10 +1367,7 @@ def use_chance_card(team, card_id, payload, *, team_card_id=None):
         raise ChanceCardAlreadyUsed()
     if existing_draw.discarded_at is not None:
         raise ChanceCardNotFound()
-    get_or_create_board_state(team)
-
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
+    with board_state_for_update(team) as (state, dice):
         draw = (
             TeamChanceCard.objects.select_for_update(of=("self",))
             .select_related("card")
@@ -1373,15 +1382,15 @@ def use_chance_card(team, card_id, payload, *, team_card_id=None):
             raise ChanceCardNotFound()
 
         # A recharge can become due while waiting for the board lock.
-        apply_pending_dice_recharge(state)
+        apply_pending_dice_recharge(state, dice=dice)
         card = draw.card
-        _assert_timing_ok(team, state, card)
+        _assert_timing_ok(team, state, card, dice=dice)
 
         handler = _EFFECT_HANDLERS.get(card.effect)
         if handler is None:
             raise ChanceCardNotFound()
 
-        result = handler(team, state, draw, payload or {})
+        result = handler(team, state, draw, payload or {}, dice=dice)
         result["team_card_id"] = str(draw.pk)
         return result
 
@@ -1390,9 +1399,7 @@ def confirm_chance_choice(team, choice):
     if choice not in ("FIRST", "SECOND"):
         raise ChanceConfirmNotFound()
 
-    get_or_create_board_state(team)
-    with transaction.atomic():
-        state = TeamBoardState.objects.select_for_update().get(team=team)
+    with board_state_for_update(team) as (state, dice):
         draw = (
             TeamChanceCard.objects.select_related("card")
             .filter(
@@ -1429,7 +1436,7 @@ def confirm_chance_choice(team, choice):
         pending.delete()
 
         finalize_landing(
-            team, state, destination_cell, start_pass_count, landed_on_start
+            team, state, destination_cell, start_pass_count, landed_on_start, dice=dice
         )
 
     return {

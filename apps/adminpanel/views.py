@@ -49,8 +49,8 @@ from apps.board.services import (
     FIRST_CELL_INDEX,
     LAST_CELL_INDEX,
     apply_pending_dice_recharge,
+    board_state_for_update,
     get_or_create_board_state,
-    max_dice_rolls,
 )
 from apps.koth.models import KothSolve
 from apps.ranking.models import LineMonopoly
@@ -1525,13 +1525,9 @@ def board_dice(request, team_id):
     if len(reason) > 500:
         raise InvalidRequest("reason 은 500자 이하여야 합니다")
 
-    with transaction.atomic():
-        # 보드와 같은 순서로 잠근다: 보드 상태 먼저, 팀은 잠그지 않는다.
-        team = _get_team(team_id)
-        get_or_create_board_state(team)
-        state = TeamBoardState.objects.select_for_update(of=("self",)).get(team=team)
-        apply_pending_dice_recharge(state)
-
+    # 보드와 같은 순서로 잠근다: 보드 상태 먼저, 팀은 잠그지 않는다.
+    team = _get_team(team_id)
+    with board_state_for_update(team) as (state, dice):
         previous = state.dice_rolls_left
         if amount < 0 and previous + amount < 0:
             raise InsufficientDice(
@@ -1539,12 +1535,12 @@ def board_dice(request, team_id):
             )
         # 보드 보상(grant_dice_roll)과 같은 규칙으로 보유 상한을 넘기지 않는다.
         applied = (
-            max(0, min(amount, max_dice_rolls() - previous)) if amount > 0 else amount
+            max(0, min(amount, dice[0] - previous)) if amount > 0 else amount
         )
         state.dice_rolls_left = previous + applied
         state.save(update_fields=["dice_rolls_left", "updated_at"])
         # 조정 뒤 충전 시계를 보드와 같은 규칙으로 다시 맞춘다.
-        apply_pending_dice_recharge(state)
+        apply_pending_dice_recharge(state, dice=dice)
         _record_event(
             AdminEvent.EventType.DICE_ADJUSTED,
             f"주사위 {applied:+d} ({previous} → {state.dice_rolls_left}): {reason}",
