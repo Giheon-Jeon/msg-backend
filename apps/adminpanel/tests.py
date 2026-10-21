@@ -5088,6 +5088,14 @@ class AdminLineMonopolyTests(TestCase):
         res = self.patch({"earned_score": 10.005, "reason": "보정"})
         self.assertEqual(res.data["data"]["earned_score"], 10.01)
 
+    def test_score_accepts_upper_storage_boundary(self):
+        monopoly = self.monopolize()
+        res = self.patch({"earned_score": 9999999999.99, "reason": "보정"})
+
+        self.assertEqual(res.status_code, 200)
+        monopoly.refresh_from_db()
+        self.assertEqual(monopoly.earned_score, Decimal("9999999999.99"))
+
     def test_line_not_monopolized_by_team_is_rejected(self):
         self.monopolize(line_number=2)
         res = self.patch({"earned_score": 1, "reason": "보정"}, line_number=3)
@@ -5107,7 +5115,11 @@ class AdminLineMonopolyTests(TestCase):
             ({"earned_score": True, "reason": "보정"}, "3"),
             ({"earned_score": "10", "reason": "보정"}, "3"),
             ({"earned_score": -1, "reason": "보정"}, "3"),
+            ({"earned_score": -0.001, "reason": "보정"}, "3"),
             ({"earned_score": 1e13, "reason": "보정"}, "3"),
+            ({"earned_score": 10**100, "reason": "보정"}, "3"),
+            ({"earned_score": 1e100, "reason": "보정"}, "3"),
+            ({"earned_score": -1e100, "reason": "보정"}, "3"),
             ({"reason": "보정"}, "3"),
             ({"earned_score": 1}, "3"),
             ({"earned_score": 1, "reason": "   "}, "3"),

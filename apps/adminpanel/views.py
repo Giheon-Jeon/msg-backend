@@ -2217,10 +2217,10 @@ def _parse_line_score(raw):
         raise InvalidRequest("earned_score 는 숫자여야 합니다")
     if isinstance(raw, float) and not math.isfinite(raw):
         raise InvalidRequest("earned_score 는 숫자여야 합니다")
-    score = Decimal(str(raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    score = Decimal(str(raw))
     if not (0 <= score <= MAX_LINE_SCORE):
         raise InvalidRequest(f"earned_score 는 0 ~ {MAX_LINE_SCORE} 범위여야 합니다")
-    return score
+    return score.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 @api_view(["PATCH"])
