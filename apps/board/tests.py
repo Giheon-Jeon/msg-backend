@@ -237,6 +237,12 @@ class BoardApiTestCase(TestCase):
         )
 
     def post_idem(self, path, data=None, key="idem-1"):
+        if path == "/api/v1/board/dice/confirm":
+            keys = self.__dict__.setdefault("confirm_request_keys", {})
+            pending = PendingDiceRoll.objects.filter(team=self.team).first()
+            if pending is not None:
+                keys.setdefault(key, pending.request_key)
+            key = keys.get(key, key)
         return self.client.post(
             path, data or {}, format="json", HTTP_IDEMPOTENCY_KEY=key
         )
@@ -368,6 +374,7 @@ class BoardApiTestCase(TestCase):
                 "server_time",
                 "next_dice_reset_at",
                 "unconfirmed_roll_request_key",
+                "pending_confirm_request_key",
             },
         )
         self.assertIsNone(status["unconfirmed_roll_request_key"])

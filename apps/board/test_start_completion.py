@@ -47,6 +47,12 @@ class StartCompletionTestCase(TestCase):
         self.client.force_authenticate(self.user)
 
     def post(self, action, key, body=None):
+        if action == "dice/confirm":
+            keys = self.__dict__.setdefault("confirm_request_keys", {})
+            pending = PendingDiceRoll.objects.filter(team=self.team).first()
+            if pending is not None:
+                keys.setdefault(key, pending.request_key)
+            key = keys.get(key, key)
         return self.client.post(
             f"/api/v1/board/{action}",
             body or {},

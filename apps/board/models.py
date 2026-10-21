@@ -2,6 +2,7 @@ import uuid
 
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
+from django.contrib.postgres.functions import RandomUUID
 from django.db import models
 
 from .line_rules import CELL_LINE_NUMBERS
@@ -194,11 +195,16 @@ class TeamChanceCard(models.Model):
 class PendingDiceRoll(models.Model):
     """ERD: pending_dice_rolls — 주사위 결과를 확정하기 전 팀별 임시 이동 결과."""
 
+    KEY_PREFIX = "dice-confirm-request-"
+
     team = models.OneToOneField(
         "accounts.Team",
         on_delete=models.CASCADE,
         primary_key=True,
         related_name="pending_roll",
+    )
+    confirmation_id = models.UUIDField(
+        default=uuid.uuid4, db_default=RandomUUID(), unique=True, editable=False
     )
     dice_a = models.PositiveSmallIntegerField()
     dice_b = models.PositiveSmallIntegerField()
@@ -214,6 +220,10 @@ class PendingDiceRoll(models.Model):
 
     class Meta:
         db_table = "pending_dice_rolls"
+
+    @property
+    def request_key(self):
+        return self.KEY_PREFIX + str(self.confirmation_id)
 
     def __str__(self):
         return f"{self.team_id}: {self.previous_position} -> {self.candidate_position}"
