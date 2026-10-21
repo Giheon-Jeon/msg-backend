@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from rest_framework.decorators import api_view, permission_classes
 
 from apps.accounts.models import Team
@@ -100,6 +101,7 @@ def mileage_history(request):
     )
 
 
+@never_cache
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def qr_token(request):
