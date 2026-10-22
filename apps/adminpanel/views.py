@@ -104,6 +104,7 @@ from apps.instances.services import (
     scheduler_auth_header,
 )
 from .resource_broker import fetch_resource_targets
+from .node_allocation import enrich_allocations
 from .serializers import ChallengeCreateSerializer, ChallengeUpdateSerializer
 
 SORT_FIELDS = {
@@ -2209,11 +2210,14 @@ def _node_from_target(target):
         ),
         "cpu_usage_percent": _usage_percent(usage, capacity, "cpu_millicores"),
         "memory_usage_percent": _usage_percent(usage, capacity, "memory_mib"),
+        **({"resource_allocation": target["resource_allocation"]}
+           if target.get("resource_allocation") is not None else {}),
     }
 
 
 @api_view(["GET"])
 @permission_classes([IsAdmin])
+@never_cache
 def admin_resources(request):
     try:
         generated_at, targets = fetch_resource_targets()
@@ -2222,6 +2226,7 @@ def admin_resources(request):
     if not targets:
         return ok(None, message="수집된 리소스 정보가 없습니다")
 
+    enrich_allocations(targets)
     accounts = {}
     seen_targets = set()
     for target in targets:
