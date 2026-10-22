@@ -4901,6 +4901,7 @@ class AdminResourcesTests(TestCase):
         data = res.data["data"]
         self.assertEqual(data["total_count"], 1)
         self.assertEqual(data["collected_at"], self.GENERATED_AT)
+        self.assertIn("no-store", res.headers["Cache-Control"])
         account = data["accounts"][0]
         self.assertEqual(account["account_id"], "00000000-0000-4000-8000-000000000002")
         self.assertEqual(account["provider"], "GCP")
@@ -4999,6 +5000,7 @@ class AdminResourcesTests(TestCase):
             [c.args[1]["offset"] for c in mock_get.call_args_list],
             [0, 500],
         )
+        self.assertTrue(all(c.args[1]["include_allocations"] == "true" for c in mock_get.call_args_list))
 
 
 class AdminLineMonopolyTests(TestCase):

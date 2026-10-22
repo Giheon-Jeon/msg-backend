@@ -18,7 +18,8 @@ def fetch_resource_targets():
     generated_at = None
     while True:
         page = _get(
-            "/v1/inventory/resource-targets", {"limit": PAGE_SIZE, "offset": offset}
+            "/v1/inventory/resource-targets",
+            {"limit": PAGE_SIZE, "offset": offset, "include_allocations": "true"},
         )
         generated_at = generated_at or page.get("generated_at")
         chunk = page.get("items") or []
