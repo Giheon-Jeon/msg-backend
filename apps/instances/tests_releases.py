@@ -1,3 +1,4 @@
+import json
 import uuid
 from unittest.mock import patch
 
@@ -575,6 +576,42 @@ class ReleaseActivateTests(ReleaseTestBase):
         config = ChallengeRuntimeConfig.objects.get(challenge=self.challenge)
         self.assertEqual(str(config.current_release_id), first)
         self.assertEqual(len(self.release_events()), 1)
+
+    def test_activate_rejects_invalid_reason_characters_before_database_changes(self):
+        self.auth("root")
+        first, second = self.register_two()
+        self.activate(first)
+        first_approval = ChallengeRelease.objects.get(pk=first).approved_at
+        for reason in ("복구\x00사유", "\x00", "복구\ud800사유", "복구\udfff사유"):
+            with self.subTest(reason=ascii(reason)):
+                response = self.client.post(
+                    f"{self.base_url}/{second}/activate",
+                    json.dumps({"reason": reason}),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "INVALID_REQUEST")
+                config = ChallengeRuntimeConfig.objects.get(challenge=self.challenge)
+                self.assertEqual(str(config.current_release_id), first)
+                self.assertIsNone(ChallengeRelease.objects.get(pk=second).approved_at)
+                self.assertEqual(len(self.release_events()), 1)
+        self.assertEqual(ChallengeRelease.objects.get(pk=first).approved_at, first_approval)
+
+    def test_activate_accepts_valid_unicode_and_optional_reason(self):
+        self.auth("root")
+        first, second = self.register_two()
+        response = self.client.post(
+            f"{self.base_url}/{first}/activate", {"reason": None}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        reason = "한" * 499 + "🚀"
+        response = self.client.post(
+            f"{self.base_url}/{second}/activate",
+            json.dumps({"reason": reason}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.release_events()[-1].message, f"릴리스 전환: v1 → v2: {reason}")
 
     def test_activate_accepts_multi_container_release(self):
         # 공개 포트가 하나인 멀티 컨테이너 릴리스도 현재 릴리스로 전환할 수 있다

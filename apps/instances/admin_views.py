@@ -136,6 +136,8 @@ class ReleaseActivateView(APIView):
             if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
                 return fail("INVALID_REQUEST", "reason 은 1~500자 문자열이어야 합니다.", 400)
             reason = reason.strip()
+            if "\x00" in reason or any("\ud800" <= char <= "\udfff" for char in reason):
+                return fail("INVALID_REQUEST", "reason 에 유효하지 않은 문자가 있습니다.", 400)
 
         with transaction.atomic():
             challenge = _get_challenge(challenge_id, for_update=True)
