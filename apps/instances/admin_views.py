@@ -4,6 +4,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
 from rest_framework.views import APIView
 
+from apps.adminpanel.models import AdminEvent
 from apps.challenge.models import Challenge
 from apps.common.permissions import IsAdmin
 from apps.common.response import fail, ok
@@ -26,6 +27,22 @@ def _get_challenge(challenge_id, for_update=False):
     if for_update:
         queryset = queryset.select_for_update()
     return queryset.filter(challenge_id=challenge_id).first()
+
+
+def _record_release_switch(challenge, previous, release, reason, actor):
+    # 누가 어느 버전으로 바꿨는지 남긴다. 실행 중인 인스턴스는 그대로이고 새 인스턴스부터 적용된다.
+    rollback = previous is not None and release.version < previous.version
+    before = f"v{previous.version}" if previous else "없음"
+    message = f"{'릴리스 롤백' if rollback else '릴리스 전환'}: {before} → v{release.version}"
+    if reason:
+        message += f": {reason}"
+    AdminEvent.objects.create(
+        type=AdminEvent.EventType.CHALLENGE_RELEASE_ACTIVATED,
+        severity=AdminEvent.Severity.WARNING if rollback else AdminEvent.Severity.INFO,
+        message=message,
+        challenge=challenge,
+        actor=actor,
+    )
 
 
 def _current_release_id(challenge):
@@ -110,6 +127,16 @@ class ReleaseActivateView(APIView):
 
     def post(self, request, challenge_id, release_id):
         # 지정한 릴리스를 현재 배포 버전으로 전환한다. 옛 버전 지정이 곧 롤백이다
+        body = request.data
+        if not isinstance(body, dict):
+            return fail("INVALID_REQUEST", "요청 본문은 JSON 객체여야 합니다.", 400)
+        # 사유는 선택이다. 기존 화면이 빈 본문으로 전환하므로 필수로 바꾸면 깨진다.
+        reason = body.get("reason")
+        if reason is not None:
+            if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+                return fail("INVALID_REQUEST", "reason 은 1~500자 문자열이어야 합니다.", 400)
+            reason = reason.strip()
+
         with transaction.atomic():
             challenge = _get_challenge(challenge_id, for_update=True)
             if challenge is None:
@@ -143,8 +170,12 @@ class ReleaseActivateView(APIView):
             if previous_release_id == release.release_id:
                 previous_release_id = None
             else:
+                previous = config.current_release
                 config.current_release = release
                 config.save(update_fields=["current_release", "updated_at"])
+                _record_release_switch(
+                    challenge, previous, release, reason, request.user.login_id
+                )
 
         return ok(
             {
