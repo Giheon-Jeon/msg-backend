@@ -13,6 +13,25 @@
 이 기능은 기존 Kubernetes 실행 릴리스에서 사용하며 Windows 문제 pwn-msgdriver는 제외합니다
 파일·DB에 들어 있는 정답의 주입 방식까지 바꾸지는 않습니다
 
+## 발행본 자동 반영
+
+GitHub 발행 묶음은 schema 2.0이라 환경변수가 없습니다
+poller와 발행본 가져오기가 새 버전을 등록할 때 같은 커밋의 env/컨테이너명.env를 읽어 그 버전에 바로 넣습니다
+이 파일이 있는 컨테이너만 반영하고, 파일이 없는 컨테이너와 환경변수가 이미 든 2.1 발행본은 그대로 둡니다
+일반 값은 env로 넣고, 민감한 이름이나 일반 값으로 확인되지 않는 값은 비밀값으로 암호화해 연결합니다
+지금 쓰는 버전에서 관리자가 정한 종류는 그대로 따르고, 같은 값의 비밀값이 이미 있으면 새 비밀값 버전을 만들지 않습니다
+빈 값은 같은 이름으로 저장된 비밀값을 연결합니다
+값이 없거나 FLAG가 채점 값과 다르거나 형식이 맞지 않는 항목은 넣지 않고 repository_env.missing에 남깁니다
+missing이 남은 버전은 활성화가 400 RELEASE_ENV_INCOMPLETE로 거절되니 환경변수에서 값을 넣어 새 설정 버전을 만든 뒤 사용합니다
+저장소를 읽지 못하면 poller는 그 발행본을 다음 수집 때 다시 시도하고, 발행본 가져오기는 503 REPOSITORY_SOURCE_UNAVAILABLE을 돌려줍니다
+RELEASE_POLL_GITHUB_TOKEN이나 REPOSITORY_ENV_GIT_DIR이 없으면 저장소를 읽지 않습니다
+
+릴리스 응답의 repository_env는 revision·files·missing이며 저장소에서 채우지 않은 버전은 null입니다
+missing 항목은 container·name·reason이고 reason은 no_value·flag_mismatch·invalid 중 하나입니다
+컨테이너 전체를 넣지 못하면 name은 null이고 message에 이유가 있습니다
+
+검사: [발행본 자동 반영 테스트](../apps/instances/tests_bundle_environment.py)
+
 ## API
 
 아래 경로는 /api/v1/admin/challenges/{challenge_id}/releases/{release_id} 아래에 있습니다
