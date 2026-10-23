@@ -95,7 +95,7 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             sensitive = item["sensitive"] or bool(SENSITIVE_NAME.search(name))
             kind = "secret" if sensitive else rules_before.get(name, {}).get("kind", item["kind"])
             if kind == "env":
-                if value is None:
+                if value is None or (value == "" and rules_before.get(name, {}).get("required", False)):
                     skipped.append((name, "no_value"))
                 else:
                     env[name] = value
@@ -113,17 +113,29 @@ def fill_bundle_environment(challenge, validated, found, created_by):
                 skipped.append((name, "flag_mismatch"))
                 continue
             secrets[name] = (alias, value, record)
+        skipped_names = {name for name, _ in skipped}
+        for name, rule in rules_before.items():
+            if rule["required"] and name not in env and name not in secrets and name not in skipped_names:
+                skipped.append((name, "no_value"))
         size = sum(len(name) + len(value.encode("utf-8")) for name, value in env.items())
         size += sum(len(name) + len(value.encode("utf-8")) for name, (_, value, _) in secrets.items())
         try:
             if size > MAX_ENV_BYTES or len(env) + len(secrets) > MAX_ENV_COUNT:
                 raise ValueError("환경변수 전체 크기나 개수가 한도를 넘었습니다")
             aliases = {name: alias for name, (alias, _, _) in secrets.items()}
-            rules = {name: {"kind": "env", "required": value != ""} for name, value in env.items()}
+            rules = {name: {"kind": "env", "required": rules_before.get(name, {}).get("required", value != "")}
+                     for name, value in env.items()}
             rules |= {name: {"kind": "secret", "required": True} for name in secrets}
             env = validate_env(env)
             aliases = validate_secret_env(aliases, env)
             rules = validate_env_rules(rules, env, aliases)
+            # Incomplete versions retain required rules for the next settings edit.
+            for name, _ in skipped:
+                rule = rules_before.get(name)
+                if rule and rule["required"]:
+                    rules[name] = dict(rule)
+            if len(rules) > MAX_ENV_COUNT:
+                raise ValueError("환경변수 전체 크기나 개수가 한도를 넘었습니다")
         except ValueError as error:
             missing.append({"container": container["name"], "name": None, "reason": "invalid", "message": str(error)})
             continue

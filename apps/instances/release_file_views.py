@@ -51,7 +51,7 @@ class ReleaseFilesConfigureView(APIView):
                 # 기존 이미지·환경변수·비밀값 UUID는 그대로 복제한다. 최신 비밀값으로 다시 연결하지 않는다
                 fields = {name: getattr(source, name) for name in (
                     "registry_revision", "challenge_slug", "runtime_type", "architecture", "isolation_profile",
-                    "cpu_millicores", "memory_mib", "ephemeral_storage_mib", "healthcheck", "source_ref",
+                    "cpu_millicores", "memory_mib", "ephemeral_storage_mib", "healthcheck", "source_ref", "repository_env",
                 )}
                 release = ChallengeRelease.objects.create(
                     challenge=challenge, version=next_release_version(challenge), derived_from=source,
