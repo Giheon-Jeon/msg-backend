@@ -67,6 +67,12 @@ class KothVerifyThrottled(APIError):
     message = "팀 토큰 검증 시도가 너무 많습니다. 잠시 후 다시 시도해주세요."
 
 
+class RateLimitUnavailable(APIError):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "RATE_LIMIT_UNAVAILABLE"
+    message = "요청 횟수 제한을 확인할 수 없습니다. 잠시 후 다시 시도해주세요."
+
+
 class InvalidClubId(APIError):
     code = "INVALID_CLUB_ID"
     message = "club_id 형식이 올바르지 않습니다."

@@ -1,6 +1,9 @@
 import logging
 
+from rest_framework.exceptions import APIException
 from rest_framework.throttling import SimpleRateThrottle
+
+from apps.common.exceptions import RateLimitUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +19,15 @@ class LoginRateThrottle(SimpleRateThrottle):
     def allow_request(self, request, view):
         try:
             return super().allow_request(request, view)
+        except APIException:
+            raise
         except Exception:
-            logger.exception("로그인 스로틀 캐시 접근 실패 — 이번 요청은 통과시킨다")
-            return True
+            logger.warning("Login rate limit unavailable; request rejected")
+            raise RateLimitUnavailable() from None
+
+    def throttle_success(self):
+        self.history.insert(0, self.now)
+        # Some backends report a rejected write without raising an exception.
+        if self.cache.set(self.key, self.history, self.duration) is False:
+            raise RuntimeError("Rate limit cache write rejected")
+        return True

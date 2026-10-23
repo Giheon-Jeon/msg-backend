@@ -10,10 +10,12 @@ from django.core.cache import cache
 from django.db import connections
 from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
+from redis.exceptions import ConnectionError, ResponseError, TimeoutError
 
 from apps.accounts import views
 from apps.accounts.models import RefreshToken, Team, User
 from apps.common.jwt import hash_token, issue_access_token, issue_refresh_token
+from apps.common.throttling import LoginRateThrottle
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
@@ -149,6 +151,41 @@ class AuthTests(TestCase):
         self.assertEqual(res.data["code"], "REFRESH_TOKEN_NOT_FOUND")
 
     # ---- 요청 제한 ----
+    def test_malformed_login_json_remains_400(self):
+        response = self.client.post(
+            "/api/v1/auth/login", data='{"login_id":', content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(RefreshToken.objects.count(), 0)
+
+    def test_login_cache_failure_stops_authentication_and_recovers(self):
+        for operation in ["get", "set"]:
+            for error_type in [ConnectionError, TimeoutError, ResponseError]:
+                with self.subTest(operation=operation, error_type=error_type):
+                    cache.clear()
+                    with mock.patch.object(
+                        LoginRateThrottle.cache, operation,
+                        side_effect=error_type("private-redis-credential"),
+                    ), mock.patch.object(User, "check_password") as check_password:
+                        with self.assertLogs("apps.common.throttling", level="WARNING") as logs:
+                            response = self.login()
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(response.data["code"], "RATE_LIMIT_UNAVAILABLE")
+                    self.assertIsNone(response.data["data"])
+                    self.assertNotIn("private-redis-credential", str(response.data))
+                    self.assertNotIn("private-redis-credential", "\n".join(logs.output))
+                    check_password.assert_not_called()
+                    self.assertEqual(RefreshToken.objects.count(), 0)
+        self.assertEqual(self.login().status_code, 200)
+        self.assertEqual(RefreshToken.objects.count(), 1)
+
+    def test_login_rejected_cache_write_returns_503(self):
+        with mock.patch.object(LoginRateThrottle.cache, "set", return_value=False):
+            response = self.login()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["code"], "RATE_LIMIT_UNAVAILABLE")
+        self.assertEqual(RefreshToken.objects.count(), 0)
+
     def test_login_throttled(self):
         for _ in range(10):
             self.login(password="wrong")
