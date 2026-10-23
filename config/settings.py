@@ -1,6 +1,7 @@
+import math
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
@@ -115,15 +116,42 @@ DATABASES = {
 # Cache
 # https://docs.djangoproject.com/en/5.2/topics/cache/
 
+_redis_timeouts = {}
+for _name in ("REDIS_CONNECT_TIMEOUT_SECONDS", "REDIS_SOCKET_TIMEOUT_SECONDS"):
+    try:
+        _timeout = float(os.getenv(_name, "1"))
+    except ValueError:
+        raise ImproperlyConfigured(
+            f"{_name} must be a finite number greater than zero"
+        ) from None
+    if not math.isfinite(_timeout) or _timeout <= 0:
+        raise ImproperlyConfigured(f"{_name} must be a finite number greater than zero")
+    _redis_timeouts[_name] = _timeout
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/1"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": _redis_timeouts["REDIS_CONNECT_TIMEOUT_SECONDS"],
+            "SOCKET_TIMEOUT": _redis_timeouts["REDIS_SOCKET_TIMEOUT_SECONDS"],
         },
     }
 }
+# URL query options take precedence over pool kwargs in redis-py.
+try:
+    _redis_query = parse_qsl(urlsplit(CACHES["default"]["LOCATION"]).query)
+except ValueError:
+    raise ImproperlyConfigured("REDIS_URL is invalid") from None
+if any(
+    key in {"socket_connect_timeout", "socket_timeout", "retry", "retry_on_error", "retry_on_timeout"}
+    for key, _ in _redis_query
+):
+    raise ImproperlyConfigured(
+        "Set Redis timeouts through environment variables; URL timeout/retry overrides are not allowed"
+    )
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
