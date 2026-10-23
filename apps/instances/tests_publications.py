@@ -23,6 +23,7 @@ from apps.instances import published_challenges as publications
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
+from apps.instances.tests_repository_environment import MemorySnapshot
 from apps.instances.tests_user_files import user_archive, user_manifest
 
 BASE = "/api/v1/admin/published_challenges"
@@ -428,3 +429,29 @@ class PublishedChallengeTests(ReleaseTestBase):
     def test_oversized_nested_zip_is_rejected_before_read(self):
         with patch("apps.instances.user_files.MAX_ARTIFACT_SIZE", 4):
             self.assertEqual(self.preview().status_code, 400)
+
+    def test_bundle_without_env_takes_the_env_file_of_the_same_commit(self):
+        self.release = artifact_payload(slug=SLUG, source_sha=SHA)["artifact"]
+        files = {"info.yaml": "deployment:\n  runtime_type: KUBERNETES\n  containers:\n    - name: app\n      build: ./app\n",
+                 "env/app.env": "PORT=8080\nFLAG=" + self.metadata["flag"] + "\n"}
+        reads = []
+
+        def snapshot(slug, revision=None):
+            reads.append((slug, revision))
+            return MemorySnapshot(slug, revision, files)
+
+        with override_settings(RELEASE_POLL_GITHUB_TOKEN="test-token"), \
+                patch("apps.instances.bundle_environment.RepositorySnapshot", side_effect=snapshot):
+            preview = self.preview()
+            self.assertEqual(preview.status_code, 200, preview.data)
+            self.assertEqual(preview.data["data"]["containers"][0]["env_file"], "env/app.env")
+            self.assertEqual((preview.data["data"]["containers"][0]["env_count"], preview.data["data"]["containers"][0]["secret_count"]), (1, 1))
+            response = self.import_body(self.body())
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(set(reads), {(SLUG, SHA)})
+        release = Challenge.objects.get(challenge_slug=SLUG).releases.get()
+        container = release.containers.get()
+        flag = RuntimeSecret.objects.get(challenge=release.challenge, name="flag")
+        self.assertEqual((container.env, container.secret_env), ({"PORT": "8080"}, {"FLAG": str(flag.pk)}))
+        self.assertEqual(release.repository_env, {"revision": SHA, "files": ["env/app.env"], "missing": []})
+        self.assertEqual(RuntimeSecret.objects.filter(challenge=release.challenge).count(), 1)

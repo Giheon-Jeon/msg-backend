@@ -373,6 +373,7 @@ def create_release(challenge, validated, created_by, derived_from=None):
         note=validated["note"],
         env_import_id=validated.get("env_import_id"),
         env_import_fingerprint=validated.get("env_import_fingerprint", ""),
+        repository_env=validated.get("repository_env", {}),
         created_by=created_by,
     )
     ReleaseContainer.objects.bulk_create(
@@ -498,6 +499,7 @@ def serialize_release(release, current_release_id=None, file_bundles=None):
         "is_current": release.release_id == current_release_id,
         "is_deployable": is_deployable(release),
         "note": release.note,
+        "repository_env": release.repository_env or None,
         "source_ref": release.source_ref,
         "created_at": isoformat_z(release.created_at),
     }

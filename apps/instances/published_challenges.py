@@ -18,8 +18,10 @@ from apps.challenge.models import Challenge
 from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.exceptions import APIError
 from apps.instances import poller, user_files
+from apps.instances.bundle_environment import environment_counts, fill_bundle_environment, read_bundle_environment
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
 from apps.instances.releases import ReleaseValidationError, create_release, validate_release_payload
+from apps.instances.repository_source import RepositorySourceUnavailable
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 
 NAME = re.compile(r"^(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)-(?P<run>[1-9][0-9]*)-[1-9][0-9]*-[a-f0-9]+-(?P<kind>publish|user-files)-bundle$")
@@ -186,6 +188,13 @@ def prepare_publication(artifact_id):
         release_validated = validate_release_payload({"artifact": release_data})
         if release_validated["runtime_type"] not in {"KUBERNETES", "DOCKER"}:
             raise ReleaseValidationError("VM 문제는 별도 배포 경로에서 관리해주세요")
+    environment = None
+    if release_validated:
+        # 발행 묶음에 환경변수가 없으면 같은 커밋의 env/<컨테이너>.env 를 넣는다
+        try:
+            environment = read_bundle_environment(release_validated, sha)
+        except RepositorySourceUnavailable:
+            raise PublishedImportError("REPOSITORY_SOURCE_UNAVAILABLE", "문제 저장소를 읽지 못해 환경변수를 확인하지 못했습니다 잠시 뒤 다시 시도해주세요", 503) from None
     if metadata["dynamic"] != bool(release_data):
         raise ReleaseValidationError("문제 실행 설정과 이미지 발행 여부가 일치하지 않습니다")
     if "user-files" in matching:
@@ -208,7 +217,7 @@ def prepare_publication(artifact_id):
     return {"artifact_id": artifact_id, "slug": slug, "source_sha": sha, "revision": revision,
             "run_id": run["id"], "metadata": metadata, "release": release_data,
             "file_manifest": manifest, "file_validated": file_validated, "archive": archive_bytes,
-            "artifacts": matching, "fingerprint": fingerprint}
+            "artifacts": matching, "fingerprint": fingerprint, "environment": environment}
 
 
 def existing_problem(prepared, lock=False):
@@ -260,7 +269,9 @@ def preview_publication(prepared, user):
         "flag_status": "mismatch" if challenge and not is_correct_flag(prepared["metadata"]["flag"], challenge.flag_hash) else "match" if challenge else "from_repository",
         "runtime_type": release["runtime_type"] if release else None,
         "containers": [{"name": item["name"], "image_ref": item["image"], "ports": item["ports"],
-                        "env_count": len(item.get("env", {})), "secret_count": len(item.get("secret_env", {}))} for item in release["workload"]["containers"]] if release else [],
+                        **(environment_counts(prepared.get("environment"), item["name"])
+                           or {"env_count": len(item.get("env", {})), "secret_count": len(item.get("secret_env", {}))})}
+                       for item in release["workload"]["containers"]] if release else [],
         "files": {"status": "available" if file_data and file_data["present"] else "none" if file_data else "pending",
                   "file_count": file_data["file_count"] if file_data else 0, "size_bytes": file_data["size_bytes"] if file_data else 0},
         "source_sha": prepared["source_sha"],
@@ -278,10 +289,14 @@ def _same_release(release, validated):
         return False
     for item in validated["containers"]:
         container = stored[item["name"]]
+        if container.image_ref != item["image_ref"] or container.ports != item["ports"]:
+            return False
+        # 저장소에서 채운 환경변수는 발행 묶음에 없으니 비교하지 않는다
+        if release.repository_env:
+            continue
         aliases = {str(secret.pk): secret.name for secret in RuntimeSecret.objects.filter(
             challenge=release.challenge, pk__in=container.secret_env.values())}
-        if (container.image_ref != item["image_ref"] or container.ports != item["ports"]
-                or container.env != item.get("env", {})
+        if (container.env != item.get("env", {})
                 or {key: aliases.get(value) for key, value in container.secret_env.items()} != item.get("secret_env", {})):
             return False
     return True
@@ -338,6 +353,8 @@ def save_publication(prepared, user, difficulty, update_metadata=False):
             elif ChallengeRelease.objects.filter(challenge=challenge, registry_revision=prepared["revision"]).exists():
                 raise PublishedImportError("PUBLICATION_CONFLICT", "이 발행번호의 원본 배포 버전을 찾지 못했습니다 배포 이력을 확인해주세요", 409)
             else:
+                if prepared.get("environment"):
+                    validated["repository_env"] = fill_bundle_environment(challenge, validated, prepared["environment"], user.login_id)
                 release = create_release(challenge, validated, user.login_id)
                 release_status = "registered"
         file_status = "pending"
