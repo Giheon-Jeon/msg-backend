@@ -1,5 +1,6 @@
 from django.utils import timezone
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, throttle_classes
+from apps.common.throttling import ReadApiThrottle
 from rest_framework.response import Response
 
 from .models import Contest
@@ -13,6 +14,7 @@ def format_duration(seconds):
 
 
 @api_view(["GET"])
+@throttle_classes([ReadApiThrottle])
 def contest_timer(request):
     contest = Contest.objects.filter(is_active=True).first()
     if contest is None:

@@ -1,5 +1,6 @@
 from decimal import Decimal
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, throttle_classes
+from apps.common.throttling import ReadApiThrottle
 from apps.accounts.models import Team
 from apps.challenge.models import Solve
 from apps.common.response import ok
@@ -130,6 +131,7 @@ def build_team_data(teams, solves_map):
 
 
 @api_view(["GET"])
+@throttle_classes([ReadApiThrottle])
 def leaderboard(request):
     solves_map = collect_solves_map()
     teams = list(Team.objects.filter(is_banned=False))
