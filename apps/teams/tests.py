@@ -79,7 +79,51 @@ class MyPageTests(TestCase):
     def test_qr_token_key_name(self):
         res = self.client.post("/api/v1/teams/me/qr_token")
         self.assertIn("payment_token", res.data["data"])
+        self.assertEqual(res.data["data"]["team_id"], str(self.team.pk))
+        self.assertNotIn("teamId", res.data["data"])
         self.assertNotIn("token", res.data["data"])  # 금지 필드
+
+    def test_qr_owner_uses_current_membership_with_old_access_token(self):
+        from apps.common.jwt import hash_token
+        from apps.teams.models import PaymentToken
+
+        User.objects.filter(pk=self.user.pk).update(team=self.other)
+        res = self.client.post("/api/v1/teams/me/qr_token")
+
+        self.assertEqual(res.status_code, 200)
+        token = PaymentToken.objects.get(
+            token_hash=hash_token(res.data["data"]["payment_token"])
+        )
+        self.assertEqual(token.team_id, self.other.pk)
+        self.assertEqual(res.data["data"]["team_id"], str(token.team_id))
+
+    def test_qr_owner_stays_with_issued_token_when_membership_changes(self):
+        from unittest.mock import patch
+
+        from apps.common.jwt import hash_token
+        from apps.teams.models import PaymentToken
+
+        create = PaymentToken.objects.create
+
+        def create_then_reassign(**kwargs):
+            token = create(**kwargs)
+            User.objects.filter(pk=self.user.pk).update(team=self.other)
+            return token
+
+        with patch(
+            "apps.teams.views.PaymentToken.objects.create",
+            side_effect=create_then_reassign,
+        ):
+            res = self.client.post("/api/v1/teams/me/qr_token")
+
+        self.assertEqual(res.status_code, 200)
+        token = PaymentToken.objects.get(
+            token_hash=hash_token(res.data["data"]["payment_token"])
+        )
+        self.assertEqual(token.team_id, self.team.pk)
+        self.assertEqual(res.data["data"]["team_id"], str(token.team_id))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.team_id, self.other.pk)
 
     def test_qr_token_replaces_previous(self):
         from apps.teams.models import PaymentToken, PaymentTokenStatus
