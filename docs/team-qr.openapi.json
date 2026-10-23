@@ -1,0 +1,47 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Team payment QR", "version": "1.1.0" },
+  "paths": {
+    "/api/v1/teams/me/qr_token": {
+      "post": {
+        "summary": "현재 팀의 결제 QR 발급",
+        "description": "team_id는 실제로 저장한 결제 토큰의 소유 팀이다 발급 전후 소속이 바뀌어도 응답을 나중에 조회한 소속으로 덮어쓰지 않는다 프론트는 현재 화면의 팀과 다르면 QR을 표시하지 않는다",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "발급 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["code", "data"],
+                  "properties": {
+                    "code": { "type": "string" },
+                    "message": { "type": "string" },
+                    "data": {
+                      "type": "object",
+                      "required": ["team_id", "payment_token", "expires_at"],
+                      "properties": {
+                        "team_id": { "type": "string", "format": "uuid" },
+                        "payment_token": { "type": "string", "minLength": 1 },
+                        "expires_at": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "인증 필요" },
+          "403": { "description": "밴된 팀은 발급 불가" },
+          "404": { "description": "소속 팀 없음" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    }
+  }
+}

@@ -136,7 +136,13 @@ def qr_token(request):
                 invalidated_by_token=new_token
             )
 
-    return ok({"payment_token": raw_token, "expires_at": expires_at})
+    return ok(
+        {
+            "team_id": str(new_token.team_id),
+            "payment_token": raw_token,
+            "expires_at": expires_at,
+        }
+    )
 
 
 @api_view(["GET"])
