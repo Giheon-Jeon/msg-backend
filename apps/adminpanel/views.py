@@ -1289,7 +1289,7 @@ def dashboard(request):
 CHALLENGE_SORT = {
     "running": "-running_instance_count",
     "title": "title",
-    "score": "-score",
+    "score": "-current_score",
 }
 
 
@@ -1485,7 +1485,7 @@ def challenge_list(request):
             "title": c.title,
             "category": c.category,
             "difficulty": c.difficulty,
-            "score": num(c.score),
+            "score": num(c.current_score),
             "is_published": c.is_published,
             "solved_team_count": c.solved_team_count,
             "running_instance_count": c.running_instance_count,
