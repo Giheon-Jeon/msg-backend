@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from decimal import Decimal
 
 from rest_framework import serializers
@@ -56,3 +57,12 @@ class SignatureSubmitSerializer(serializers.Serializer):
         max_length=512,
         trim_whitespace=False,
     )
+
+    def to_internal_value(self, data):
+        if (
+            isinstance(data, Mapping)
+            and "flag" in data
+            and not isinstance(data["flag"], str)
+        ):
+            raise serializers.ValidationError({"flag": "플래그는 문자열이어야 합니다"})
+        return super().to_internal_value(data)

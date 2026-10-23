@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
 from apps.accounts.models import Team
+from apps.adminpanel.models import setting_values
 from apps.challenge.services import get_team_total_score, hash_flag, is_correct_flag
 from apps.common.exceptions import UserHasNoTeam
 from apps.common.permissions import IsAuthenticated
@@ -22,10 +23,6 @@ from .models import (
     SignatureSubmissionLock,
 )
 from .serializers import SignatureSubmitSerializer
-
-
-MAX_FAILED_ATTEMPTS = 3
-SUBMISSION_LOCK_SECONDS = 30
 
 
 def _request_team(request):
@@ -153,7 +150,7 @@ def signature_submit(request, signature_id):
             )
             return fail(
                 "TOO_MANY_ATTEMPTS",
-                "오답을 3회 연속 제출했습니다. 잠시 후 다시 시도해주세요.",
+                f"제출이 잠겨 있습니다. {retry_after_seconds}초 후 다시 시도해주세요.",
                 429,
                 {"retry_after_seconds": retry_after_seconds},
             )
@@ -163,18 +160,20 @@ def signature_submit(request, signature_id):
             submission_lock.locked_until = None
 
         if not is_correct_flag(submitted_flag, challenge.flag_hash):
+            max_attempts, lock_seconds = setting_values(
+                "flag.max_attempts", "flag.lock_seconds"
+            )
             submission_lock.failed_count += 1
             submission_lock.last_failed_at = now
 
-            if submission_lock.failed_count >= MAX_FAILED_ATTEMPTS:
-                submission_lock.locked_until = now + timedelta(
-                    seconds=SUBMISSION_LOCK_SECONDS
-                )
+            if submission_lock.failed_count >= max_attempts:
+                submission_lock.locked_until = now + timedelta(seconds=lock_seconds)
                 response = fail(
                     "TOO_MANY_ATTEMPTS",
-                    "오답을 3회 연속 제출했습니다. 30초 후 다시 시도해주세요.",
+                    f"오답을 {max_attempts}회 연속 제출했습니다. "
+                    f"{lock_seconds}초 후 다시 시도해주세요.",
                     429,
-                    {"retry_after_seconds": SUBMISSION_LOCK_SECONDS},
+                    {"retry_after_seconds": lock_seconds},
                 )
             else:
                 response = fail("INCORRECT_FLAG", "틀린 플래그입니다.", 200)
