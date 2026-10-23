@@ -3,6 +3,13 @@ from decimal import Decimal
 from rest_framework import serializers
 
 
+class SignatureListQuerySerializer(serializers.Serializer):
+    search = serializers.CharField(max_length=200, allow_blank=True, default="")
+    sort = serializers.ChoiceField(choices=("club", "title", "score", "solved"), default="club")
+    page = serializers.IntegerField(min_value=1, max_value=10000, default=1)
+    size = serializers.IntegerField(min_value=1, max_value=100, default=50)
+
+
 class SignatureCreateSerializer(serializers.Serializer):
     club_id = serializers.UUIDField()
     title = serializers.CharField(max_length=200, allow_blank=False)
