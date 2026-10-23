@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
@@ -124,6 +124,46 @@ CACHES = {
         },
     }
 }
+
+# Migration jobs can enable PostgreSQL TLS alone without Redis credentials.
+_tls_required = os.getenv("DATASTORE_TLS_REQUIRED", "False").lower()
+if _tls_required not in {"true", "false"}:
+    raise ImproperlyConfigured("DATASTORE_TLS_REQUIRED must be True or False")
+DATASTORE_TLS_REQUIRED = _tls_required == "true"
+_pg_sslmode = os.getenv("POSTGRES_SSLMODE", "").strip()
+_pg_ca = os.getenv("POSTGRES_SSLROOTCERT", "").strip()
+if DATASTORE_TLS_REQUIRED or _pg_sslmode or _pg_ca:
+    if _pg_sslmode != "verify-full":
+        raise ImproperlyConfigured("POSTGRES_SSLMODE must be verify-full for TLS")
+    if not _pg_ca or not Path(_pg_ca).is_file():
+        raise ImproperlyConfigured("POSTGRES_SSLROOTCERT must name an existing CA file")
+    DATABASES["default"]["OPTIONS"] = {
+        "sslmode": "verify-full",
+        "sslrootcert": _pg_ca,
+    }
+
+_redis_ca = os.getenv("REDIS_SSL_CA_CERTS", "").strip()
+try:
+    _redis_url = urlsplit(CACHES["default"]["LOCATION"])
+    _redis_url.port
+except ValueError:
+    raise ImproperlyConfigured("REDIS_URL is invalid") from None
+if DATASTORE_TLS_REQUIRED or _redis_ca or _redis_url.scheme == "rediss":
+    if _redis_url.scheme != "rediss" or not _redis_url.hostname:
+        raise ImproperlyConfigured("REDIS_URL must use rediss:// with a host for TLS")
+    if not _redis_ca or not Path(_redis_ca).is_file():
+        raise ImproperlyConfigured("REDIS_SSL_CA_CERTS must name an existing CA file")
+    # redis-py gives URL query options priority over connection pool kwargs.
+    if any(key.startswith("ssl_") for key, _ in parse_qsl(_redis_url.query)):
+        raise ImproperlyConfigured(
+            "Configure Redis TLS through environment variables, not REDIS_URL query options"
+        )
+    CACHES["default"]["OPTIONS"]["CONNECTION_POOL_KWARGS"] = {
+        "ssl_cert_reqs": "required",
+        "ssl_ca_certs": _redis_ca,
+        "ssl_check_hostname": True,
+    }
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
