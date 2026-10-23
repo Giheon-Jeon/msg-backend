@@ -6,6 +6,9 @@
 # 2026-08-16 로그인(/api/v1/auth/login), 마이페이지(/api/v1/teams/me, .../qr_token)를
 # 직접 확인해 board/KOTH뿐 아니라 구현 완료된 API 전체가 이미 code/message/data를
 # 일관되게 쓰고 있음을 확인해 다시 켠다.
+# 단, /healthz 는 배포 헬스체크 전용이라 공통 봉투 없이 {status, database, cache} 평면 JSON을
+# 반환한다(정상 200, 장애 503). 이 검사는 API명세서의 Response를 대상으로 하므로 healthz 명세에도
+# 같은 예외를 적어둔다.
 envelope_keys: [code, message, data]
 # tile은 확정 보드 규칙에서 cell로 통일한 옛 용어라 명세에 남아 있으면 안 된다.
 forbidden_terms: [tile]

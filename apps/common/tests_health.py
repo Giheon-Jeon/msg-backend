@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from rest_framework.test import APIClient
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
@@ -43,3 +43,19 @@ class HealthzTests(TestCase):
         self.assertEqual(body["status"], "down")
         self.assertEqual(body["database"], "ok")
         self.assertEqual(body["cache"], "down")
+
+    def test_unsafe_methods_return_405_even_with_csrf_checks(self):
+        # 실제 요청처럼 CSRF 검사를 켜도 GET·HEAD 외 메서드는 405로 거절하고 점검을 실행하지 않는다
+        client = Client(enforce_csrf_checks=True)
+        for method in ("post", "put", "patch", "delete"):
+            with self.subTest(method=method):
+                with patch("apps.common.health._check_database") as check_db:
+                    res = getattr(client, method)("/healthz")
+                self.assertEqual(res.status_code, 405)
+                self.assertEqual(res["Allow"], "GET, HEAD")
+                check_db.assert_not_called()
+
+    def test_head_is_allowed_for_monitoring(self):
+        # 로드밸런서·모니터링 도구의 HEAD 요청은 허용한다
+        res = self.client.head("/healthz")
+        self.assertEqual(res.status_code, 200)
