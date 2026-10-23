@@ -34,6 +34,7 @@ from apps.challenge.models import Challenge, Solve
 from apps.challenge.services import (
     get_team_total_score,
     hash_flag,
+    is_correct_flag,
     update_dynamic_score_and_team_scores,
 )
 from apps.board.models import (
@@ -491,14 +492,15 @@ def challenge_visibility(request, challenge_id):
             affected_team_count = TeamChallengeAccess.objects.filter(
                 challenge=challenge
             ).count()
-            _record_event(
-                AdminEvent.EventType.CHALLENGE_VISIBILITY_CHANGED,
-                f"문제 {'공개' if is_published else '비공개'} 전환"
-                f" (영향 팀 {affected_team_count}): {reason}",
-                request.user.login_id,
-                severity=AdminEvent.Severity.WARNING,
-                challenge=challenge,
-            )
+            if previous != is_published:
+                _record_event(
+                    AdminEvent.EventType.CHALLENGE_VISIBILITY_CHANGED,
+                    f"문제 {'공개' if is_published else '비공개'} 전환"
+                    f" (is_published: {previous} -> {is_published}, 영향 팀 {affected_team_count}): {reason}",
+                    request.user.login_id,
+                    severity=AdminEvent.Severity.WARNING,
+                    challenge=challenge,
+                )
     except (Challenge.DoesNotExist, ValidationError, ValueError):
         return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
 
@@ -1399,6 +1401,8 @@ def challenge_detail(request, challenge_id):
         values = serializer.validated_data
 
         update_fields = []
+        changes = []
+        previous_current_score = num(challenge.current_score)
         for field in (
             "title",
             "category",
@@ -1408,16 +1412,24 @@ def challenge_detail(request, challenge_id):
             "minimum_score",
             "decay",
         ):
-            if field in values:
+            if field in values and values[field] != getattr(challenge, field):
+                if field in ("title", "description"):
+                    changes.append(f"{field} 변경")
+                else:
+                    previous = getattr(challenge, field)
+                    if field in ("initial_score", "minimum_score", "decay"):
+                        previous = num(previous)
+                    changes.append(f"{field}: {previous} -> {values[field]}")
                 setattr(challenge, field, values[field])
                 update_fields.append(field)
 
-        if "flag" in values:
+        if "flag" in values and not is_correct_flag(values["flag"], challenge.flag_hash):
             challenge.flag_hash = hash_flag(values["flag"])
             update_fields.append("flag_hash")
+            changes.append("flag 변경")
 
         scoring_changed = any(
-            field in values for field in ("initial_score", "minimum_score", "decay")
+            field in update_fields for field in ("initial_score", "minimum_score", "decay")
         )
         if scoring_changed:
             challenge.score = challenge.initial_score
@@ -1426,6 +1438,18 @@ def challenge_detail(request, challenge_id):
         challenge.save(update_fields=update_fields)
         if scoring_changed:
             update_dynamic_score_and_team_scores(challenge)
+            changes.append(f"current_score: {previous_current_score} -> {num(challenge.current_score)}")
+        if changes:
+            solved_teams = Solve.objects.filter(challenge=challenge).count()
+            access_teams = TeamChallengeAccess.objects.filter(challenge=challenge).count()
+            _record_event(
+                AdminEvent.EventType.CHALLENGE_UPDATED,
+                f"문제 수정 {challenge.pk} (풀이 팀 {solved_teams}, 접근 팀 {access_teams}): "
+                + "; ".join(changes),
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
+                challenge=challenge,
+            )
 
     return ok(_serialize_challenge(challenge), message="문제가 수정되었습니다.")
 
