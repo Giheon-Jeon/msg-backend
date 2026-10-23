@@ -20,7 +20,12 @@ from apps.instances.services import SchedulerError, isoformat_z
 NOW = datetime(2026, 10, 23, 0, 0, tzinfo=datetime_timezone.utc)
 
 
-@override_settings(CACHES=instance_tests.LOCMEM, SECURE_SSL_REDIRECT=False, INSTANCE_EXTEND_MINUTES=30)
+@override_settings(
+    CACHES=instance_tests.LOCMEM,
+    SECURE_SSL_REDIRECT=False,
+    SCHEDULER_API_TOKEN="test-scheduler-token",
+    INSTANCE_EXTEND_MINUTES=30,
+)
 class InstanceExtendCommitTests(TransactionTestCase):
     def setUp(self):
         cache.clear()
