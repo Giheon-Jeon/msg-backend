@@ -129,7 +129,7 @@ def idempotent(view_method):
                     ]
                 )
 
-        _cache_set(cache_key, response, fingerprint)
+        transaction.on_commit(lambda: _cache_set(cache_key, response, fingerprint))
         return response
 
     return wrapper

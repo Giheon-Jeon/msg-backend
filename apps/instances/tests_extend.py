@@ -5,7 +5,7 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.db import close_old_connections, connection, connections
+from django.db import DatabaseError, close_old_connections, connection, connections, transaction
 from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -18,6 +18,45 @@ from apps.instances.services import SchedulerError, isoformat_z
 
 
 NOW = datetime(2026, 10, 23, 0, 0, tzinfo=datetime_timezone.utc)
+
+
+@override_settings(CACHES=instance_tests.LOCMEM, SECURE_SSL_REDIRECT=False, INSTANCE_EXTEND_MINUTES=30)
+class InstanceExtendCommitTests(TransactionTestCase):
+    def setUp(self):
+        cache.clear()
+        instance_tests.InstanceLockTests.setUp(self)
+
+    auth = instance_tests.InstanceLockTests.auth
+
+    @patch("apps.instances.views.call_scheduler_extend")
+    def test_commit_failure_does_not_cache_success(self, remote):
+        instance = InstanceExtendTests.instance(self)
+        remote.return_value = {"expires_at": isoformat_z(NOW + timedelta(hours=1))}
+        key = "commit-failure"
+        cache_key = f"idem:{self.user.pk}:POST:/api/v1/instances/{instance.pk}/extend:{key}"
+        with patch.object(connection, "commit", side_effect=DatabaseError("injected commit failure")):
+            response = InstanceExtendTests.extend(self, instance, key=key)
+        self.assertEqual(response.status_code, 500)
+        self.assertIsNone(cache.get(cache_key))
+        self.assertFalse(IdempotencyRequest.objects.exists())
+        instance.refresh_from_db()
+        self.assertEqual(instance.extend_count, 0)
+        retried = InstanceExtendTests.extend(self, instance, key=key)
+        self.assertEqual(retried.status_code, 202, retried.data)
+        self.assertEqual(remote.call_count, 2)
+        self.assertEqual(cache.get(cache_key)["status"], 202)
+
+    @patch("apps.instances.views.call_scheduler_extend")
+    def test_success_is_cached_only_after_outermost_commit(self, remote):
+        instance = InstanceExtendTests.instance(self)
+        remote.return_value = {"expires_at": isoformat_z(NOW + timedelta(hours=1))}
+        key = "outer-commit"
+        cache_key = f"idem:{self.user.pk}:POST:/api/v1/instances/{instance.pk}/extend:{key}"
+        with transaction.atomic():
+            response = InstanceExtendTests.extend(self, instance, key=key)
+            self.assertEqual(response.status_code, 202, response.data)
+            self.assertIsNone(cache.get(cache_key))
+        self.assertEqual(cache.get(cache_key)["status"], 202)
 
 
 @override_settings(
