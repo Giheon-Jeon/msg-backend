@@ -1,3 +1,4 @@
+import json
 import uuid
 from unittest.mock import patch
 
@@ -501,6 +502,116 @@ class ReleaseActivateTests(ReleaseTestBase):
         res = self.activate(release_id)
         self.assertEqual(res.status_code, 200)
         self.assertIsNone(res.data["data"]["previous_release_id"])
+
+    def register_two(self):
+        first = self.register(revision=1).data["data"]["release_id"]
+        second = self.register(
+            revision=2,
+            containers=[
+                {
+                    "name": "app",
+                    "image": f"ghcr.io/msg-ctf/challenges/web-basic/app@sha256:{DIGEST_B}",
+                    "ports": [{"port": 8080, "public": True}],
+                }
+            ],
+        ).data["data"]["release_id"]
+        return first, second
+
+    def release_events(self):
+        from apps.adminpanel.models import AdminEvent
+
+        return list(
+            AdminEvent.objects.filter(type="CHALLENGE_RELEASE_ACTIVATED").order_by(
+                "created_at"
+            )
+        )
+
+    def test_activate_records_switch_and_rollback_events(self):
+        # 전환마다 처리자와 버전을 남기고, 옛 버전으로 가면 롤백으로 표시한다
+        self.auth("root")
+        first, second = self.register_two()
+        self.activate(first)
+        self.activate(second)
+        res = self.client.post(
+            f"{self.base_url}/{first}/activate",
+            {"reason": "v2 플래그 오류"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+
+        messages = [(e.message, e.severity, e.actor) for e in self.release_events()]
+        self.assertEqual(
+            messages,
+            [
+                ("릴리스 전환: 없음 → v1", "INFO", "root"),
+                ("릴리스 전환: v1 → v2", "INFO", "root"),
+                ("릴리스 롤백: v2 → v1: v2 플래그 오류", "WARNING", "root"),
+            ],
+        )
+        challenge_ids = {e.challenge_id for e in self.release_events()}
+        self.assertEqual(challenge_ids, {self.challenge.challenge_id})
+
+    def test_activate_same_release_records_nothing(self):
+        self.auth("root")
+        release_id = self.register(revision=1).data["data"]["release_id"]
+        self.activate(release_id)
+        self.activate(release_id)
+        self.assertEqual(len(self.release_events()), 1)
+
+    def test_activate_rejects_bad_reason_without_switching(self):
+        self.auth("root")
+        first, second = self.register_two()
+        self.activate(first)
+        for body in ({"reason": 123}, {"reason": "  "}, {"reason": "가" * 501}):
+            with self.subTest(body=body):
+                res = self.client.post(
+                    f"{self.base_url}/{second}/activate", body, format="json"
+                )
+                self.assertEqual(res.status_code, 400)
+        res = self.client.post(
+            f"{self.base_url}/{second}/activate", "[]", content_type="application/json"
+        )
+        self.assertEqual(res.status_code, 400)
+
+        config = ChallengeRuntimeConfig.objects.get(challenge=self.challenge)
+        self.assertEqual(str(config.current_release_id), first)
+        self.assertEqual(len(self.release_events()), 1)
+
+    def test_activate_rejects_invalid_reason_characters_before_database_changes(self):
+        self.auth("root")
+        first, second = self.register_two()
+        self.activate(first)
+        first_approval = ChallengeRelease.objects.get(pk=first).approved_at
+        for reason in ("복구\x00사유", "\x00", "복구\ud800사유", "복구\udfff사유"):
+            with self.subTest(reason=ascii(reason)):
+                response = self.client.post(
+                    f"{self.base_url}/{second}/activate",
+                    json.dumps({"reason": reason}),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["code"], "INVALID_REQUEST")
+                config = ChallengeRuntimeConfig.objects.get(challenge=self.challenge)
+                self.assertEqual(str(config.current_release_id), first)
+                self.assertIsNone(ChallengeRelease.objects.get(pk=second).approved_at)
+                self.assertEqual(len(self.release_events()), 1)
+        self.assertEqual(ChallengeRelease.objects.get(pk=first).approved_at, first_approval)
+
+    def test_activate_accepts_valid_unicode_and_optional_reason(self):
+        self.auth("root")
+        first, second = self.register_two()
+        response = self.client.post(
+            f"{self.base_url}/{first}/activate", {"reason": None}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        reason = "한" * 499 + "🚀"
+        response = self.client.post(
+            f"{self.base_url}/{second}/activate",
+            json.dumps({"reason": reason}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.release_events()[-1].message, f"릴리스 전환: v1 → v2: {reason}")
 
     def test_activate_accepts_multi_container_release(self):
         # 공개 포트가 하나인 멀티 컨테이너 릴리스도 현재 릴리스로 전환할 수 있다
