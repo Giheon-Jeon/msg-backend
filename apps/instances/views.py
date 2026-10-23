@@ -1,8 +1,12 @@
 import uuid
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.views import APIView
 
+from apps.board.idempotency import idempotent
 from apps.board.models import TeamChallengeAccess
 from apps.common.permissions import IsAuthenticated
 from apps.challenge.models import Challenge
@@ -24,6 +28,7 @@ from apps.instances.services import (
     create_instance_from_scheduler,
     get_challenge_runtime_config,
     mark_instance_replaced,
+    parse_scheduler_datetime,
     scheduler_auth_header,
     serialize_instance,
     update_instance_from_scheduler,
@@ -277,37 +282,73 @@ class InstanceExtendView(APIView):
             ):
                 return fail("FORBIDDEN", "권한이 필요합니다", 403)
 
-            if instance.status not in EXTENDABLE_INSTANCE_STATUSES:
-                return fail(
-                    "INVALID_STATE_TRANSITION",
-                    "현재 상태에서는 요청을 처리할 수 없습니다.",
-                    400,
-                )
+            # Recheck ownership before replay; a user may have changed teams.
+            if request.headers.get("Idempotency-Key") is not None:
+                return self._extend_idempotently(request, instance)
+            return self._extend(request, instance)
 
-            if instance.extend_count >= MAX_EXTEND_COUNT:
-                return fail(
-                    "HARD_TIMEOUT_EXCEEDED",
-                    "더 이상 인스턴스 시간을 연장할 수 없습니다.",
-                    400,
-                )
+    @idempotent
+    def _extend_idempotently(self, request, instance):
+        return self._extend(request, instance)
 
-            try:
-                scheduler_data = call_scheduler_extend(
-                    instance, scheduler_auth_header(request)
-                )
-            except SchedulerError as error:
-                return fail(error.code, error.message, error.status_code)
+    def _extend(self, request, instance):
+        if instance.status not in EXTENDABLE_INSTANCE_STATUSES:
+            return fail(
+                "INVALID_STATE_TRANSITION",
+                "현재 상태에서는 요청을 처리할 수 없습니다.",
+                400,
+            )
+        if instance.extend_count >= MAX_EXTEND_COUNT:
+            return fail(
+                "HARD_TIMEOUT_EXCEEDED", "더 이상 인스턴스 시간을 연장할 수 없습니다.", 400,
+            )
+        if instance.expires_at is None or instance.hard_expires_at is None:
+            return fail(
+                "INVALID_STATE_TRANSITION", "인스턴스 만료 시간을 확인할 수 없습니다.", 400,
+            )
+        now = timezone.now()
+        if instance.expires_at <= now:
+            return fail(
+                "INVALID_STATE_TRANSITION", "이미 만료된 인스턴스는 연장할 수 없습니다.", 400,
+            )
+        requested_expiry = instance.expires_at + timedelta(minutes=settings.INSTANCE_EXTEND_MINUTES)
+        if instance.hard_expires_at <= now or requested_expiry > instance.hard_expires_at:
+            return fail(
+                "HARD_TIMEOUT_EXCEEDED", "인스턴스 최대 수명을 초과해 연장할 수 없습니다.", 400,
+            )
 
-            try:
-                update_instance_from_scheduler(instance, scheduler_data)
-            except SchedulerError as error:
-                return fail(error.code, error.message, error.status_code)
-            instance.extend_count += 1
-            instance.save(update_fields=["extend_count", "updated_at"])
-            response_data = serialize_instance(instance)
+        try:
+            scheduler_data = call_scheduler_extend(instance, scheduler_auth_header(request))
+            if not isinstance(scheduler_data, dict):
+                raise ValueError()
+            expires_at = parse_scheduler_datetime(scheduler_data.get("expires_at"))
+            hard_expires_at = (
+                parse_scheduler_datetime(scheduler_data["hard_expires_at"])
+                if "hard_expires_at" in scheduler_data else instance.hard_expires_at
+            )
+            if (
+                expires_at is None or timezone.is_naive(expires_at)
+                or expires_at <= instance.expires_at
+                or expires_at <= timezone.now()
+                or expires_at > instance.hard_expires_at
+                or hard_expires_at != instance.hard_expires_at
+                or scheduler_data.get("status", instance.status) not in EXTENDABLE_INSTANCE_STATUSES
+            ):
+                raise ValueError()
+        except (TypeError, ValueError, OverflowError):
+            return fail("SCHEDULER_UNAVAILABLE", "Scheduler 응답의 연장 시간이 올바르지 않습니다.", 503)
+        except SchedulerError as error:
+            return fail(error.code, error.message, error.status_code)
+
+        try:
+            update_instance_from_scheduler(instance, scheduler_data)
+        except SchedulerError as error:
+            return fail(error.code, error.message, error.status_code)
+        instance.extend_count += 1
+        instance.save(update_fields=["extend_count", "updated_at"])
 
         return ok(
-            response_data,
+            serialize_instance(instance),
             message="TTL 연장 요청이 접수되었습니다.",
             status=202,
         )
