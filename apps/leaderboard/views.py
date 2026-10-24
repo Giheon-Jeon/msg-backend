@@ -1,4 +1,6 @@
 from decimal import Decimal
+
+from django.db import connection, transaction
 from rest_framework.decorators import api_view
 from apps.accounts.models import Team
 from apps.challenge.models import Solve
@@ -129,10 +131,26 @@ def build_team_data(teams, solves_map):
     return team_data
 
 
+def read_leaderboard_snapshot():
+    """제오파디·KOTH·시그니처·라인 독점 점수와 팀 목록을 같은 시점의 값으로 읽는다.
+
+    점수를 종류별로 여러 쿼리에 나눠 읽으므로 기본 격리 수준(READ COMMITTED)에서는
+    쿼리 사이에 커밋된 변경이 섞여 실제로 없던 순위가 보일 수 있다. 바깥 트랜잭션이
+    없으면 읽기 전용 REPEATABLE READ로 시작해 모든 쿼리가 같은 스냅샷을 보게 한다.
+    """
+    use_snapshot = connection.vendor == "postgresql" and not connection.in_atomic_block
+    with transaction.atomic():
+        if use_snapshot:
+            with connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        solves_map = collect_solves_map()
+        teams = list(Team.objects.filter(is_banned=False))
+    return solves_map, teams
+
+
 @api_view(["GET"])
 def leaderboard(request):
-    solves_map = collect_solves_map()
-    teams = list(Team.objects.filter(is_banned=False))
+    solves_map, teams = read_leaderboard_snapshot()
 
     rankings = build_team_ranking(
         build_team_data(teams, solves_map), limit=TOP_TEAM_COUNT
