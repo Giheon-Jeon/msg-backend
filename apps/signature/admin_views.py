@@ -1,6 +1,6 @@
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework.decorators import api_view, permission_classes
 
 from apps.common.exceptions import ClubNotFound
@@ -15,6 +15,7 @@ from .models import SignatureChallenge, SignatureSolve
 from .drafts import missing_signature_fields
 from .serializers import (
     SignatureCreateSerializer,
+    SignatureListQuerySerializer,
     SignaturePublishSerializer,
     SignatureUpdateSerializer,
 )
@@ -55,17 +56,33 @@ def _get_club(club_id):
 @permission_classes([IsAdmin])
 def signature_collection(request):
     if request.method == "GET":
+        query = SignatureListQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        params = query.validated_data
         challenges = (
             SignatureChallenge.objects.select_related("club")
             .annotate(solved_team_count=Count("solves"))
-            .order_by("club__name", "signature_id")
+        )
+        if params["search"]:
+            challenges = challenges.filter(
+                Q(title__icontains=params["search"]) | Q(club__name__icontains=params["search"])
+            )
+        sort_field = {
+            "club": "club__name", "title": "title", "score": "-score", "solved": "-solved_team_count",
+        }[params["sort"]]
+        total_count = challenges.count()
+        page, size = params["page"], params["size"]
+        offset = (page - 1) * size
+        selected = (
+            challenges.order_by(sort_field, "club__name", "signature_id")[offset:offset + size]
+            if offset < total_count else []
         )
         rows = [
             _serialize_signature(challenge, include_solved_count=True)
-            for challenge in challenges
+            for challenge in selected
         ]
         return ok(
-            {"signatures": rows, "total_count": len(rows)},
+            {"signatures": rows, "total_count": total_count, "page": page, "size": size},
             message="시그니처 문제 목록 조회 성공",
         )
 
