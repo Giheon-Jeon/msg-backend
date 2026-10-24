@@ -97,11 +97,13 @@ from apps.instances.services import (
     RESETTABLE_INSTANCE_STATUSES,
     SchedulerError,
     call_scheduler_delete,
+    call_scheduler_force_cleanup,
     call_scheduler_reset,
     create_instance_from_scheduler,
     isoformat_z,
     mark_instance_replaced,
     scheduler_auth_header,
+    update_instance_from_scheduler,
 )
 from .resource_broker import fetch_resource_targets
 from .node_allocation import enrich_allocations
@@ -958,6 +960,7 @@ def instance_list(request):
             "challenge_title": r.challenge.title,
             "status": r.status,
             "created_at": isoformat_z(r.created_at),
+            "updated_at": isoformat_z(r.updated_at),
             "expires_at": isoformat_z(r.expires_at),
         }
         for r in rows
@@ -997,7 +1000,11 @@ def instance_force_delete(request, instance_id):
         if instance is None:
             return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
 
-        if instance.status not in DELETABLE_INSTANCE_STATUSES:
+        cleanup = instance.status == InstanceStatus.CLEANUP_PENDING
+        if not cleanup and instance.status not in DELETABLE_INSTANCE_STATUSES:
+            if instance.status not in (InstanceStatus.STOPPED, InstanceStatus.FAILED, InstanceStatus.EXPIRED, InstanceStatus.CLEANED):
+                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 강제 종료할 수 없습니다", 400,
+                            data={"instance_id": str(instance.pk), "status": instance.status})
             return fail(
                 "INSTANCE_ALREADY_TERMINATED",
                 "이미 종료된 인스턴스입니다",
@@ -1009,13 +1016,18 @@ def instance_force_delete(request, instance_id):
             )
 
         try:
-            call_scheduler_delete(instance, scheduler_auth_header(request))
+            if cleanup:
+                data = call_scheduler_force_cleanup(instance, scheduler_auth_header(request))
+                update_instance_from_scheduler(instance, data)
+            else:
+                call_scheduler_delete(instance, scheduler_auth_header(request))
         except SchedulerError as error:
             return fail(error.code, error.message, error.status_code)
 
-        instance.status = InstanceStatus.STOPPING
-        instance.delete_reason = DeleteReason.ADMIN_FORCED
-        instance.save(update_fields=["status", "delete_reason", "updated_at"])
+        if not cleanup:
+            instance.status = InstanceStatus.STOPPING
+            instance.delete_reason = DeleteReason.ADMIN_FORCED
+            instance.save(update_fields=["status", "delete_reason", "updated_at"])
         _record_event(
             AdminEvent.EventType.INSTANCE_FORCED,
             "인스턴스 강제 종료",
@@ -1035,8 +1047,8 @@ def instance_force_delete(request, instance_id):
             "forced_by": request.user.login_id,
             "forced_at": isoformat_z(now),
         },
-        message="인스턴스 종료 요청이 접수되었습니다.",
-        status=202,
+        message="인스턴스 강제 정리가 완료되었습니다" if cleanup else "인스턴스 종료 요청이 접수되었습니다.",
+        status=200 if cleanup else 202,
     )
 
 
