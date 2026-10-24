@@ -1837,6 +1837,51 @@ class AdminChallengeTests(TestCase):
         self.assertEqual(row["solved_team_count"], 2)
         self.assertTrue(row["is_published"])
 
+    def test_challenge_list_score_tracks_dynamic_score_without_changing_detail(self):
+        from apps.challenge.services import update_dynamic_score_and_team_scores
+
+        challenge = Challenge.objects.create(
+            title="Dynamic", category="WEB", difficulty="EASY", score=1000,
+            initial_score=1000, minimum_score=100, decay=1,
+            current_score=1000, flag_hash="unused",
+        )
+        Solve.objects.create(
+            team=self.team, challenge=challenge, solved_by_user=self.player,
+            earned_score=1000, earned_mileage=30,
+        )
+        update_dynamic_score_and_team_scores(challenge)
+        challenge.refresh_from_db()
+        self.assertLess(challenge.current_score, challenge.initial_score)
+
+        for params in ({}, {"sort": "title"}, {"sort": "score"}):
+            response = self.client.get("/api/v1/admin/challenges", params)
+            self.assertEqual(response.status_code, 200)
+            row = response.data["data"]["challenges"][0]
+            self.assertEqual(row["score"], challenge.current_score)
+            self.assertEqual(row["solved_team_count"], 1)
+
+        detail = self.client.get(f"/api/v1/admin/challenges/{challenge.pk}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["data"]["score"], 1000)
+        self.assertEqual(detail.data["data"]["initial_score"], 1000)
+        self.assertEqual(detail.data["data"]["current_score"], challenge.current_score)
+        self.assertEqual(Challenge.objects.get(pk=challenge.pk).score, 1000)
+
+    def test_challenge_list_sorts_current_score_before_paginating(self):
+        for title, initial, current in (("Alpha", 1000, 100), ("Bravo", 500, 400), ("Charlie", 900, 400)):
+            Challenge.objects.create(
+                title=title, category="WEB", difficulty="EASY", score=initial,
+                initial_score=initial, current_score=current, flag_hash="unused",
+            )
+        rows = []
+        for page in range(1, 4):
+            response = self.client.get("/api/v1/admin/challenges", {"sort": "score", "page": page, "size": 1})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["data"]["total_count"], 3)
+            rows.extend(response.data["data"]["challenges"])
+        self.assertEqual([row["title"] for row in rows], ["Bravo", "Charlie", "Alpha"])
+        self.assertEqual([row["score"] for row in rows], [400, 400, 100])
+
     def test_challenge_list_filters(self):
         from apps.challenge.models import Challenge
 
