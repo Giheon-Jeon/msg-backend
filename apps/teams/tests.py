@@ -53,7 +53,13 @@ class MyPageTests(TestCase):
         self.assertEqual(res.data["data"]["team_name"], "남의팀")
 
     def test_team_me_includes_line_monopoly_score(self):
-        Team.objects.filter(pk=self.team.pk).update(team_score=500)
+        challenge = self._challenge(score=500)
+        Challenge.objects.filter(pk=challenge.pk).update(current_score=500)
+        Solve.objects.create(
+            team=self.team, challenge=challenge, earned_score=500, earned_mileage=0
+        )
+        # 저장된 캐시는 실제 풀이와 다르게 남겨 /teams/me가 캐시를 읽지 않는지 확인한다
+        Team.objects.filter(pk=self.team.pk).update(team_score=0)
         LineMonopoly.objects.create(
             team=self.team,
             line_number=1,
@@ -79,7 +85,51 @@ class MyPageTests(TestCase):
     def test_qr_token_key_name(self):
         res = self.client.post("/api/v1/teams/me/qr_token")
         self.assertIn("payment_token", res.data["data"])
+        self.assertEqual(res.data["data"]["team_id"], str(self.team.pk))
+        self.assertNotIn("teamId", res.data["data"])
         self.assertNotIn("token", res.data["data"])  # 금지 필드
+
+    def test_qr_owner_uses_current_membership_with_old_access_token(self):
+        from apps.common.jwt import hash_token
+        from apps.teams.models import PaymentToken
+
+        User.objects.filter(pk=self.user.pk).update(team=self.other)
+        res = self.client.post("/api/v1/teams/me/qr_token")
+
+        self.assertEqual(res.status_code, 200)
+        token = PaymentToken.objects.get(
+            token_hash=hash_token(res.data["data"]["payment_token"])
+        )
+        self.assertEqual(token.team_id, self.other.pk)
+        self.assertEqual(res.data["data"]["team_id"], str(token.team_id))
+
+    def test_qr_owner_stays_with_issued_token_when_membership_changes(self):
+        from unittest.mock import patch
+
+        from apps.common.jwt import hash_token
+        from apps.teams.models import PaymentToken
+
+        create = PaymentToken.objects.create
+
+        def create_then_reassign(**kwargs):
+            token = create(**kwargs)
+            User.objects.filter(pk=self.user.pk).update(team=self.other)
+            return token
+
+        with patch(
+            "apps.teams.views.PaymentToken.objects.create",
+            side_effect=create_then_reassign,
+        ):
+            res = self.client.post("/api/v1/teams/me/qr_token")
+
+        self.assertEqual(res.status_code, 200)
+        token = PaymentToken.objects.get(
+            token_hash=hash_token(res.data["data"]["payment_token"])
+        )
+        self.assertEqual(token.team_id, self.team.pk)
+        self.assertEqual(res.data["data"]["team_id"], str(token.team_id))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.team_id, self.other.pk)
 
     def test_qr_token_replaces_previous(self):
         from apps.teams.models import PaymentToken, PaymentTokenStatus

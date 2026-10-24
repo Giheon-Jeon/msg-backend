@@ -76,7 +76,7 @@ def update_dynamic_score_and_team_scores(
 
 
 def get_team_total_score(team_id):
-    """Return the same Jeopardy + KOTH + signature score used by ranking."""
+    """Return the same Jeopardy + KOTH + signature + line monopoly score used by ranking."""
     jeopardy_score = Solve.objects.filter(team_id=team_id).aggregate(
         total=Sum("challenge__current_score")
     )["total"] or Decimal("0")
