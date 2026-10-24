@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from django.db import connection, transaction
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, throttle_classes
+from apps.common.throttling import ReadApiThrottle
 from apps.accounts.models import Team
 from apps.challenge.models import Solve
 from apps.common.response import ok
@@ -149,6 +150,7 @@ def read_leaderboard_snapshot():
 
 
 @api_view(["GET"])
+@throttle_classes([ReadApiThrottle])
 def leaderboard(request):
     solves_map, teams = read_leaderboard_snapshot()
 

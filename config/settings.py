@@ -245,6 +245,7 @@ REST_FRAMEWORK = {
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
+        "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
     },
 }
 SCHEDULER_API_TOKEN = os.getenv("SCHEDULER_API_TOKEN", "")
