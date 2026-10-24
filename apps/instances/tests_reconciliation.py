@@ -2,13 +2,14 @@ import io
 import json
 import threading
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connection, connections
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -31,6 +32,7 @@ class Fixtures:
         )
 
     def instance(self, **values):
+        created_at = values.pop("created_at", None)
         defaults = dict(
             user=self.user, team=self.team, challenge=self.challenge,
             status=InstanceStatus.STOPPING, delete_reason=DeleteReason.REPLACED_BY_NEW_INSTANCE,
@@ -38,7 +40,12 @@ class Fixtures:
             expires_at=timezone.now(), extend_count=2,
         )
         defaults.update(values)
-        return Instance.objects.create(**defaults)
+        instance = Instance.objects.create(**defaults)
+        if created_at is not None:
+            # auto_now_add ignores values passed to create(); persist explicit fixture order.
+            instance.created_at = created_at
+            instance.save(update_fields=["created_at"])
+        return instance
 
     def snapshot(self, instance, status=InstanceStatus.CLEANED):
         return {
@@ -72,7 +79,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_reconciles_replaced_history_while_new_instance_is_running(self, detail):
-        old = self.instance()
+        old = self.instance(created_at=timezone.now() - timedelta(seconds=1))
         current = self.instance(status=InstanceStatus.RUNNING, replaced_instance=old)
         detail.side_effect = lambda row, _: self.snapshot(row, row.status if row.pk == current.pk else InstanceStatus.CLEANED)
         before = Instance.objects.values().get(pk=old.pk)
@@ -101,7 +108,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_missing_scheduler_record_is_not_cleanup_evidence_and_does_not_starve_next_row(self, detail):
-        missing = self.instance()
+        missing = self.instance(created_at=timezone.now() - timedelta(seconds=1))
         healthy = self.instance()
         detail.side_effect = lambda row, _: (
             self.snapshot(row) if row.pk == healthy.pk
@@ -118,7 +125,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_timeout_keeps_state_and_next_round_continues_from_redis_cursor(self, detail):
-        unavailable = self.instance()
+        unavailable = self.instance(created_at=timezone.now() - timedelta(seconds=1))
         healthy = self.instance()
         detail.side_effect = SchedulerError("SCHEDULER_UNAVAILABLE", "timeout", 503)
         first = reconcile_instances_once()
@@ -162,7 +169,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
             with self.subTest(payload=payload):
                 Instance.objects.all().delete()
                 cache.clear()
-                invalid = self.instance()
+                invalid = self.instance(created_at=timezone.now() - timedelta(seconds=1))
                 healthy = self.instance()
                 urlopen.side_effect = [
                     io.BytesIO(payload),
@@ -231,7 +238,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_time_budget_leaves_unchecked_rows_for_next_round(self, detail):
-        first = self.instance()
+        first = self.instance(created_at=timezone.now() - timedelta(seconds=1))
         second = self.instance()
         detail.side_effect = lambda row, _: self.snapshot(row)
         clock = SimpleNamespace(monotonic=Mock(side_effect=[0, 0, 21]))
@@ -241,6 +248,23 @@ class InstanceHistoryTests(Fixtures, TestCase):
         self.assertEqual(reconcile_instances_once()["updated"], 1)
         second.refresh_from_db()
         self.assertEqual(second.status, InstanceStatus.CLEANED)
+
+    @patch("apps.instances.reconciliation.call_scheduler_detail")
+    def test_equal_creation_times_use_uuid_order_without_skipping_history(self, detail):
+        created_at = timezone.now()
+        high = self.instance(instance_id=uuid.UUID(int=2), created_at=created_at)
+        low = self.instance(instance_id=uuid.UUID(int=1), created_at=created_at)
+        detail.side_effect = lambda row, _: self.snapshot(row)
+
+        self.assertEqual(reconcile_instances_once(batch_size=1)["updated"], 1)
+        high.refresh_from_db()
+        low.refresh_from_db()
+        self.assertEqual(high.status, InstanceStatus.STOPPING)
+        self.assertEqual(low.status, InstanceStatus.CLEANED)
+        self.assertEqual(reconcile_instances_once(batch_size=1)["updated"], 1)
+        high.refresh_from_db()
+        self.assertEqual(high.status, InstanceStatus.CLEANED)
+        self.assertEqual([call.args[0].pk for call in detail.call_args_list], [low.pk, high.pk])
 
     @patch("apps.instances.reconciliation.call_scheduler_detail")
     def test_corrupt_cursor_recovers_and_scoped_runs_do_not_change_global_cursor(self, detail):
@@ -291,7 +315,7 @@ class InstanceHistoryConcurrencyTests(Fixtures, TransactionTestCase):
             close_old_connections()
             try: result.append(reconcile_instances_once())
             except Exception as error: errors.append(error)
-            finally: close_old_connections()
+            finally: connections.close_all()
         thread = threading.Thread(target=run)
         thread.start()
         try:

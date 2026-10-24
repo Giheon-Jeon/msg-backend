@@ -807,7 +807,7 @@ class BoardApiTestCase(TestCase):
                 "apps.board.idempotency.cache.set",
                 side_effect=RuntimeError("redis unavailable"),
             ):
-                with self.assertLogs("apps.board.idempotency", level="WARNING"):
+                with self.assertLogs("apps.board.idempotency", level="WARNING"), self.captureOnCommitCallbacks(execute=True):
                     first = self.post_idem(
                         "/api/v1/board/dice/roll", key="cache-failure-key"
                     )
@@ -1117,7 +1117,7 @@ class BoardApiTestCase(TestCase):
             "apps.board.idempotency.cache.set",
             side_effect=RuntimeError("redis unavailable"),
         ):
-            with self.assertLogs("apps.board.idempotency", level="WARNING"):
+            with self.assertLogs("apps.board.idempotency", level="WARNING"), self.captureOnCommitCallbacks(execute=True):
                 first = self.post_idem(
                     "/api/v1/board/cell/open",
                     {"challenge_id": challenge_id},

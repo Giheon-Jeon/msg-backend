@@ -39,7 +39,9 @@ class IdempotencyRetentionTests(TestCase):
         self.key = "retained-roll"
 
     def roll(self, body=None):
-        with patch("apps.board.services.random.randint", return_value=1):
+        with self.captureOnCommitCallbacks(execute=True), patch(
+            "apps.board.services.random.randint", return_value=1
+        ):
             return self.client.post(
                 self.path, body or {}, format="json", HTTP_IDEMPOTENCY_KEY=self.key
             )
