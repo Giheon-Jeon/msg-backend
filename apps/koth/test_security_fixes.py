@@ -1,11 +1,13 @@
 """KOTH 보안 수정 회귀 테스트 — BK-03(예정 문제 URL), F08(no-store), BK-08(검증 반복 제한)."""
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+from redis.exceptions import ConnectionError, ResponseError, TimeoutError
 
 from apps.accounts.models import Team, User
 from apps.common.jwt import hash_token
@@ -88,6 +90,63 @@ class KothSecurityFixTests(TestCase):
         self.assertIn("no-store", r.headers.get("Cache-Control", "").lower())
 
     # BK-08
+    def test_invalid_verify_cache_failure_returns_503_without_failure_record(self):
+        for operation in ["add", "incr"]:
+            for error_type in [ConnectionError, TimeoutError, ResponseError]:
+                with self.subTest(operation=operation, error_type=error_type):
+                    with patch("apps.koth.views.cache") as backend:
+                        backend.add.return_value = False
+                        getattr(backend, operation).side_effect = error_type("private-redis-credential")
+                        with self.assertLogs("apps.koth.views", level="WARNING") as logs:
+                            response = self.client.post(
+                                "/internal/koth/team_tokens/verify",
+                                {"koth_challenge_id": str(self.active.pk), "team_token": "invalid"},
+                                format="json", HTTP_X_INTERNAL_TOKEN="tok-A",
+                            )
+                    self.assertEqual(response.status_code, 503)
+                    self.assertEqual(response.data["code"], "RATE_LIMIT_UNAVAILABLE")
+                    self.assertIsNone(response.data["data"])
+                    self.assertNotIn("private-redis-credential", str(response.data))
+                    self.assertNotIn("private-redis-credential", "\n".join(logs.output))
+                    self.assertEqual(KothTokenVerificationAttempt.objects.count(), 0)
+        response = self.client.post(
+            "/internal/koth/team_tokens/verify",
+            {"koth_challenge_id": str(self.active.pk), "team_token": "invalid"},
+            format="json", HTTP_X_INTERNAL_TOKEN="tok-A",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["data"]["valid"])
+        self.assertEqual(KothTokenVerificationAttempt.objects.count(), 1)
+
+    def test_expired_counter_retry_recovers_or_returns_503(self):
+        with patch("apps.koth.views.cache.add", side_effect=[False, True]):
+            with patch("apps.koth.views.cache.incr", side_effect=ValueError("expired")):
+                self.assertFalse(_register_verify_failure(self.active))
+        with patch("apps.koth.views.cache.add", return_value=False):
+            with patch("apps.koth.views.cache.incr", side_effect=ValueError("expired")):
+                response = self.client.post(
+                    "/internal/koth/team_tokens/verify",
+                    {"koth_challenge_id": str(self.active.pk), "team_token": "invalid"},
+                    format="json", HTTP_X_INTERNAL_TOKEN="tok-A",
+                )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(KothTokenVerificationAttempt.objects.count(), 0)
+
+    def test_valid_verify_does_not_need_failure_counter(self):
+        self.auth()
+        token = self.client.get("/api/v1/koth/team_token").data["data"]["team_token"]
+        self.client.credentials()
+        with patch("apps.koth.views.cache.add", side_effect=ConnectionError) as add:
+            response = self.client.post(
+                "/internal/koth/team_tokens/verify",
+                {"koth_challenge_id": str(self.active.pk), "team_token": token},
+                format="json", HTTP_X_INTERNAL_TOKEN="tok-A",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["data"]["valid"])
+        add.assert_not_called()
+        self.assertEqual(KothTokenVerificationAttempt.objects.count(), 0)
+
     def test_repeated_invalid_verify_is_throttled_and_log_bounded(self):
         cid = str(self.active.koth_challenge_id)
         statuses = []

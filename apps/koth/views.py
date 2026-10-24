@@ -21,6 +21,7 @@ from apps.common.exceptions import (
     KothChallengeIdRequired,
     KothChallengeNotFound,
     KothVerifyThrottled,
+    RateLimitUnavailable,
     UserHasNoTeam,
 )
 from apps.common.jwt import hash_token
@@ -358,11 +359,10 @@ def _register_verify_failure(challenge):
                 continue
         else:
             raise RuntimeError("verify failure counter could not be initialized")
+        return count > VERIFY_FAIL_MAX_PER_WINDOW
     except Exception:
-        # 캐시 장애 시 검증 가용성을 우선해 기존 동작(기록 후 통과)으로 떨어진다.
-        logger.warning("koth verify throttle cache unavailable", exc_info=True)
-        return False
-    return count > VERIFY_FAIL_MAX_PER_WINDOW
+        logger.warning("KOTH verification rate limit unavailable; request rejected")
+        raise RateLimitUnavailable() from None
 
 
 @api_view(["POST"])
