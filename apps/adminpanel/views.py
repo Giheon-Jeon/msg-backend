@@ -97,11 +97,13 @@ from apps.instances.services import (
     RESETTABLE_INSTANCE_STATUSES,
     SchedulerError,
     call_scheduler_delete,
+    call_scheduler_force_cleanup,
     call_scheduler_reset,
     create_instance_from_scheduler,
     isoformat_z,
     mark_instance_replaced,
     scheduler_auth_header,
+    update_instance_from_scheduler,
 )
 from .resource_broker import fetch_resource_targets
 from .node_allocation import enrich_allocations
@@ -699,7 +701,6 @@ def payment_checkout(request):
     if len(item_name) > MAX_ITEM_NAME_LENGTH:
         raise InvalidRequest(f"item_name 은 {MAX_ITEM_NAME_LENGTH}자 이하여야 합니다")
 
-    now = timezone.now().replace(microsecond=0)
     token_hash = hash_token(raw_token)
 
     # QR 재발급이 팀 → 토큰 순으로 잠그므로 같은 순서를 따른다. 반대로 잠그면 둘이 겹칠 때
@@ -722,8 +723,10 @@ def payment_checkout(request):
         )
         if token is None or token.status != PaymentTokenStatus.ACTIVE:
             raise PaymentTokenInvalid()
-        if token.expires_at < now:
+        checked_at = timezone.now()
+        if token.expires_at <= checked_at:
             raise PaymentTokenExpired()
+        now = checked_at.replace(microsecond=0)
 
         if team.is_banned:
             raise TeamBanned()
@@ -957,6 +960,7 @@ def instance_list(request):
             "challenge_title": r.challenge.title,
             "status": r.status,
             "created_at": isoformat_z(r.created_at),
+            "updated_at": isoformat_z(r.updated_at),
             "expires_at": isoformat_z(r.expires_at),
         }
         for r in rows
@@ -996,7 +1000,11 @@ def instance_force_delete(request, instance_id):
         if instance is None:
             return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
 
-        if instance.status not in DELETABLE_INSTANCE_STATUSES:
+        cleanup = instance.status == InstanceStatus.CLEANUP_PENDING
+        if not cleanup and instance.status not in DELETABLE_INSTANCE_STATUSES:
+            if instance.status not in (InstanceStatus.STOPPED, InstanceStatus.FAILED, InstanceStatus.EXPIRED, InstanceStatus.CLEANED):
+                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 강제 종료할 수 없습니다", 400,
+                            data={"instance_id": str(instance.pk), "status": instance.status})
             return fail(
                 "INSTANCE_ALREADY_TERMINATED",
                 "이미 종료된 인스턴스입니다",
@@ -1008,13 +1016,18 @@ def instance_force_delete(request, instance_id):
             )
 
         try:
-            call_scheduler_delete(instance, scheduler_auth_header(request))
+            if cleanup:
+                data = call_scheduler_force_cleanup(instance, scheduler_auth_header(request))
+                update_instance_from_scheduler(instance, data)
+            else:
+                call_scheduler_delete(instance, scheduler_auth_header(request))
         except SchedulerError as error:
             return fail(error.code, error.message, error.status_code)
 
-        instance.status = InstanceStatus.STOPPING
-        instance.delete_reason = DeleteReason.ADMIN_FORCED
-        instance.save(update_fields=["status", "delete_reason", "updated_at"])
+        if not cleanup:
+            instance.status = InstanceStatus.STOPPING
+            instance.delete_reason = DeleteReason.ADMIN_FORCED
+            instance.save(update_fields=["status", "delete_reason", "updated_at"])
         _record_event(
             AdminEvent.EventType.INSTANCE_FORCED,
             "인스턴스 강제 종료",
@@ -1034,8 +1047,8 @@ def instance_force_delete(request, instance_id):
             "forced_by": request.user.login_id,
             "forced_at": isoformat_z(now),
         },
-        message="인스턴스 종료 요청이 접수되었습니다.",
-        status=202,
+        message="인스턴스 강제 정리가 완료되었습니다" if cleanup else "인스턴스 종료 요청이 접수되었습니다.",
+        status=200 if cleanup else 202,
     )
 
 
@@ -1289,7 +1302,7 @@ def dashboard(request):
 CHALLENGE_SORT = {
     "running": "-running_instance_count",
     "title": "title",
-    "score": "-score",
+    "score": "-current_score",
 }
 
 
@@ -1485,7 +1498,7 @@ def challenge_list(request):
             "title": c.title,
             "category": c.category,
             "difficulty": c.difficulty,
-            "score": num(c.score),
+            "score": num(c.current_score),
             "is_published": c.is_published,
             "solved_team_count": c.solved_team_count,
             "running_instance_count": c.running_instance_count,
@@ -2095,6 +2108,14 @@ def _team_update(request, team_id):
         if team_name is not None and team_name != old_name:
             team.team_name = team_name
             team.save(update_fields=["team_name", "updated_at"])
+
+        # 제외된 팀원이 가지고 있는 QR도 더는 이 팀의 잔액을 쓸 수 없어야 한다.
+        # 결제와 같은 팀 잠금 안에서 ACTIVE 토큰만 폐기해 완료된 거래는 보존한다.
+        if remove_ids:
+            PaymentToken.objects.filter(team=team, status=PaymentTokenStatus.ACTIVE).update(
+                status=PaymentTokenStatus.INVALIDATED,
+                invalidated_at=timezone.now().replace(microsecond=0),
+            )
 
         # access_token claim 에 team_id 와 is_leader 가 들어 있어 바뀐 계정은 다시 로그인하게 한다.
         RefreshToken.objects.filter(user_id__in=changed).delete()

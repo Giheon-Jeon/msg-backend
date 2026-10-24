@@ -205,7 +205,10 @@ class ChallengeSubmitView(APIView):
         with transaction.atomic():
             # Match board mutations: state precedes access and team locks.
             TeamBoardState.objects.select_for_update().filter(team=team).first()
-            challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
+            try:
+                challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
+            except Challenge.DoesNotExist:
+                return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
             flag_lock, _ = FlagSubmissionLock.objects.select_for_update().get_or_create(
                 team=team,
                 challenge=challenge,

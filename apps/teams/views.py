@@ -8,8 +8,8 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from rest_framework.decorators import api_view, permission_classes
 
-from apps.accounts.models import Team
-from apps.common.exceptions import UserHasNoTeam
+from apps.accounts.models import Team, User
+from apps.common.exceptions import InvalidRequest, UserHasNoTeam
 from apps.common.jwt import hash_token
 from apps.common.permissions import IsAuthenticated
 from apps.common.response import ok
@@ -34,7 +34,10 @@ def _get_team(request):
 def team_me(request):
     team = _get_team(request)
 
-    jeopardy_score = team.team_score
+    # 저장된 team_score 캐시는 제출 경로에서만 갱신되므로 순위와 같은 실시간 합산을 쓴다.
+    jeopardy_score = Solve.objects.filter(team=team).aggregate(
+        total=Sum("challenge__current_score")
+    )["total"] or Decimal("0")
     koth_score = team.koth_solves.aggregate(total=Sum("earned_score"))[
         "total"
     ] or Decimal("0")
@@ -108,12 +111,23 @@ def qr_token(request):
     """POST /api/v1/teams/me/qr_token — QR 결제 토큰 발급 (5분 만료)."""
     team = _get_team(request)
 
-    now = timezone.now().replace(microsecond=0)
     raw_token = f"pt_{secrets.token_urlsafe(16)}"
-    expires_at = now + datetime.timedelta(minutes=QR_TOKEN_TTL_MINUTES)
 
     with transaction.atomic():
-        Team.objects.select_for_update(no_key=True).get(pk=team.team_id)
+        team = Team.objects.select_for_update(no_key=True).get(pk=team.team_id)
+        # 팀 수정도 같은 팀 행을 먼저 잠근다. 인증 뒤 잠금을 기다리는 동안 제외됐을 수 있다.
+        current_team_id = (
+            User.objects.filter(pk=request.user.pk)
+            .values_list("team_id", flat=True)
+            .first()
+        )
+        if current_team_id is None:
+            raise UserHasNoTeam()
+        if current_team_id != team.team_id:
+            raise InvalidRequest("소속 팀이 변경되었습니다. QR을 다시 발급해주세요")
+
+        now = timezone.now().replace(microsecond=0)
+        expires_at = now + datetime.timedelta(minutes=QR_TOKEN_TTL_MINUTES)
 
         old_ids = list(
             PaymentToken.objects.filter(
@@ -136,7 +150,13 @@ def qr_token(request):
                 invalidated_by_token=new_token
             )
 
-    return ok({"payment_token": raw_token, "expires_at": expires_at})
+    return ok(
+        {
+            "team_id": str(new_token.team_id),
+            "payment_token": raw_token,
+            "expires_at": expires_at,
+        }
+    )
 
 
 @api_view(["GET"])

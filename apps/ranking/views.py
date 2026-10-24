@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from django.db.models import Count, Max, Min, OuterRef, Subquery, Sum
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from apps.common.throttling import ReadApiThrottle
 
 from apps.accounts.models import Team, User
 from apps.common.exceptions import UserHasNoTeam
@@ -128,6 +129,7 @@ def collect_member_data():
 
 
 @api_view(["GET"])
+@throttle_classes([ReadApiThrottle])
 def team_ranking(request):
     page, size = parse_pagination(
         request.query_params.get("page"),
@@ -155,6 +157,7 @@ def team_ranking(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ReadApiThrottle])
 def my_team_ranking(request):
     if request.user.team_id is None:
         raise UserHasNoTeam()
@@ -174,6 +177,7 @@ def my_team_ranking(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ReadApiThrottle])
 def member_ranking(request):
     if request.user.team_id is None:
         raise UserHasNoTeam()
