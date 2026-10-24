@@ -12,7 +12,9 @@ from django.db.models import Max
 from django.utils import timezone
 
 from apps.challenge.models import Challenge
+from apps.instances.bundle_environment import fill_bundle_environment, read_bundle_environment
 from apps.instances.models import ChallengeRelease, PollerArtifact
+from apps.instances.repository_source import RepositorySourceUnavailable
 from apps.instances.runtime_secrets import RuntimeSecretUnavailable
 from apps.instances.releases import (
     ReleaseValidationError,
@@ -274,6 +276,14 @@ def register_bundle(artifact_data, note=None):
     challenge = match_challenge(artifact_data)
     if challenge is None:
         return "unmatched", artifact_data.get("challenge_slug", "")
+    if ChallengeRelease.objects.filter(challenge=challenge, registry_revision=validated["registry_revision"]).exists():
+        return "duplicate", validated["registry_revision"]
+
+    # 같은 커밋의 저장소 환경변수는 잠그기 전에 읽는다 저장소를 못 읽으면 다음 수집 때 다시 시도한다
+    try:
+        environment = read_bundle_environment(validated, artifact_data.get("source_sha") or artifact_data.get("commit_sha"))
+    except RepositorySourceUnavailable as error:
+        return "error", str(error)
 
     with transaction.atomic():
         challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
@@ -291,7 +301,11 @@ def register_bundle(artifact_data, note=None):
             return "invalid", error.message
 
         try:
-            release = create_release(challenge, validated, POLLER_CREATED_BY)
+            # 비밀값을 저장한 뒤 등록이 실패하면 그 비밀값도 되돌린다
+            with transaction.atomic():
+                if environment:
+                    validated["repository_env"] = fill_bundle_environment(challenge, validated, environment, POLLER_CREATED_BY)
+                release = create_release(challenge, validated, POLLER_CREATED_BY)
         except ReleaseValidationError as error:
             return "invalid", error.message
         except RuntimeSecretUnavailable:

@@ -354,6 +354,18 @@ def create_release(challenge, validated, created_by, derived_from=None):
             ))
         except ValueError as error:
             raise ReleaseValidationError(str(error)) from None
+    repository_env = validated.get("repository_env", {})
+    if derived_from is not None and derived_from.repository_env:
+        configured = set()
+        for container, references in zip(validated["containers"], bindings):
+            configured.update((container["name"], name) for name, value in container.get("env", {}).items() if value)
+            configured.update((container["name"], name) for name in references)
+        # A copy only resolves missing values actually supplied for that container.
+        repository_env = {
+            **derived_from.repository_env,
+            "missing": [item for item in derived_from.repository_env.get("missing", [])
+                        if (item["container"], item["name"]) not in configured],
+        }
     release = ChallengeRelease.objects.create(
         challenge=challenge,
         version=next_release_version(challenge),
@@ -373,6 +385,7 @@ def create_release(challenge, validated, created_by, derived_from=None):
         note=validated["note"],
         env_import_id=validated.get("env_import_id"),
         env_import_fingerprint=validated.get("env_import_fingerprint", ""),
+        repository_env=repository_env,
         created_by=created_by,
     )
     ReleaseContainer.objects.bulk_create(
@@ -498,6 +511,7 @@ def serialize_release(release, current_release_id=None, file_bundles=None):
         "is_current": release.release_id == current_release_id,
         "is_deployable": is_deployable(release),
         "note": release.note,
+        "repository_env": release.repository_env or None,
         "source_ref": release.source_ref,
         "created_at": isoformat_z(release.created_at),
     }

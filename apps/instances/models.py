@@ -187,6 +187,9 @@ class ChallengeRelease(models.Model):
     # .env 저장 요청의 재시도는 같은 릴리스를 반환한다. 응답에는 포함하지 않는다
     env_import_id = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     env_import_fingerprint = models.CharField(max_length=64, blank=True, default="", editable=False)
+    # GitHub 발행본에 같은 커밋의 env/<컨테이너>.env 를 채운 기록 {revision, files, missing}
+    # missing 이 남은 버전은 사용으로 전환하지 않는다
+    repository_env = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.CharField(max_length=50, blank=True, default="")
 
