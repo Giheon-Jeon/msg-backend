@@ -34,7 +34,10 @@ def _get_team(request):
 def team_me(request):
     team = _get_team(request)
 
-    jeopardy_score = team.team_score
+    # 저장된 team_score 캐시는 제출 경로에서만 갱신되므로 순위와 같은 실시간 합산을 쓴다.
+    jeopardy_score = Solve.objects.filter(team=team).aggregate(
+        total=Sum("challenge__current_score")
+    )["total"] or Decimal("0")
     koth_score = team.koth_solves.aggregate(total=Sum("earned_score"))[
         "total"
     ] or Decimal("0")

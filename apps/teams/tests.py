@@ -53,7 +53,13 @@ class MyPageTests(TestCase):
         self.assertEqual(res.data["data"]["team_name"], "남의팀")
 
     def test_team_me_includes_line_monopoly_score(self):
-        Team.objects.filter(pk=self.team.pk).update(team_score=500)
+        challenge = self._challenge(score=500)
+        Challenge.objects.filter(pk=challenge.pk).update(current_score=500)
+        Solve.objects.create(
+            team=self.team, challenge=challenge, earned_score=500, earned_mileage=0
+        )
+        # 저장된 캐시는 실제 풀이와 다르게 남겨 /teams/me가 캐시를 읽지 않는지 확인한다
+        Team.objects.filter(pk=self.team.pk).update(team_score=0)
         LineMonopoly.objects.create(
             team=self.team,
             line_number=1,
