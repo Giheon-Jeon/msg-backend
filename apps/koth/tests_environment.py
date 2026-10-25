@@ -246,6 +246,33 @@ class EnvironmentTests(TestCase):
         foreign = f"/api/v1/admin/koth/challenges/{other.pk}/environment/versions/{self.source.pk}/apply"
         self.assertEqual(self.client.post(foreign, {"request_id":str(uuid.uuid4())}, format="json").status_code, 404)
 
+    def test_reviewed_baseline_registration_is_pending_and_idempotent(self):
+        from io import StringIO
+        from django.core.management import call_command
+        other = KothChallenge.objects.create(club=KothClub.objects.create(name="Initial club"), title="Initial", open_group=2,
+            inbound_internal_token_hash="b" * 64, repository_slug="koth-initial", source_revision=SHA)
+        body = {"challenge_id":str(other.pk), "source_revision":SHA, "target_id":"gcp:123",
+                "agent_token_hash":agent_token_hash(secrets.token_urlsafe(40)), "settings":self.settings}
+        for created in (True, False):
+            output = StringIO()
+            with patch("sys.stdin", StringIO(json.dumps(body))):
+                call_command("configure_koth_environment", actor="operator", stdout=output)
+            self.assertEqual(json.loads(output.getvalue())["created"], created)
+            self.assertNotIn("test-runtime-internal-value", output.getvalue())
+        config = KothEnvironmentConfig.objects.get(challenge=other)
+        self.assertEqual(config.state, "QUEUED")
+        self.assertIsNone(config.applied_version_id)
+        self.assertEqual(KothEnvironmentVersion.objects.filter(challenge=other).count(), 1)
+
+    def test_baseline_command_cannot_overwrite_existing_edits(self):
+        from io import StringIO
+        from django.core.management import call_command, CommandError
+        body = {"challenge_id":str(self.challenge.pk), "source_revision":SHA, "target_id":"gcp:123",
+                "agent_token_hash":agent_token_hash(self.token), "settings":self.settings}
+        with patch("sys.stdin", StringIO(json.dumps(body))), self.assertRaises(CommandError):
+            call_command("configure_koth_environment", actor="operator", stdout=StringIO())
+        self.config.refresh_from_db();self.assertEqual(self.config.target_id, "test-vm")
+
 
 @override_settings(RUNTIME_SECRET_ENCRYPTION_KEYS=[Fernet.generate_key().decode()])
 class ConcurrentEnvironmentTests(TransactionTestCase):
