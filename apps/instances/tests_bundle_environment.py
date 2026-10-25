@@ -197,6 +197,9 @@ class BundleEnvironmentTests(ReleaseTestBase):
         derived = self.derive(source, {"PORT": ""}, {})
         self.assertEqual(derived.repository_env, source.repository_env)
         self.assertEqual(self.activate(derived.pk).status_code, 400)
+        filled = self.derive(derived, {"PORT": "8080"}, {})
+        self.assertEqual(filled.repository_env["missing"], [])
+        self.assertEqual(self.activate(filled.pk).status_code, 200)
 
     def test_explicit_optional_bare_seed_never_reuses_an_old_secret(self):
         self.files["env/app.env"] = ENV_FILE + "CASHOUT_INSTANCE_SEED=previous-seed\n"
@@ -272,9 +275,6 @@ class BundleEnvironmentTests(ReleaseTestBase):
         derived = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
         self.assertTrue(derived.repository_env["missing"])
         self.assertEqual(self.activate(derived.pk).status_code, 400)
-        filled = self.derive(derived, {"PORT": "8080"}, {})
-        self.assertEqual(filled.repository_env["missing"], [])
-        self.assertEqual(self.activate(filled.pk).status_code, 200)
 
     def test_container_parse_error_is_not_cleared_by_deriving_settings(self):
         self.files["env/app.env"] = "PORT=8080\nPORT=8081\n"
