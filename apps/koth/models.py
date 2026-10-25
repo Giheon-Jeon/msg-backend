@@ -1,6 +1,6 @@
 import uuid
 
-from django.core.validators import URLValidator
+from django.core.validators import RegexValidator, URLValidator
 from django.db import models
 
 
@@ -41,6 +41,20 @@ class KothChallenge(models.Model):
         related_name="challenges",
     )
     title = models.CharField(max_length=100)
+    description = models.TextField(blank=True, default="")
+    repository_slug = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        validators=[RegexValidator(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")],
+    )
+    source_revision = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        validators=[RegexValidator(r"^[0-9a-f]{40}$")],
+        help_text="현재 실행 이미지의 소스 커밋. 참가자 파일도 같은 커밋에서 선택합니다.",
+    )
     challenge_url = models.URLField(
         max_length=500,
         blank=True,
@@ -71,11 +85,52 @@ class KothChallenge(models.Model):
         ordering = ["open_group", "title"]
         constraints = [
             models.UniqueConstraint(fields=["club"], name="uq_koth_challenge_club"),
+            models.UniqueConstraint(
+                fields=["repository_slug"],
+                condition=~models.Q(repository_slug=""),
+                name="uq_koth_repository_slug",
+            ),
         ]
         indexes = [models.Index(fields=["status", "open_group"])]
 
     def __str__(self):
         return f"{self.club.name} / {self.title}"
+
+
+class KothUserFileBundle(models.Model):
+    bundle_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey(
+        KothChallenge,
+        on_delete=models.CASCADE,
+        related_name="user_file_bundles",
+    )
+    artifact_id = models.BigIntegerField(unique=True)
+    artifact_name = models.CharField(max_length=255)
+    registry_revision = models.PositiveIntegerField()
+    source_ref = models.CharField(max_length=200)
+    source_sha = models.CharField(max_length=40)
+    present = models.BooleanField()
+    object_key = models.CharField(max_length=500, blank=True, default="")
+    sha256 = models.CharField(max_length=64, blank=True, default="")
+    size_bytes = models.BigIntegerField(default=0)
+    file_count = models.PositiveIntegerField(default=0)
+    uncompressed_size_bytes = models.BigIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "koth_user_file_bundles"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["challenge", "registry_revision"],
+                name="uq_koth_files_revision",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["challenge", "source_sha", "-registry_revision"],
+                name="koth_file_source_idx",
+            ),
+        ]
 
 
 class KothTeamToken(models.Model):

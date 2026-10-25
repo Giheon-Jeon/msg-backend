@@ -37,6 +37,7 @@ from .models import (
     KothTokenVerificationAttempt,
 )
 from .tokens import build_team_token, matches_token
+from .files import public_file_metadata, with_file_metadata
 
 
 def _public_challenge_url(challenge):
@@ -52,17 +53,21 @@ def _challenges_with_owner():
     leaders = KothSolve.objects.filter(
         challenge_id=OuterRef("pk"), earned_score__gt=0, team__is_banned=False
     ).order_by("-earned_score", "solved_at", "team__team_name", "team_id")
-    return KothChallenge.objects.annotate(
+    return with_file_metadata(KothChallenge.objects.annotate(
         owner_team_id=Subquery(leaders.values("team_id")[:1]),
         owner_team_name=Subquery(leaders.values("team__team_name")[:1]),
         owner_score=Subquery(leaders.values("earned_score")[:1]),
-    )
+    ))
 
 
 def _challenge_payload(challenge, include_times=True):
     data = {
         "koth_challenge_id": str(challenge.koth_challenge_id),
         "title": challenge.title,
+        "description": (
+            challenge.description if challenge.status == KothChallengeStatus.ACTIVE else ""
+        ),
+        "file": public_file_metadata(challenge),
         "challenge_url": _public_challenge_url(challenge),
         "status": challenge.status,
         "open_group": challenge.open_group,
@@ -172,7 +177,7 @@ def me(request):
         )
     }
     challenge_data = []
-    for challenge in KothChallenge.objects.all():
+    for challenge in with_file_metadata(KothChallenge.objects.all()):
         solve = solves.get(challenge.koth_challenge_id)
         score = solve.earned_score if solve else Decimal("0")
         rank = None
@@ -183,6 +188,10 @@ def me(request):
                 "koth_challenge_id": str(challenge.koth_challenge_id),
                 "club_id": str(challenge.club_id),
                 "title": challenge.title,
+                "description": (
+                    challenge.description if challenge.status == KothChallengeStatus.ACTIVE else ""
+                ),
+                "file": public_file_metadata(challenge),
                 "challenge_url": _public_challenge_url(challenge),
                 "status": challenge.status,
                 "earned_score": num(score),
