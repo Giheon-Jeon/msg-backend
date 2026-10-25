@@ -194,19 +194,19 @@ class AuthTests(TestCase):
         self.assertEqual(res.data["code"], "TOO_MANY_REQUESTS")
 
     def test_throttle_ignores_client_supplied_forwarded_for(self):
-        """X-Forwarded-For 앞부분을 바꿔도 프록시가 붙인 주소 기준으로 센다 (QA TC-21)."""
+        """X-Forwarded-For 를 바꿔도 실제 접속 주소 기준으로 센다 (QA TC-21)."""
         for i in range(10):
             self.client.post(
                 "/api/v1/auth/login",
                 {"login_id": "tester", "password": "wrong"},
                 format="json",
-                HTTP_X_FORWARDED_FOR=f"10.99.0.{i}, 203.0.113.7",
+                HTTP_X_FORWARDED_FOR=f"10.99.0.{i}",
             )
         res = self.client.post(
             "/api/v1/auth/login",
             {"login_id": "tester", "password": "pw1234"},
             format="json",
-            HTTP_X_FORWARDED_FOR="10.99.0.99, 203.0.113.7",
+            HTTP_X_FORWARDED_FOR="10.99.0.99",
         )
         self.assertEqual(res.status_code, 429)
 
