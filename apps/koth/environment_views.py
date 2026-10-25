@@ -109,6 +109,8 @@ class EnvironmentView(APIView):
                 versions.append(extra)
         can_apply = bool(selected and config and config.agent_token_hash and challenge.status != KothChallengeStatus.ACTIVE
                          and selected.source_revision == challenge.source_revision)
+        if config and config.state == "APPLYING" and config.checked_at and config.checked_at > timezone.now() - timedelta(minutes=2):
+            can_apply = False
         return ok({"challenge_id": str(challenge.pk), "source_revision": challenge.source_revision,
                    "state": config_data(config), "can_apply": can_apply,
                    "versions": [serialize_version(v) for v in versions],
@@ -260,6 +262,7 @@ class EnvironmentAgentStatusView(AgentBase):
         if body["state"] not in ("APPLYING", "APPLIED", "FAILED") or body.get("error_code", "") not in ("", *ERRORS):
             raise EnvironmentError("적용 결과 상태를 확인해주세요")
         with transaction.atomic():
+            challenge = get_challenge(challenge_id, lock=True)
             config = self.authenticate_config(request, challenge_id, lock=True)
             application = config.application
             if (config.application_id != application_id or not application or application.challenge_id != config.pk
@@ -267,6 +270,9 @@ class EnvironmentAgentStatusView(AgentBase):
                 raise EnvironmentError("이미 다른 적용 요청으로 변경됐습니다", "KOTH_ENV_CONFLICT", 409)
             if config.state == "READY" and config.applied_version_id == version_id:
                 return ok(config_data(config))
+            require_source(challenge, application.version)
+            if body["state"] == "APPLYING" and challenge.status == KothChallengeStatus.ACTIVE:
+                raise EnvironmentError("경기 진행 중에는 새 설정을 적용하지 않습니다", "KOTH_ENV_ACTIVE", 409)
             if body["state"] == "APPLIED":
                 config.applied_version_id = version_id
                 config.applied_at = timezone.now()

@@ -5,7 +5,7 @@ import uuid
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
@@ -231,3 +231,64 @@ class EnvironmentTests(TestCase):
         response = self.apply(self.source)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"]["state"]["state"], "QUEUED")
+
+    def test_game_becoming_active_blocks_an_already_queued_job(self):
+        version = self.save(); app = self.apply(version).data["data"]["application_id"]
+        self.challenge.status = "ACTIVE"; self.challenge.save(update_fields=["status"])
+        self.assertEqual(self.status(app, version, "APPLYING").status_code, 409)
+        self.config.refresh_from_db(); self.assertEqual(self.config.state, "QUEUED")
+
+    def test_camel_case_and_foreign_versions_are_rejected(self):
+        body = self.body(); body["baseVersionId"] = body.pop("base_version_id")
+        self.assertEqual(self.client.post(self.base + "/preview", body, format="json").status_code, 400)
+        other = KothChallenge.objects.create(club=self.challenge.club, title="Other", open_group=2,
+            inbound_internal_token_hash="b" * 64, repository_slug="koth-other", source_revision=SHA)
+        foreign = f"/api/v1/admin/koth/challenges/{other.pk}/environment/versions/{self.source.pk}/apply"
+        self.assertEqual(self.client.post(foreign, {"request_id":str(uuid.uuid4())}, format="json").status_code, 404)
+
+
+@override_settings(RUNTIME_SECRET_ENCRYPTION_KEYS=[Fernet.generate_key().decode()])
+class ConcurrentEnvironmentTests(TransactionTestCase):
+    setUp = EnvironmentTests.setUp
+    entry = staticmethod(EnvironmentTests.entry)
+    body = EnvironmentTests.body
+
+    def concurrent(self, path, bodies, node=False):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from django.db import close_old_connections, connection
+        if connection.vendor != "postgresql":
+            self.skipTest("PostgreSQL row-lock integration")
+        barrier = Barrier(len(bodies))
+        def request(body):
+            close_old_connections()
+            try:
+                client = APIClient()
+                if node: client.credentials(HTTP_AUTHORIZATION="Bearer " + self.token)
+                else: client.force_authenticate(self.admin)
+                barrier.wait(timeout=10)
+                response = client.post(path, body, format="json")
+                return response.status_code, response.data
+            finally:
+                close_old_connections()
+        with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
+            return list(pool.map(request, bodies))
+
+    def test_two_retries_save_one_immutable_version(self):
+        body = self.body()
+        results = self.concurrent(self.base + "/versions", [body, body])
+        self.assertEqual([r[0] for r in results], [200, 200])
+        self.assertEqual(len({r[1]["data"]["version_id"] for r in results}), 1)
+        self.assertEqual(KothEnvironmentVersion.objects.count(), 2)
+
+    def test_two_editors_do_not_lose_a_saved_change(self):
+        results = self.concurrent(self.base + "/versions", [self.body("PORT=8090"), self.body("PORT=8091")])
+        self.assertEqual(sorted(r[0] for r in results), [200, 409])
+        self.assertEqual(KothEnvironmentVersion.objects.count(), 2)
+
+    def test_two_agent_acknowledgements_emit_one_confirmation(self):
+        KothEnvironmentConfig.objects.filter(pk=self.challenge.pk).update(state="QUEUED", applied_version=None)
+        body = {"application_id":str(self.application.pk), "version_id":str(self.source.pk), "state":"APPLIED"}
+        results = self.concurrent(self.agent + "/status", [body, body], node=True)
+        self.assertEqual([r[0] for r in results], [200, 200])
+        self.assertEqual(AdminEvent.objects.filter(message__contains="적용 확인").count(), 1)
