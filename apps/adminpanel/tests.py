@@ -2544,6 +2544,8 @@ class AdminSettingsTests(TestCase):
             {"board": {"dice_rolls_per_reset": 21}},
             {"board": {"dice_reset_interval_minutes": 1441}},
             {"board": {"solve_deadline_minutes": 181}},
+            {"board": {"line_bonus_percent": -1}},
+            {"board": {"line_category_bonus_percent": 101}},
             {"flag": {"max_attempts": 11}},
             {"flag": {"lock_seconds": 3601}},
         ]:
@@ -2734,6 +2736,8 @@ class AdminSettingsTests(TestCase):
                 "dice_rolls_per_reset",
                 "dice_reset_interval_minutes",
                 "solve_deadline_minutes",
+                "line_bonus_percent",
+                "line_category_bonus_percent",
             },
         )
         self.assertEqual(set(d["flag"]), {"max_attempts", "lock_seconds"})

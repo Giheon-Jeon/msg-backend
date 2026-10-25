@@ -4,6 +4,7 @@ from django.db import transaction
 from django.test import TestCase
 
 from apps.accounts.models import Team
+from apps.adminpanel.models import AdminSetting
 from apps.board.models import Cell, TeamChallengeAccess
 from apps.board.services import consume_cell
 from apps.challenge.models import Challenge, Solve
@@ -69,6 +70,25 @@ class LineMonopolyTests(TestCase):
             set(LineMonopoly.objects.values_list("team_id", "line_number")),
             {(first_team.pk, 1), (second_team.pk, 1)},
         )
+
+    def test_bonus_percent_follows_admin_settings(self):
+        AdminSetting.objects.create(key="board.line_bonus_percent", value=10)
+        AdminSetting.objects.create(key="board.line_category_bonus_percent", value=20)
+        same_category = Team.objects.create(team_name="같은 분야 팀")
+        mixed = Team.objects.create(team_name="섞인 분야 팀")
+        self.complete_line(same_category, "same")
+        last = self.complete_line(mixed, "mixed")
+        Challenge.objects.filter(pk=last.pk).update(
+            category=Challenge.CategoryType.PWN
+        )
+
+        category_award = check_and_record_line_monopoly(same_category, line_number=1)
+        line_award = check_and_record_line_monopoly(mixed, line_number=1)
+
+        self.assertTrue(category_award.is_category_bonus)
+        self.assertEqual(category_award.earned_score, Decimal("100.00"))
+        self.assertFalse(line_award.is_category_bonus)
+        self.assertEqual(line_award.earned_score, Decimal("50.00"))
 
     def test_same_team_cannot_receive_a_line_bonus_twice(self):
         team = Team.objects.create(team_name="한 번만 받는 팀")
