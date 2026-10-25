@@ -91,10 +91,14 @@ def install(contest_id, challenge_ids, event_date, check=False):
         subprocess.run(["systemctl", "enable", "--now", "msg-koth-cycle.timer"], check=True, timeout=15)
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contest-id", required=True)
-    parser.add_argument("--challenge-id", action="append", required=True)
+    parser.add_argument("--challenge-id", dest="challenge_ids", action="append", required=True)
     parser.add_argument("--event-date", required=True)
     parser.add_argument("--check", action="store_true")
-    install(**vars(parser.parse_args()))
+    install(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()
