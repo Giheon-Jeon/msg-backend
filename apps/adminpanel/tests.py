@@ -3358,8 +3358,9 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(event.challenge_id, self.challenge.challenge_id)
 
     @patch("apps.adminpanel.views.call_scheduler_delete")
-    def test_force_delete_scheduler_failure_leaves_no_event(self, mock_delete):
-        """스케줄러 실패는 예외가 아니라 fail 반환이라 트랜잭션이 커밋된다. 그래도 이벤트는 없어야 한다."""
+    def test_force_delete_scheduler_failure_records_critical_event(self, mock_delete):
+        """스케줄러 실패는 fail 반환이라 트랜잭션이 커밋된다. 성공 기록 대신 CRITICAL 실패 기록만 남는다."""
+        from apps.adminpanel.models import AdminEvent
         from apps.instances.services import SchedulerError
 
         mock_delete.side_effect = SchedulerError(
@@ -3370,7 +3371,11 @@ class AdminEventRecordingTests(TestCase):
         res = self.client.delete(f"/api/v1/admin/instances/{inst.instance_id}")
 
         self.assertEqual(res.status_code, 503)
-        self.assertEqual(self.events(), [])
+        [event] = self.events()
+        self.assertEqual(event.type, AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
+        self.assertEqual(event.instance_id, inst.instance_id)
+        self.assertIn("SCHEDULER_UNAVAILABLE", event.message)
 
     @patch("apps.adminpanel.views.call_scheduler_reset")
     def test_force_reset_records_new_instance_id(self, mock_reset):
@@ -3425,7 +3430,8 @@ class AdminEventRecordingTests(TestCase):
         self.assertIn("flag.max_attempts=5", event.message)
 
     @patch("apps.adminpanel.views.call_scheduler_reset")
-    def test_force_reset_scheduler_failure_leaves_no_event(self, mock_reset):
+    def test_force_reset_scheduler_failure_records_critical_event(self, mock_reset):
+        from apps.adminpanel.models import AdminEvent
         from apps.instances.services import SchedulerError
 
         mock_reset.side_effect = SchedulerError(
@@ -3436,7 +3442,10 @@ class AdminEventRecordingTests(TestCase):
         res = self.client.post(f"/api/v1/admin/instances/{old.instance_id}/reset")
 
         self.assertEqual(res.status_code, 503)
-        self.assertEqual(self.events(), [])
+        [event] = self.events()
+        self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
+        self.assertEqual(event.instance_id, old.instance_id)
+        self.assertIn("재시작 실패", event.message)
 
     def test_failed_unban_leaves_no_event(self):
         res = self.client.delete(f"/api/v1/admin/teams/{self.team.team_id}/ban")
