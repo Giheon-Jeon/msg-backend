@@ -311,6 +311,9 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
+    # 앞단 프록시 수. X-Forwarded-For 앞부분은 클라이언트가 마음대로 넣을 수 있어 요청 제한은
+    # 프록시가 붙인 뒤쪽 주소만 쓴다. 프론트 nginx 한 단계 기준이고, 구성이 바뀌면 함께 바꾼다.
+    "NUM_PROXIES": int(os.getenv("NUM_PROXIES", "1")),
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),

@@ -4642,15 +4642,45 @@ class AdminTeamManageTests(TestCase):
             score=100,
             flag_hash="x",
         )
-        Instance.objects.create(
+        instance = Instance.objects.create(
             user=self.member,
             team=self.team,
             challenge=challenge,
             status=InstanceStatus.RUNNING,
         )
-        res = self.delete({"reason": "정리"})
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+        # 종료 중 · 정리 대기도 스케줄러에 컨테이너가 남아 있을 수 있다.
+        for status in (
+            InstanceStatus.RUNNING,
+            InstanceStatus.STOPPING,
+            InstanceStatus.CLEANUP_PENDING,
+        ):
+            with self.subTest(status=status):
+                Instance.objects.filter(pk=instance.pk).update(status=status)
+                res = self.delete({"reason": "정리"})
+                self.assertEqual(res.status_code, 409)
+                self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+                self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
+                self.assertEqual(self.events("TEAM_DELETED"), [])
+
+    def test_delete_rolls_back_when_score_recalculation_fails(self):
+        """재계산이 도중에 끊기면 팀 삭제도 남지 않아야 다시 시도할 수 있다."""
+        challenge = Challenge.objects.create(
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+        )
+        Solve.objects.create(
+            team=self.team, challenge=challenge, earned_score=500, earned_mileage=0
+        )
+        with patch(
+            "apps.adminpanel.views.update_dynamic_score_and_team_scores",
+            side_effect=RuntimeError("중단"),
+        ):
+            res = self.delete({"reason": "정리"})
+
+        self.assertEqual(res.status_code, 500)
         self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
         self.assertEqual(self.events("TEAM_DELETED"), [])
 
