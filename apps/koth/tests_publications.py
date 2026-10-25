@@ -182,6 +182,16 @@ class PublicationTests(TestCase):
         self.assertEqual(publications.serialize(publication)["missing"], [])
         self.assertEqual(self.apply(repaired).status_code, 200)
 
+    def test_earlier_collected_version_becomes_ready_when_running_baseline_arrives(self):
+        baseline = self.source.publication
+        baseline.source_sha = "e" * 40; baseline.save(update_fields=["source_sha"])
+        publication = self.register(); version = publication.environment_versions.get()
+        self.assertIn("running_publication_required", [item["reason"] for item in publication.missing])
+        self.assertEqual(self.apply(version).status_code, 409)
+        baseline.source_sha = SHA; baseline.save(update_fields=["source_sha"])
+        self.assertEqual(publications.serialize(publication)["missing"], [])
+        self.assertEqual(self.apply(version).status_code, 200)
+
     def test_environment_edit_does_not_overwrite_manually_edited_description(self):
         self.challenge.description = "관리자가 확인한 지문"; self.challenge.save()
         response = self.apply(self.source)

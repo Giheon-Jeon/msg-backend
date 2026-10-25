@@ -236,8 +236,16 @@ def serialize(publication):
 
 def unresolved(publication, version):
     values = {c["name"]: c["entries"] for c in decode_settings(version)["containers"]}
-    return [item for item in publication.missing
-            if not (item["reason"] == "value_required" and values.get(item["container"], {}).get(item["name"], {}).get("value") is not None)]
+    remaining = []
+    for item in publication.missing:
+        if item["reason"] == "value_required" and values.get(item["container"], {}).get(item["name"], {}).get("value") is not None:
+            continue
+        if item["reason"] == "running_publication_required":
+            baseline = KothPublication.objects.filter(challenge_id=version.challenge_id, source_sha=version.challenge.source_revision).first()
+            if baseline and baseline.runtime_profile == publication.runtime_profile:
+                continue
+        remaining.append(item)
+    return remaining
 
 
 def source_allowed(challenge, version):
