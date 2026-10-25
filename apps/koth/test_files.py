@@ -138,7 +138,6 @@ class KothParticipantFileTests(TestCase):
         self.assertEqual(response["X-Content-Type-Options"], "nosniff")
         self.assertEqual(int(response["Content-Length"]), len(self.archive))
         self.assertEqual(b"".join(response.streaming_content), self.archive)
-        response.close()
 
     def test_unauthenticated_download_is_rejected(self):
         self.client.credentials()
@@ -161,7 +160,6 @@ class KothParticipantFileTests(TestCase):
         response = self.download(admin=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(b"".join(response.streaming_content), self.archive)
-        response.close()
         self.challenge.refresh_from_db()
         self.assertEqual(self.challenge.status, "SCHEDULED")
 
@@ -199,7 +197,6 @@ class KothParticipantFileTests(TestCase):
         self.assertEqual(self.metadata()["file"]["sha256"], bundle.sha256)
         response = self.download()
         self.assertEqual(b"".join(response.streaming_content), changed)
-        response.close()
 
     def test_explicit_file_removal_never_falls_back_to_older_zip(self):
         status, _ = register_user_files_bundle(
