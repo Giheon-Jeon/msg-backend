@@ -213,3 +213,21 @@ class EnvironmentTests(TestCase):
         response = self.status(app, version, "FAILED", error_code="private log value")
         self.assertEqual(response.status_code, 400)
         self.config.refresh_from_db(); self.assertEqual(self.config.error_code, "")
+
+    def test_agent_token_is_scoped_to_a_single_game(self):
+        other = KothChallenge.objects.create(club=KothClub.objects.create(name="Other club"), title="Other game",
+            open_group=2, inbound_internal_token_hash="b" * 64, repository_slug="koth-other", source_revision=SHA)
+        KothEnvironmentConfig.objects.create(challenge=other, target_id="other-vm", agent_token_hash=agent_token_hash(secrets.token_urlsafe(40)))
+        response = self.node.get(f"/internal/v1/koth-environments/{other.pk}")
+        self.assertEqual(response.status_code, 401)
+
+    def test_rollback_is_queued_when_an_earlier_application_is_unconfirmed(self):
+        version = self.save(); app = self.apply(version).data["data"]["application_id"]
+        self.assertEqual(self.status(app, version, "APPLYING").status_code, 200)
+        self.assertEqual(self.apply(self.source).status_code, 409)
+        from datetime import timedelta
+        from django.utils import timezone
+        KothEnvironmentConfig.objects.filter(pk=self.challenge.pk).update(checked_at=timezone.now() - timedelta(minutes=3))
+        response = self.apply(self.source)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["state"]["state"], "QUEUED")

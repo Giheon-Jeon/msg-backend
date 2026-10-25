@@ -198,8 +198,9 @@ class EnvironmentApplyView(APIView):
                 raise EnvironmentError("이전 설정을 적용 중입니다 완료 상태를 먼저 확인해주세요", "KOTH_ENV_APPLYING", 409)
             application = KothEnvironmentApply.objects.create(application_id=application_id, challenge=challenge,
                 version=version, request_fingerprint=fingerprint, requested_by=request.user.login_id)
+            already_confirmed = config.state == KothEnvironmentConfig.State.READY and config.applied_version_id == version.pk
             config.application = application
-            config.state = KothEnvironmentConfig.State.READY if config.applied_version_id == version.pk else KothEnvironmentConfig.State.QUEUED
+            config.state = KothEnvironmentConfig.State.READY if already_confirmed else KothEnvironmentConfig.State.QUEUED
             config.apply_actor = request.user.login_id
             config.error_code = ""
             config.save()
