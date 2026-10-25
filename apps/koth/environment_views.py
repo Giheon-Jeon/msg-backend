@@ -27,6 +27,7 @@ from .environment import (
 from .models import KothChallenge, KothChallengeStatus, KothEnvironmentApply, KothEnvironmentConfig, KothEnvironmentVersion
 
 ERRORS = {
+    "IMAGE_PREPARATION_FAILED": "새 이미지를 준비하지 못했습니다 기존 실행 버전은 유지됩니다",
     "ROLLOUT_FAILED": "설정을 적용하지 못해 이전 설정으로 복구했습니다",
     "ROLLBACK_CONFLICT": "VM의 다른 변경과 겹쳐 복구하지 못했습니다 운영 설정을 확인해주세요",
     "IMAGE_MISMATCH": "현재 VM의 이미지와 등록된 실행 이미지가 다릅니다",
