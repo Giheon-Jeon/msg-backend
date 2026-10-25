@@ -187,6 +187,8 @@ def register(challenge, prepared, actor, *, preview_token=None):
         raise EnvironmentError("이 문제에 연결된 저장소 폴더와 다릅니다", "KOTH_PUBLICATION_CONFLICT", 409)
     with transaction.atomic():
         challenge = KothChallenge.objects.select_for_update().get(pk=challenge.pk)
+        if challenge.repository_slug != prepared["slug"]:
+            raise EnvironmentError("연결된 저장소 폴더가 바뀌었습니다 다시 확인해주세요", "KOTH_PUBLICATION_CONFLICT", 409)
         existing = KothPublication.objects.filter(challenge=challenge, registry_revision=prepared["revision"]).first()
         if existing:
             if not constant_time_compare(existing.fingerprint, prepared["fingerprint"]):
