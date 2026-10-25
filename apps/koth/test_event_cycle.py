@@ -38,10 +38,12 @@ class KothEventCycleTests(TransactionTestCase):
         return challenge
 
     def cycle(self, challenges, now, **options):
+        arguments = ["--contest-id", str(self.contest.pk)]
+        for challenge in challenges:
+            arguments.extend(["--challenge-id", str(challenge.pk)])
         with patch.dict("os.environ", {"TEST_POLL_SCORE_TOKEN": "isolated-test-only"}):
             with patch(COMMAND + ".timezone.now", return_value=now):
-                call_command("run_koth_cycle", contest_id=str(self.contest.pk),
-                             challenge_id=[str(challenge.pk) for challenge in challenges],
+                call_command("run_koth_cycle", *arguments,
                              stdout=StringIO(), stderr=StringIO(), **options)
 
     def test_before_event_neither_opens_nor_fetches(self):
@@ -177,6 +179,6 @@ class KothEventCycleTests(TransactionTestCase):
     def test_duplicate_approval_or_too_small_budget_is_rejected(self):
         first = self.challenge("budget-first")
         second = self.challenge("budget-second")
-        for challenges, options in [([first, first], {}), ([first, second], {"max_periods": 1})]:
-            with self.assertRaises(CommandError):
+        for challenges, options, message in [([first, first], {}, "distinct"), ([first, second], {"max_periods": 1}, "max-periods")]:
+            with self.assertRaisesMessage(CommandError, message):
                 self.cycle(challenges, START, **options)
