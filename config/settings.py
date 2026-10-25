@@ -295,6 +295,7 @@ REFRESH_TOKEN_HOURS = 12
 # 생성한다. 기존 개발 환경은 JWT_SECRET을 fallback으로 사용하되 운영에서는
 # 반드시 별도 값을 설정한다.
 KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
+KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))

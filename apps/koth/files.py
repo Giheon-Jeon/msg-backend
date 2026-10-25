@@ -3,7 +3,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
-from django.db.models import OuterRef, Subquery
+from django.db.models import OuterRef, Subquery, Q
 from django.http import FileResponse
 from django.views.decorators.cache import never_cache
 from google.api_core.exceptions import GoogleAPIError
@@ -81,7 +81,7 @@ def register_koth_user_files(validated, archive_bytes, artifact):
 def with_file_metadata(queryset):
     selected = KothUserFileBundle.objects.filter(
         challenge_id=OuterRef("pk"), source_sha=OuterRef("source_revision")
-    ).order_by("-registry_revision")
+    ).filter(Q(registry_revision=OuterRef("active_publication__registry_revision")) | Q(challenge__active_publication__isnull=True)).order_by("-registry_revision")
     return queryset.annotate(**{
         "selected_file_" + field: Subquery(selected.values(field)[:1])
         for field in ("present", "object_key", "sha256", "size_bytes")
@@ -91,6 +91,7 @@ def with_file_metadata(queryset):
 def public_file_metadata(challenge):
     if (
         challenge.status != KothChallengeStatus.ACTIVE
+        or challenge.files_mode == "NONE"
         or not challenge.selected_file_present
         or not challenge.selected_file_object_key
     ):
@@ -103,13 +104,24 @@ def public_file_metadata(challenge):
     }
 
 
-def _download(challenge_id, *, admin=False):
+def _download(challenge_id, *, admin=False, publication_id=None):
     challenge = KothChallenge.objects.filter(pk=challenge_id).first()
-    if challenge is None or (not admin and challenge.status != KothChallengeStatus.ACTIVE):
+    if challenge is None or challenge.files_mode == "NONE" or (not admin and challenge.status != KothChallengeStatus.ACTIVE):
         return fail("FILE_NOT_FOUND", "다운로드할 참가자 파일이 없습니다", 404)
-    bundle = challenge.user_file_bundles.filter(
-        source_sha=challenge.source_revision
-    ).order_by("-registry_revision").first()
+    if admin and publication_id:
+        from .environment import canonical_uuid, EnvironmentError
+        try:
+            publication = challenge.publications.filter(pk=canonical_uuid(publication_id)).first()
+        except EnvironmentError:
+            publication = None
+        if publication is None:
+            return fail("KOTH_PUBLICATION_NOT_FOUND", "이 문제의 발행본을 찾지 못했습니다", 404)
+        bundle = challenge.user_file_bundles.filter(source_sha=publication.source_sha, registry_revision=publication.registry_revision).first()
+    else:
+        bundles = challenge.user_file_bundles.filter(source_sha=challenge.source_revision)
+        if challenge.active_publication_id:
+            bundles = bundles.filter(registry_revision=challenge.active_publication.registry_revision)
+        bundle = bundles.order_by("-registry_revision").first()
     if bundle is None or not bundle.present or not bundle.object_key:
         return fail("FILE_NOT_FOUND", "다운로드할 참가자 파일이 없습니다", 404)
     try:
@@ -140,4 +152,4 @@ def challenge_file(request, challenge_id):
 @api_view(["GET"])
 @permission_classes([IsAdmin])
 def admin_challenge_file(request, challenge_id):
-    return _download(challenge_id, admin=True)
+    return _download(challenge_id, admin=True, publication_id=request.query_params.get("publication_id"))

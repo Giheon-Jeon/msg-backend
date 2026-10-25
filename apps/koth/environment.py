@@ -116,6 +116,7 @@ def serialize_version(version, details=False):
     result = {"version_id": str(version.pk), "version": version.version, "source_revision": version.source_revision,
               "created_by": version.created_by, "created_at": version.created_at.isoformat(),
               "based_on_version_id": str(version.based_on_id) if version.based_on_id else None}
+    result["publication_id"] = str(version.publication_id) if version.publication_id else None
     if details:
         settings = decode_settings(version)
         result["containers"] = [{"name": c["name"], "image_ref": c["image"], "entries": [
@@ -134,8 +135,11 @@ def request_identity(body, actor):
     return request_id, salted_hmac("koth.environment.v1", payload, algorithm="sha256").hexdigest()
 
 
-def require_source(challenge, version):
-    if version.challenge_id != challenge.pk or not challenge.source_revision or version.source_revision != challenge.source_revision:
+def require_source(challenge, version, for_edit=False):
+    from .publications import source_allowed
+    owned = (for_edit and version.challenge_id == challenge.pk and version.publication_id
+             and version.publication.challenge_id == challenge.pk and version.publication.source_sha == version.source_revision)
+    if not owned and not source_allowed(challenge, version):
         raise EnvironmentError("현재 실행 이미지와 설정의 소스 커밋이 다릅니다 운영 연결을 먼저 확인해주세요", "KOTH_ENV_SOURCE_CHANGED", 409)
 
 
@@ -146,7 +150,7 @@ def prepare_changes(challenge, source, body):
         raise EnvironmentError("환경변수 변경 요청 형식을 확인해주세요")
     if canonical_uuid(body.get("base_version_id")) != source.pk:
         raise EnvironmentError("기준 설정 버전을 다시 선택해주세요", "KOTH_ENV_CONFLICT", 409)
-    require_source(challenge, source)
+    require_source(challenge, source, for_edit=True)
     original = decode_settings(source)
     settings = copy.deepcopy(original)
     target = next((c for c in settings["containers"] if c["name"] == body.get("container")), None)
@@ -212,6 +216,7 @@ def create_version(challenge, settings, source_revision, actor, request_id, fing
     latest = KothEnvironmentVersion.objects.filter(challenge=challenge).order_by("-version").first()
     return KothEnvironmentVersion.objects.create(
         version_id=version_id, challenge=challenge, version=latest.version + 1 if latest else 1,
+        publication_id=based_on.publication_id if based_on else None,
         source_revision=source_revision, based_on=based_on, request_id=request_id,
         request_fingerprint=fingerprint, created_by=actor,
         encrypted_settings=encode_settings(version_id, challenge.pk, source_revision, settings),

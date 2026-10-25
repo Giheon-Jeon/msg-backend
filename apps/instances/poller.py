@@ -357,10 +357,27 @@ def poll_once(token=None):
             mark_artifact_processed(artifact)
             continue
 
-        status, detail = register_bundle(
-            artifact_data,
-            note="공급망 자동 등록: " + str(artifact.get("name", "")),
-        )
+        if str(artifact_data.get("challenge_slug", "")).startswith("koth-"):
+            from apps.koth.publications import collect_artifact
+            from apps.koth.environment import EnvironmentError
+            from apps.instances.published_challenges import PublishedImportError
+            from apps.instances.runtime_secrets import RuntimeSecretUnavailable
+            from google.api_core.exceptions import GoogleAPIError
+            from google.auth.exceptions import GoogleAuthError
+            from django.db import IntegrityError
+            from django.core.exceptions import ImproperlyConfigured
+            try:
+                status, detail = collect_artifact(artifact) or ("unmatched", artifact_data.get("challenge_slug", ""))
+            except (EnvironmentError, ReleaseValidationError, PublishedImportError):
+                status, detail = "invalid", "KOTH 발행본 검증에 실패했습니다"
+            except (HTTPError, URLError, TimeoutError, ValueError, RuntimeSecretUnavailable, RepositorySourceUnavailable,
+                    GoogleAPIError, GoogleAuthError, OSError, IntegrityError, ImproperlyConfigured):
+                status, detail = "error", "KOTH 발행본 수집을 다음 주기에 재시도합니다"
+        else:
+            status, detail = register_bundle(
+                artifact_data,
+                note="공급망 자동 등록: " + str(artifact.get("name", "")),
+            )
         summary[status] += 1
         # An unknown problem needs one reviewed first import. Do not download
         # the same old bundle every five minutes; that import requeues its slug.
@@ -370,7 +387,7 @@ def poll_once(token=None):
             logger.info(
                 "release poller 등록: challenge=%s version=%s revision=%s",
                 detail.challenge_id,
-                detail.version,
+                getattr(detail, "version", detail.registry_revision),
                 detail.registry_revision,
             )
         elif status in ("unmatched", "invalid", "error"):
