@@ -241,7 +241,7 @@ class EnvironmentTests(TestCase):
     def test_camel_case_and_foreign_versions_are_rejected(self):
         body = self.body(); body["baseVersionId"] = body.pop("base_version_id")
         self.assertEqual(self.client.post(self.base + "/preview", body, format="json").status_code, 400)
-        other = KothChallenge.objects.create(club=self.challenge.club, title="Other", open_group=2,
+        other = KothChallenge.objects.create(club=KothClub.objects.create(name="Foreign club"), title="Other", open_group=2,
             inbound_internal_token_hash="b" * 64, repository_slug="koth-other", source_revision=SHA)
         foreign = f"/api/v1/admin/koth/challenges/{other.pk}/environment/versions/{self.source.pk}/apply"
         self.assertEqual(self.client.post(foreign, {"request_id":str(uuid.uuid4())}, format="json").status_code, 404)
