@@ -1,6 +1,8 @@
 import time
+from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Q
 
 from apps.koth.models import KothChallenge, KothChallengeStatus
 from apps.koth.services import (
@@ -12,11 +14,11 @@ from apps.koth.services import (
 
 
 class Command(BaseCommand):
-    help = "활성 KOTH 문제 서버에서 15분 구간 점수를 수집해 반영합니다. 외부 스케줄러에서 15분마다 실행하세요."
+    help = "끝난 KOTH 15분 구간 점수를 수집합니다. 마감 직후에는 닫힌 문제의 마지막 구간도 반영합니다."
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--period-id", help="ISO-8601 UTC 구간 시작 시각. 생략 시 현재 15분 구간"
+            "--period-id", help="ISO-8601 UTC 구간 시작 시각. 생략 시 직전에 끝난 15분 구간"
         )
         parser.add_argument("--challenge-id", help="특정 KOTH 문제 ID만 수집")
         parser.add_argument(
@@ -31,15 +33,30 @@ class Command(BaseCommand):
             period = (
                 parse_period(options["period_id"])
                 if options["period_id"]
-                else current_period()
+                else current_period() - timedelta(minutes=15)
             )
         except ScoreFetchError as exc:
             raise CommandError(str(exc))
-        challenges = KothChallenge.objects.filter(status=KothChallengeStatus.ACTIVE)
+        if period >= current_period():
+            raise CommandError("The score period has not ended yet.")
+        if not 0 <= options["max_retries"] <= 3:
+            raise CommandError("max_retries must be between 0 and 3.")
+        end = period + timedelta(minutes=15)
+        challenges = KothChallenge.objects.filter(
+            Q(status=KothChallengeStatus.ACTIVE)
+            | Q(
+                status=KothChallengeStatus.CLOSED,
+                opened_at__isnull=False,
+                closed_at__isnull=False,
+            )
+        ).filter(
+            Q(opened_at__isnull=True) | Q(opened_at__lte=period),
+            Q(closed_at__isnull=True) | Q(closed_at__gte=end),
+        )
         if options["challenge_id"]:
             challenges = challenges.filter(pk=options["challenge_id"])
         if not challenges.exists():
-            self.stdout.write("No active KOTH challenges to poll.")
+            self.stdout.write("No eligible KOTH challenges to poll.")
             return
         failed = False
         for challenge in challenges:
