@@ -12,6 +12,7 @@ from apps.instances.repository_source import RepositorySourceUnavailable
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
 from apps.instances.tests_repository_environment import MemorySnapshot
+from apps.challenge.services import hash_flag
 
 SHA = "c" * 40
 INFO = "deployment:\n  runtime_type: KUBERNETES\n  containers:\n    - name: app\n      build: ./app\n"
@@ -82,6 +83,47 @@ class BundleEnvironmentTests(ReleaseTestBase):
         self.assertEqual(second.secret_env["FLAG"], container.secret_env["FLAG"])
         self.assertEqual(second.secret_env["API_TOKEN"], container.secret_env["API_TOKEN"])
         self.assertEqual(RuntimeSecret.objects.count(), secrets)
+
+    def test_selected_file_flag_survives_an_empty_author_environment_file(self):
+        first = self.register()
+        flag = first.containers.get().secret_env["FLAG"]
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        self.files["env/app.env"] = ""
+        # Only FLAG remains required for this file-based problem.
+        app = first.containers.get()
+        app.env_rules = {"FLAG": {"kind": "secret", "required": True}}
+        app.save(update_fields=["env_rules"])
+        second = self.register(revision=2)
+        self.assertEqual(second.containers.get().secret_env, {"FLAG": flag})
+        self.assertEqual(second.containers.get().env, {})
+        self.assertEqual(second.repository_env["missing"], [])
+        self.assertEqual(first.containers.get().secret_env["FLAG"], flag)
+
+    def test_source_placeholder_cannot_replace_the_selected_backend_flag(self):
+        first = self.register()
+        flag = first.containers.get().secret_env["FLAG"]
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        self.files["env/app.env"] = ENV_FILE.replace("FLAG=MSG{flag}", "FLAG=MSG{author-placeholder}")
+        second = self.register(revision=2)
+        self.assertEqual(second.containers.get().secret_env["FLAG"], flag)
+        self.assertEqual(second.repository_env["missing"], [])
+
+    def test_changed_grading_flag_uses_the_matching_stored_version(self):
+        first = self.register()
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        self.challenge.flag_hash = hash_flag("MSG{updated}")
+        self.challenge.save(update_fields=["flag_hash"])
+        flag = create_runtime_secret(self.challenge, "flag", "MSG{updated}", "root")
+        second = self.register(revision=2)
+        self.assertEqual(second.containers.get().secret_env["FLAG"], str(flag.pk))
+        self.assertEqual(second.repository_env["missing"], [])
+        self.assertNotEqual(first.containers.get().secret_env["FLAG"], str(flag.pk))
+
+    def test_a_stored_flag_is_not_attached_to_an_unselected_container(self):
+        create_runtime_secret(self.challenge, "flag", "MSG{flag}", "root")
+        self.files["env/app.env"] = "PORT=8080\n"
+        release = self.register()
+        self.assertNotIn("FLAG", release.containers.get().secret_env)
 
     def test_unfilled_values_keep_the_version_but_block_its_use(self):
         self.files["env/app.env"] = "PORT=8080\nFLAG=MSG{other}\nDB_PASS=\n"
