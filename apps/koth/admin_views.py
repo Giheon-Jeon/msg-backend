@@ -302,8 +302,8 @@ class RepositoryLinkView(APIView):
         data = publications.metadata(source.slug, source.revision)
         with transaction.atomic():
             challenge = get_challenge(challenge_id, lock=True)
-            if challenge.source_revision and challenge.repository_slug != source.slug:
-                raise EnvironmentError("실행 중인 이미지의 저장소 폴더는 바꿀 수 없습니다", "KOTH_PUBLICATION_CONFLICT", 409)
+            if challenge.repository_slug != source.slug and (challenge.source_revision or challenge.publications.exists() or challenge.environment_versions.exists()):
+                raise EnvironmentError("실행 설정이나 발행본이 등록된 문제는 다른 저장소 폴더로 바꿀 수 없습니다", "KOTH_PUBLICATION_CONFLICT", 409)
             if KothChallenge.objects.filter(repository_slug=source.slug).exclude(pk=challenge.pk).exists():
                 raise EnvironmentError("다른 문제에 연결된 폴더입니다", "REPOSITORY_ALREADY_LINKED", 409)
             for key in body["apply"]:

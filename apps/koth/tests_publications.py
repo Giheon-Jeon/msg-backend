@@ -340,6 +340,21 @@ class PublicationTests(TestCase):
         self.assertIsNotNone(PollerArtifact.objects.get(pk=item["id"]).processed_at)
         self.assertEqual(KothPublication.objects.count(), 2)
 
+    def test_unconfigured_game_with_publications_cannot_be_relinked_to_another_folder(self):
+        from types import SimpleNamespace
+        self.challenge.source_revision = ""; self.challenge.save(update_fields=["source_revision"])
+        with patch("apps.koth.admin_views.RepositorySnapshot", return_value=SimpleNamespace(slug="koth-other", revision=NEW)), \
+                patch.object(publications, "metadata", return_value=self.plan["metadata"]):
+            response = self.client.put(self.path + "/repository", {"slug": "koth-other", "apply": ["description"], "reason": "폴더 연결 검증"}, format="json")
+        self.assertEqual(response.status_code, 409, response.data)
+        self.challenge.refresh_from_db(); self.assertEqual(self.challenge.repository_slug, SLUG)
+
+    def test_import_rechecks_link_after_lock_instead_of_using_a_stale_challenge_object(self):
+        KothChallenge.objects.filter(pk=self.challenge.pk).update(repository_slug="koth-other")
+        with self.assertRaises(EnvironmentError):
+            self.register()
+        self.assertEqual(KothPublication.objects.count(), 1)
+
 
 @override_settings(RUNTIME_SECRET_ENCRYPTION_KEYS=[Fernet.generate_key().decode()], CACHES=LOCMEM,
                    STORAGES={"default": {"BACKEND": "django.core.files.storage.FileSystemStorage"}})
