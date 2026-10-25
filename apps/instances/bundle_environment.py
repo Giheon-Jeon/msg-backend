@@ -159,5 +159,10 @@ def fill_bundle_environment(challenge, validated, found, created_by):
                 latest[alias] = record
             pins[name] = str(record.pk)
         container.update(env=env, secret_env=aliases, env_rules=rules, secret_versions=pins)
-        missing.extend({"container": container["name"], "name": name, "reason": reason} for name, reason in skipped)
+        bare_names = {item["name"] for item in entry["candidates"] if item.get("resolution") == "unset"}
+        for name, reason in skipped:
+            row = {"container": container["name"], "name": name, "reason": reason}
+            if reason == "no_value" and name in bare_names:
+                row["resolution"] = "unset"
+            missing.append(row)
     return {"revision": found["revision"], "files": files, "missing": missing}

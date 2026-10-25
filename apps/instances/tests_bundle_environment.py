@@ -246,6 +246,17 @@ class BundleEnvironmentTests(ReleaseTestBase):
         self.auth("root")
         self.assertEqual(self.activate(release.pk).status_code, 400)
 
+        current = release.containers.get()
+        aliases = {name: RuntimeSecret.objects.get(pk=reference).name for name, reference in current.secret_env.items()}
+        response = self.client.post(f"{self.base_url}/{release.pk}/derive", {"containers": [
+            {"name": "app", "env": current.env, "secret_env": aliases,
+             "env_rules": dict(current.env_rules, PORT={"kind": "env", "required": False})},
+        ]}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        derived = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        self.assertEqual(derived.repository_env["missing"], release.repository_env["missing"])
+        self.assertEqual(self.activate(derived.pk).status_code, 400)
+
     def test_confirmed_optional_unset_resolves_only_its_missing_value(self):
         self.files["env/app.env"] = ENV_FILE + "CASHOUT_INSTANCE_SEED\n"
         source = self.register()
