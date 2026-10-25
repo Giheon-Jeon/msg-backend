@@ -350,7 +350,7 @@ class ConcurrentPublicationTests(TransactionTestCase):
     def test_two_collectors_register_one_publication_and_one_environment_version(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
-        from django.db import close_old_connections
+        from django.db import close_old_connections, connections
         barrier = Barrier(2)
         def collect():
             close_old_connections()
@@ -360,7 +360,7 @@ class ConcurrentPublicationTests(TransactionTestCase):
                 publication, created = publications.register(challenge, copy.deepcopy(self.plan), "publication-poller")
                 return str(publication.pk), created
             finally:
-                close_old_connections()
+                connections.close_all()
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: collect(), range(2)))
         self.assertEqual(results[0][0], results[1][0])

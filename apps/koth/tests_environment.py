@@ -283,7 +283,7 @@ class ConcurrentEnvironmentTests(TransactionTestCase):
     def concurrent(self, path, bodies, node=False):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
-        from django.db import close_old_connections, connection
+        from django.db import close_old_connections, connection, connections
         if connection.vendor != "postgresql":
             self.skipTest("PostgreSQL row-lock integration")
         barrier = Barrier(len(bodies))
@@ -297,7 +297,7 @@ class ConcurrentEnvironmentTests(TransactionTestCase):
                 response = client.post(path, body, format="json")
                 return response.status_code, response.data
             finally:
-                close_old_connections()
+                connections.close_all()
         with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
             return list(pool.map(request, bodies))
 
