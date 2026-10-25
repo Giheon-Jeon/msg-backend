@@ -73,12 +73,15 @@ def fill_bundle_environment(challenge, validated, found, created_by):
     """
     config = ChallengeRuntimeConfig.objects.filter(challenge=challenge).select_related("current_release").first()
     # 관리자가 지금 쓰는 버전에서 정한 종류(일반 값, 비밀값)는 그대로 따른다
-    current_rules = {}
+    current_rules, current_bindings = {}, {}
     if config and config.current_release_id:
-        current_rules = {item.name: item.env_rules for item in config.current_release.containers.all()}
-    latest = {}
+        for item in config.current_release.containers.all():
+            current_rules[item.name] = item.env_rules
+            current_bindings[item.name] = item.secret_env
+    latest, records = {}, {}
     for record in RuntimeSecret.objects.filter(challenge=challenge).order_by("name", "-version"):
         latest.setdefault(record.name, record)
+        records[str(record.pk)] = record
     files, missing = [], []
     for container in validated["containers"]:
         entry = found["containers"].get(container["name"])
@@ -90,8 +93,22 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             continue
         rules_before = current_rules.get(container["name"], {})
         env, secrets, skipped, unset_rules = {}, {}, [], {}
+        # The backend owns the selected grading flag. File-based challenges do
+        # not declare FLAG in .env, but still need the selected secret next time.
+        reference = current_bindings.get(container["name"], {}).get("FLAG")
+        if reference and rules_before.get("FLAG", {}).get("required") is True:
+            pinned = records.get(str(reference))
+            for record in (pinned, latest.get("flag")):
+                if record is None or record.name != "flag":
+                    continue
+                value = decrypt_runtime_secret(record)
+                if is_correct_flag(value, challenge.flag_hash):
+                    secrets["FLAG"] = ("flag", value, record)
+                    break
         for item in entry["candidates"]:
             name, value = item["name"], item["value"]
+            if name == "FLAG" and name in secrets:
+                continue
             previous_rule = rules_before.get(name, {})
             if (name != "FLAG" and value is None and item.get("resolution") == "unset"
                     and previous_rule.get("required") is False):
