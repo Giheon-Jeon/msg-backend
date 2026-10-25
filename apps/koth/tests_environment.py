@@ -51,7 +51,7 @@ class EnvironmentTests(TestCase):
         self.config = KothEnvironmentConfig.objects.create(challenge=self.challenge, target_id="test-vm", application=self.application,
             applied_version=self.source, state="READY", agent_token_hash=agent_token_hash(self.token))
         self.base = f"/api/v1/admin/koth/challenges/{self.challenge.pk}/environment"
-        self.agent = f"/internal/v1/koth-environments/{self.challenge.pk}"
+        self.agent = f"/internal/v1/koth_environments/{self.challenge.pk}"
 
     @staticmethod
     def entry(value, kind, required=True, locked=False, operator_override=False):
@@ -218,7 +218,7 @@ class EnvironmentTests(TestCase):
         other = KothChallenge.objects.create(club=KothClub.objects.create(name="Other club"), title="Other game",
             open_group=2, inbound_internal_token_hash="b" * 64, repository_slug="koth-other", source_revision=SHA)
         KothEnvironmentConfig.objects.create(challenge=other, target_id="other-vm", agent_token_hash=agent_token_hash(secrets.token_urlsafe(40)))
-        response = self.node.get(f"/internal/v1/koth-environments/{other.pk}")
+        response = self.node.get(f"/internal/v1/koth_environments/{other.pk}")
         self.assertEqual(response.status_code, 401)
 
     def test_rollback_is_queued_when_an_earlier_application_is_unconfirmed(self):

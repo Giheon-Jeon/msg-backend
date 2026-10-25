@@ -1,0 +1,1023 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MSG KOTH environment contract",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/admin/koth/challenges/{challenge_id}/environment": {
+      "get": {
+        "security": [
+          {
+            "admin_jwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/admin_settings"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/koth/challenges/{challenge_id}/environment/preview": {
+      "post": {
+        "security": [
+          {
+            "admin_jwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/preview"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/edit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/koth/challenges/{challenge_id}/environment/versions": {
+      "post": {
+        "security": [
+          {
+            "admin_jwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/version"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/edit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/koth/challenges/{challenge_id}/environment/versions/{version_id}/apply": {
+      "post": {
+        "security": [
+          {
+            "admin_jwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/apply_result"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/apply"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/koth_environments/{challenge_id}": {
+      "get": {
+        "security": [
+          {
+            "game_agent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "known_application_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/agent_settings"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        }
+      }
+    },
+    "/internal/v1/koth_environments/{challenge_id}/status": {
+      "post": {
+        "security": [
+          {
+            "game_agent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "SUCCESS"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/config_state"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Administrator permission required"
+          },
+          "409": {
+            "description": "Stale, active or superseded request"
+          },
+          "503": {
+            "description": "Secret storage or repository unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/agent_status"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "admin_jwt": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "game_agent": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "edit_rule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "env",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "edit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "container": {
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "file",
+              "repository"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/edit_rule"
+            }
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "base_version_id",
+          "container",
+          "method"
+        ]
+      },
+      "apply": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "request_id"
+        ]
+      },
+      "entry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "env",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "operator_override": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value",
+          "kind",
+          "required",
+          "locked",
+          "operator_override"
+        ]
+      },
+      "settings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "image": {
+                  "type": "string"
+                },
+                "entries": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/entry"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "image",
+                "entries"
+              ]
+            }
+          }
+        },
+        "required": [
+          "containers"
+        ]
+      },
+      "agent_settings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "application_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "can_apply": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "UNCONFIGURED",
+              "READY",
+              "QUEUED",
+              "APPLYING",
+              "FAILED"
+            ]
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/settings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "challenge_id",
+          "application_id",
+          "version_id",
+          "version",
+          "target_id",
+          "source_revision",
+          "can_apply",
+          "state",
+          "changed",
+          "settings"
+        ]
+      },
+      "agent_status": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "enum": [
+              "APPLYING",
+              "APPLIED",
+              "FAILED"
+            ]
+          },
+          "error_code": {
+            "enum": [
+              "ROLLOUT_FAILED",
+              "ROLLBACK_CONFLICT",
+              "IMAGE_MISMATCH",
+              "ENVIRONMENT_MISMATCH",
+              "VM_UNAVAILABLE",
+              "GAME_ACTIVE",
+              "SOURCE_CHANGED",
+              "SECRET_CONFLICT"
+            ]
+          }
+        },
+        "required": [
+          "application_id",
+          "version_id",
+          "state"
+        ]
+      },
+      "config_state": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "desired_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "applied_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "application_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_configured": {
+            "type": "boolean"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "applied_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "desired_version_id",
+          "applied_version_id",
+          "application_id",
+          "agent_configured",
+          "checked_at",
+          "applied_at",
+          "error_code",
+          "error_message",
+          "target_id"
+        ]
+      },
+      "version": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "based_on_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "image_ref": {
+                  "type": "string"
+                },
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      },
+                      "operator_override": {
+                        "type": "boolean"
+                      },
+                      "has_value": {
+                        "type": "boolean"
+                      },
+                      "resolution": {
+                        "enum": [
+                          "configured",
+                          "unset"
+                        ]
+                      },
+                      "value": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "required",
+                      "locked",
+                      "operator_override",
+                      "has_value",
+                      "resolution"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "image_ref",
+                "entries"
+              ]
+            }
+          }
+        },
+        "required": [
+          "version_id",
+          "version",
+          "source_revision",
+          "created_by",
+          "created_at",
+          "based_on_version_id"
+        ]
+      },
+      "admin_settings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/config_state"
+          },
+          "can_apply": {
+            "type": "boolean"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/version"
+            }
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/version"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "challenge_id",
+          "source_revision",
+          "state",
+          "can_apply",
+          "versions",
+          "selected"
+        ]
+      },
+      "apply_result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "superseded": {
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/config_state"
+          }
+        },
+        "required": [
+          "application_id",
+          "version_id",
+          "superseded",
+          "state"
+        ]
+      },
+      "preview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "container": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "can_save": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "locked": {
+                  "type": "boolean"
+                },
+                "has_value": {
+                  "type": "boolean"
+                },
+                "action": {
+                  "enum": [
+                    "keep",
+                    "update",
+                    "add",
+                    "unset"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "kind",
+                "required",
+                "locked",
+                "action"
+              ]
+            }
+          }
+        },
+        "required": [
+          "container",
+          "source_revision",
+          "can_save",
+          "entries"
+        ]
+      }
+    }
+  }
+}

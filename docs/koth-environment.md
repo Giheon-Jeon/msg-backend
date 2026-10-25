@@ -39,8 +39,8 @@ method가 file이면 content와 선택적인 rules를 추가하고 repository이
 
 ## 전용 VM 에이전트
 
-- GET /internal/v1/koth-environments/{challenge_id}?known_application_id=UUID
-- POST /internal/v1/koth-environments/{challenge_id}/status
+- GET /internal/v1/koth_environments/{challenge_id}?known_application_id=UUID
+- POST /internal/v1/koth_environments/{challenge_id}/status
 
 문제별 전용 Bearer 토큰으로 자기 문제만 조회한다
 변경 없는 조회에는 비밀값을 다시 복호화하거나 전송하지 않는다
