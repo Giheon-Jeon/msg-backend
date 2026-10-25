@@ -146,7 +146,7 @@ def _release_artifact(artifact):
 
 
 @sensitive_variables()
-def prepare_publication(artifact_id):
+def prepare_publication(artifact_id, *, metadata_reader=None):
     artifact = _json(f"/actions/artifacts/{artifact_id}")
     identity = artifact_identity(artifact)
     if identity is None:
@@ -178,7 +178,7 @@ def prepare_publication(artifact_id):
         raise ReleaseValidationError("발행 파일이 너무 많아 모두 확인하지 못했습니다")
     if not any(item["id"] == artifact_id for item in matching.values()):
         raise PublishedImportError("PUBLICATION_UNAVAILABLE", "선택한 발행 파일이 만료되었거나 삭제됐습니다", 409)
-    metadata = _metadata(slug, sha)
+    metadata = (metadata_reader or _metadata)(slug, sha)
     release_data = release_validated = manifest = file_validated = archive_bytes = None
     if "publish" in matching:
         release_data = _release_artifact(matching["publish"])
@@ -189,7 +189,7 @@ def prepare_publication(artifact_id):
         if release_validated["runtime_type"] not in {"KUBERNETES", "DOCKER"}:
             raise ReleaseValidationError("VM 문제는 별도 배포 경로에서 관리해주세요")
     environment = None
-    if release_validated:
+    if release_validated and metadata_reader is None:
         # 발행 묶음에 환경변수가 없으면 같은 커밋의 env/<컨테이너>.env 를 넣는다
         try:
             environment = read_bundle_environment(release_validated, sha)

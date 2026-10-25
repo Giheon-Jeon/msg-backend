@@ -76,6 +76,10 @@ class KothChallenge(models.Model):
     # 플랫폼 -> 문제 서버 점수 조회 주소와, 원문 토큰을 읽어올 환경 변수명
     score_api_url = models.URLField(max_length=500, blank=True)
     score_api_token_env = models.CharField(max_length=100, blank=True)
+    metadata_revision = models.CharField(max_length=40, blank=True, default="")
+    active_publication = models.ForeignKey("KothPublication", on_delete=models.PROTECT, null=True, blank=True, related_name="active_challenges")
+    files_mode = models.CharField(max_length=20, default="REPOSITORY", choices=[("REPOSITORY", "REPOSITORY"), ("NONE", "NONE")])
+    updated_by = models.CharField(max_length=50, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -99,6 +103,7 @@ class KothChallenge(models.Model):
 
 class KothEnvironmentVersion(models.Model):
     version_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey("KothPublication", on_delete=models.PROTECT, null=True, blank=True, related_name="environment_versions")
     challenge = models.ForeignKey(KothChallenge, on_delete=models.PROTECT, related_name="environment_versions")
     version = models.PositiveIntegerField()
     source_revision = models.CharField(max_length=40)
@@ -188,6 +193,27 @@ class KothUserFileBundle(models.Model):
                 name="koth_file_source_idx",
             ),
         ]
+
+
+class KothPublication(models.Model):
+    """Successful CI output, immutable and staged separately from the running game."""
+    publication_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey(KothChallenge, on_delete=models.PROTECT, related_name="publications")
+    registry_revision = models.PositiveBigIntegerField()
+    source_sha = models.CharField(max_length=40)
+    artifact_id = models.PositiveBigIntegerField(unique=True)
+    run_id = models.PositiveBigIntegerField()
+    fingerprint = models.CharField(max_length=64)
+    metadata = models.JSONField(default=dict)
+    runtime_profile = models.JSONField(default=dict)
+    missing = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=50)
+
+    class Meta:
+        db_table = "koth_publications"
+        ordering = ["-registry_revision"]
+        constraints = [models.UniqueConstraint(fields=["challenge", "registry_revision"], name="uq_koth_publication_revision")]
 
 
 class KothTeamToken(models.Model):

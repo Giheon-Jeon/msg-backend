@@ -107,8 +107,9 @@ class EnvironmentView(APIView):
         for extra in (selected, config.applied_version if config else None, config.application.version if config and config.application else None):
             if extra and all(v.pk != extra.pk for v in versions):
                 versions.append(extra)
+        from .publications import source_allowed
         can_apply = bool(selected and config and config.agent_token_hash and challenge.status != KothChallengeStatus.ACTIVE
-                         and selected.source_revision == challenge.source_revision)
+                         and source_allowed(challenge, selected))
         if config and config.state == "APPLYING" and config.checked_at and config.checked_at > timezone.now() - timedelta(minutes=2):
             can_apply = False
         return ok({"challenge_id": str(challenge.pk), "source_revision": challenge.source_revision,
@@ -152,7 +153,7 @@ class EnvironmentVersionsView(APIView):
         plan = prepare_changes(challenge, source, request.data)
         with transaction.atomic():
             challenge = get_challenge(challenge_id, lock=True)
-            require_source(challenge, source)
+            require_source(challenge, source, for_edit=True)
             existing = KothEnvironmentVersion.objects.filter(request_id=request_id).first()
             if existing:
                 if existing.challenge_id != challenge.pk or not constant_time_compare(existing.request_fingerprint, fingerprint):
@@ -247,6 +248,7 @@ class EnvironmentAgentView(AgentBase):
                    "version": version.version, "target_id": config.target_id, "source_revision": version.source_revision,
                    "can_apply": config.challenge.status != KothChallengeStatus.ACTIVE,
                    "state": config.state, "changed": changed,
+                   "publication_id": str(version.publication_id) if version.publication_id else None,
                    "settings": decode_settings(version) if changed else None})
 
 
@@ -270,10 +272,14 @@ class EnvironmentAgentStatusView(AgentBase):
                 raise EnvironmentError("이미 다른 적용 요청으로 변경됐습니다", "KOTH_ENV_CONFLICT", 409)
             if config.state == "READY" and config.applied_version_id == version_id:
                 return ok(config_data(config))
+            if config.state == "FAILED" and body["state"] != "FAILED":
+                raise EnvironmentError("실패가 확정된 요청입니다 새 적용 요청으로 다시 진행해주세요", "KOTH_ENV_CONFLICT", 409)
             require_source(challenge, application.version)
             if body["state"] == "APPLYING" and challenge.status == KothChallengeStatus.ACTIVE:
                 raise EnvironmentError("경기 진행 중에는 새 설정을 적용하지 않습니다", "KOTH_ENV_ACTIVE", 409)
             if body["state"] == "APPLIED":
+                from .publications import commit_applied
+                commit_applied(challenge, application.version, config.apply_actor or "environment-agent")
                 config.applied_version_id = version_id
                 config.applied_at = timezone.now()
                 config.state, config.error_code = "READY", ""

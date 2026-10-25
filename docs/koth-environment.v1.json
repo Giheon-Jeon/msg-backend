@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MSG KOTH environment contract",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/api/v1/admin/koth/challenges/{challenge_id}/environment": {
@@ -654,6 +654,13 @@
                 "type": "null"
               }
             ]
+          },
+          "publication_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
@@ -872,6 +879,13 @@
                 "entries"
               ]
             }
+          },
+          "publication_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
