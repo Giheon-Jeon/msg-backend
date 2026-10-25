@@ -89,9 +89,15 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             missing.append({"container": container["name"], "name": None, "reason": "invalid", "message": entry["error"]})
             continue
         rules_before = current_rules.get(container["name"], {})
-        env, secrets, skipped = {}, {}, []
+        env, secrets, skipped, unset_rules = {}, {}, [], {}
         for item in entry["candidates"]:
             name, value = item["name"], item["value"]
+            previous_rule = rules_before.get(name, {})
+            if (name != "FLAG" and value is None and item.get("resolution") == "unset"
+                    and previous_rule.get("required") is False):
+                # Do not revive a previous secret for an explicitly unset option.
+                unset_rules[name] = dict(previous_rule)
+                continue
             sensitive = item["sensitive"] or bool(SENSITIVE_NAME.search(name))
             kind = "secret" if sensitive else rules_before.get(name, {}).get("kind", item["kind"])
             if kind == "env":
@@ -126,6 +132,7 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             rules = {name: {"kind": "env", "required": rules_before.get(name, {}).get("required", value != "")}
                      for name, value in env.items()}
             rules |= {name: {"kind": "secret", "required": True} for name in secrets}
+            rules.update(unset_rules)
             env = validate_env(env)
             aliases = validate_secret_env(aliases, env)
             rules = validate_env_rules(rules, env, aliases)

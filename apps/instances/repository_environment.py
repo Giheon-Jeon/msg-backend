@@ -172,7 +172,12 @@ def discover_environment(snapshot, container_name):
     if canonical_path in snapshot.files:
         # A migrated challenge has exactly one runtime source. Do not merge old
         # image defaults, unrelated service code or example files back into it.
-        entries = _dotenv(snapshot.read(canonical_path), canonical_path, interpolate=True)
+        content = snapshot.read(canonical_path)
+        entries = _dotenv(content, canonical_path, interpolate=True)
+        # A bare NAME deliberately leaves the process variable absent. An
+        # unresolved ${NAME:?required} is different and must still need a value.
+        unset_names = {binding.key for binding in parse_stream(io.StringIO(content))
+                       if binding.key and binding.value is None}
         result, warnings = [], []
         for name, value, line in entries:
             if not ENV_NAME.fullmatch(name):
@@ -180,7 +185,7 @@ def discover_environment(snapshot, container_name):
             kind, sensitive = environment_kind(name, value)
             result.append({"name": name, "value": value, "kind": kind, "sensitive": sensitive,
                            "needs_value": value is None,
-                           "resolution": "needs_value" if value is None else "configured",
+                           "resolution": "unset" if name in unset_names else ("needs_value" if value is None else "configured"),
                            "sources": [{"path": canonical_path, "line": line, "origin": "env_file"}]})
         if any(row["needs_value"] for row in result):
             warnings.append("저장소에 값이 없는 항목은 관리자에서 입력하거나 기존 비밀값을 연결해주세요")

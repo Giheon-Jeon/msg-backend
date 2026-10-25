@@ -37,10 +37,13 @@ def parse_environment_file(content):
             continue
         name, separator, value = line.partition("=")
         name, value = name.strip(" \t"), value.strip(" \t")
-        if not separator or not ENV_NAME.fullmatch(name):
+        if not ENV_NAME.fullmatch(name):
             raise ReleaseValidationError(f"{line_number}번째 줄은 대문자 이름=값 형식으로 입력해주세요")
         if name in values:
             raise ReleaseValidationError(f"{line_number}번째 줄에 같은 이름이 두 번 나옵니다")
+        if not separator:
+            values[name] = None
+            continue
         if value.startswith(("'", '"')):
             if len(value) < 2 or value[-1] != value[0]:
                 raise ReleaseValidationError(f"{line_number}번째 줄의 따옴표를 확인해주세요 한 줄에 값을 입력해야 합니다")
@@ -52,7 +55,8 @@ def parse_environment_file(content):
         raise ReleaseValidationError("가져올 환경변수가 없습니다")
     if len(values) > MAX_ENV_COUNT:
         raise ReleaseValidationError("환경변수는 128개까지 등록할 수 있습니다")
-    if sum(len(name) + len(value.encode("utf-8")) for name, value in values.items()) > MAX_ENV_BYTES:
+    if sum(len(name) + len(value.encode("utf-8")) if value is not None else len(name)
+           for name, value in values.items()) > MAX_ENV_BYTES:
         raise ReleaseValidationError("환경변수의 전체 크기는 16384바이트 이하여야 합니다")
     return values
 
@@ -122,9 +126,23 @@ def prepare_environment_file(source, body):
         entry = declarations.get(name, {"kind": old_rule.get("kind", default_kind),
                                         "required": old_rule.get("required", True)})
         kind, required = entry["kind"], entry["required"]
-        row = {"name": name, "kind": kind, "required": required, "has_value": value != "",
+        row = {"name": name, "kind": kind, "required": required, "has_value": value is not None and value != "",
                "locked_secret": locked_secret, "action": "update" if name in target.env or previous else "add"}
         selected["env_rules"][name] = {"kind": kind, "required": required}
+        if value is None:
+            row.update(action="unset", use_existing=False)
+            if required or name == "FLAG":
+                errors.append(f"{name}은 필수 항목입니다 미설정으로 저장할 수 없습니다")
+            elif kind == "env" and locked_secret:
+                errors.append(f"{name}은 비밀값으로 등록해주세요")
+            elif entry.get("use_existing"):
+                errors.append(f"{name}: 미설정과 기존 비밀값 연결을 함께 선택할 수 없습니다")
+            else:
+                selected["env"].pop(name, None)
+                selected["secret_env"].pop(name, None)
+                pins[target.name].pop(name, None)
+            rows.append(row)
+            continue
         if kind == "env":
             if locked_secret:
                 # Even a malformed preview must not echo a known secret value.

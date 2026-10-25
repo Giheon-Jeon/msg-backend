@@ -313,3 +313,40 @@ class RepositoryEnvironmentApiTests(ReleaseTestBase):
             response = self.client.get(self.url, {"container": "app"})
         self.assertIn(response.status_code, (401, 403))
         read.assert_not_called()
+
+    def test_optional_bare_seed_is_imported_as_unset_without_secret_reuse(self):
+        stored = create_runtime_secret(self.challenge, "env_app_seed", "old-fixed-seed", "root")
+        app = self.source.containers.get(name="app")
+        app.secret_env["CASHOUT_INSTANCE_SEED"] = str(stored.pk)
+        app.env_rules["CASHOUT_INSTANCE_SEED"] = {"kind": "secret", "required": False}
+        app.save(update_fields=["secret_env", "env_rules"])
+        with patch.dict(FILES, {"env/app.env": "PORT=9090\nFLAG=MSG{flag}\nCASHOUT_INSTANCE_SEED\n"}):
+            loaded = self.loaded().data["data"]
+            seed = next(row for row in loaded["entries"] if row["name"] == "CASHOUT_INSTANCE_SEED")
+            self.assertEqual(seed["resolution"], "unset")
+            self.assertFalse(seed["needs_value"])
+            self.assertFalse(seed["use_existing"])
+            self.assertTrue(seed["selected"])
+            self.assertFalse(loaded["warnings"])
+            body = self.body()
+            preview = self.client.post(self.url + "/preview", body, format="json")
+            self.assertTrue(preview.data["data"]["can_import"], preview.data)
+            saved = self.client.post(self.url + "/import", body, format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        app = ChallengeRelease.objects.get(pk=saved.data["data"]["release_id"]).containers.get(name="app")
+        self.assertNotIn("CASHOUT_INSTANCE_SEED", app.env)
+        self.assertNotIn("CASHOUT_INSTANCE_SEED", app.secret_env)
+        self.assertEqual(app.env_rules["CASHOUT_INSTANCE_SEED"], {"kind": "secret", "required": False})
+
+    def test_optional_rule_does_not_clear_a_required_expression(self):
+        app = self.source.containers.get(name="app")
+        app.env_rules["CASHOUT_INSTANCE_SEED"] = {"kind": "secret", "required": False}
+        app.save(update_fields=["env_rules"])
+        with patch.dict(FILES, {"env/app.env": "CASHOUT_INSTANCE_SEED=${MISSING:?required}\n"}):
+            loaded = self.loaded().data["data"]
+            seed = loaded["entries"][0]
+            self.assertEqual(seed["resolution"], "needs_value")
+            self.assertTrue(seed["needs_value"])
+            body = self.body()
+            body["entries"][0]["required"] = False
+            self.assertEqual(self.client.post(self.url + "/preview", body, format="json").status_code, 400)

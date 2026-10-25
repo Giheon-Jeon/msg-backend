@@ -197,6 +197,81 @@ class BundleEnvironmentTests(ReleaseTestBase):
         derived = self.derive(source, {"PORT": ""}, {})
         self.assertEqual(derived.repository_env, source.repository_env)
         self.assertEqual(self.activate(derived.pk).status_code, 400)
+
+    def test_explicit_optional_bare_seed_never_reuses_an_old_secret(self):
+        self.files["env/app.env"] = ENV_FILE + "CASHOUT_INSTANCE_SEED=previous-seed\n"
+        first = self.register()
+        app = first.containers.get()
+        previous = app.secret_env["CASHOUT_INSTANCE_SEED"]
+        app.env_rules["CASHOUT_INSTANCE_SEED"]["required"] = False
+        app.save(update_fields=["env_rules"])
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        count = RuntimeSecret.objects.count()
+        self.files["env/app.env"] = ENV_FILE + "CASHOUT_INSTANCE_SEED\n"
+        second = self.register(revision=2)
+        current = second.containers.get()
+        self.assertNotIn("CASHOUT_INSTANCE_SEED", current.env)
+        self.assertNotIn("CASHOUT_INSTANCE_SEED", current.secret_env)
+        self.assertEqual(current.env_rules["CASHOUT_INSTANCE_SEED"], {"kind": "secret", "required": False})
+        self.assertEqual(second.repository_env["missing"], [])
+        self.assertTrue(RuntimeSecret.objects.filter(pk=previous).exists())
+        self.assertEqual(RuntimeSecret.objects.count(), count)
+
+    def test_optional_unset_and_empty_plain_values_remain_different(self):
+        first = self.register()
+        app = first.containers.get()
+        app.env_rules["PORT"]["required"] = False
+        app.save(update_fields=["env_rules"])
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        self.files["env/app.env"] = ENV_FILE.replace("PORT=8080", "PORT")
+        unset = self.register(revision=2)
+        self.assertNotIn("PORT", unset.containers.get().env)
+        self.assertEqual(unset.repository_env["missing"], [])
+        self.files["env/app.env"] = ENV_FILE.replace("PORT=8080", "PORT=")
+        empty = self.register(revision=3)
+        self.assertEqual(empty.containers.get().env["PORT"], "")
+
+    def test_required_expression_is_not_mistaken_for_a_bare_optional_name(self):
+        first = self.register()
+        app = first.containers.get()
+        app.env_rules["PORT"]["required"] = False
+        app.save(update_fields=["env_rules"])
+        ChallengeRuntimeConfig.objects.update_or_create(challenge=self.challenge, defaults={"current_release": first})
+        self.files["env/app.env"] = ENV_FILE.replace("PORT=8080", "PORT=${UNDEFINED:?required}")
+        release = self.register(revision=2)
+        self.assertIn({"container": "app", "name": "PORT", "reason": "no_value"}, release.repository_env["missing"])
+        self.auth("root")
+        self.assertEqual(self.activate(release.pk).status_code, 400)
+
+    def test_confirmed_optional_unset_resolves_only_its_missing_value(self):
+        self.files["env/app.env"] = ENV_FILE + "CASHOUT_INSTANCE_SEED\n"
+        source = self.register()
+        app = source.containers.get()
+        rules = dict(app.env_rules, CASHOUT_INSTANCE_SEED={"kind": "secret", "required": False})
+        aliases = {name: RuntimeSecret.objects.get(pk=reference).name for name, reference in app.secret_env.items()}
+        self.auth("root")
+        response = self.client.post(f"{self.base_url}/{source.pk}/derive", {"containers": [
+            {"name": "app", "env": app.env, "secret_env": aliases, "env_rules": rules},
+        ]}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        derived = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        self.assertEqual(derived.repository_env["missing"], [])
+        self.assertEqual(self.activate(derived.pk).status_code, 200)
+
+    def test_unset_rule_cannot_clear_a_missing_flag(self):
+        self.files["env/app.env"] = ENV_FILE.replace("FLAG=MSG{flag}", "FLAG")
+        source = self.register()
+        app = source.containers.get()
+        rules = dict(app.env_rules, FLAG={"kind": "secret", "required": False})
+        aliases = {name: RuntimeSecret.objects.get(pk=reference).name for name, reference in app.secret_env.items()}
+        self.auth("root")
+        response = self.client.post(f"{self.base_url}/{source.pk}/derive", {"containers": [
+            {"name": "app", "env": app.env, "secret_env": aliases, "env_rules": rules},
+        ]}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        derived = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        self.assertTrue(derived.repository_env["missing"])
+        self.assertEqual(self.activate(derived.pk).status_code, 400)
         filled = self.derive(derived, {"PORT": "8080"}, {})
         self.assertEqual(filled.repository_env["missing"], [])
         self.assertEqual(self.activate(filled.pk).status_code, 200)
