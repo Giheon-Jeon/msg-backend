@@ -97,6 +97,63 @@ class KothChallenge(models.Model):
         return f"{self.club.name} / {self.title}"
 
 
+class KothEnvironmentVersion(models.Model):
+    version_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey(KothChallenge, on_delete=models.PROTECT, related_name="environment_versions")
+    version = models.PositiveIntegerField()
+    source_revision = models.CharField(max_length=40)
+    encrypted_settings = models.TextField()
+    based_on = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
+    request_id = models.UUIDField(unique=True)
+    request_fingerprint = models.CharField(max_length=64)
+    created_by = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "koth_environment_versions"
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(fields=["challenge", "version"], name="uq_koth_env_version"),
+            models.CheckConstraint(condition=models.Q(version__gte=1), name="ck_koth_env_positive_version"),
+        ]
+
+
+class KothEnvironmentApply(models.Model):
+    application_id = models.UUIDField(primary_key=True, editable=False)
+    challenge = models.ForeignKey(KothChallenge, on_delete=models.PROTECT, related_name="environment_applications")
+    version = models.ForeignKey(KothEnvironmentVersion, on_delete=models.PROTECT, related_name="applications")
+    request_fingerprint = models.CharField(max_length=64)
+    requested_by = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "koth_environment_applications"
+
+
+class KothEnvironmentConfig(models.Model):
+    class State(models.TextChoices):
+        UNCONFIGURED = "UNCONFIGURED"
+        READY = "READY"
+        QUEUED = "QUEUED"
+        APPLYING = "APPLYING"
+        FAILED = "FAILED"
+
+    challenge = models.OneToOneField(KothChallenge, primary_key=True, on_delete=models.PROTECT, related_name="environment_config")
+    target_id = models.CharField(max_length=100)
+    application = models.ForeignKey(KothEnvironmentApply, null=True, blank=True, on_delete=models.PROTECT, related_name="current_for")
+    applied_version = models.ForeignKey(KothEnvironmentVersion, null=True, blank=True, on_delete=models.PROTECT, related_name="applied_by")
+    agent_token_hash = models.CharField(max_length=64, blank=True, default="")
+    state = models.CharField(max_length=20, choices=State.choices, default=State.UNCONFIGURED)
+    apply_actor = models.CharField(max_length=50, blank=True, default="")
+    error_code = models.CharField(max_length=40, blank=True, default="")
+    applied_at = models.DateTimeField(null=True, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "koth_environment_configs"
+
+
 class KothUserFileBundle(models.Model):
     bundle_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     challenge = models.ForeignKey(
