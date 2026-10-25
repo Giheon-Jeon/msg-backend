@@ -357,14 +357,23 @@ def create_release(challenge, validated, created_by, derived_from=None):
     repository_env = validated.get("repository_env", {})
     if derived_from is not None and derived_from.repository_env:
         configured = set()
+        intentionally_unset = set()
         for container, references in zip(validated["containers"], bindings):
             configured.update((container["name"], name) for name, value in container.get("env", {}).items() if value)
             configured.update((container["name"], name) for name in references)
+            intentionally_unset.update(
+                (container["name"], name) for name, rule in container.get("env_rules", {}).items()
+                if name != "FLAG" and rule.get("required") is False
+                and name not in container.get("env", {}) and name not in references
+            )
         # A copy only resolves missing values actually supplied for that container.
         repository_env = {
             **derived_from.repository_env,
             "missing": [item for item in derived_from.repository_env.get("missing", [])
-                        if (item["container"], item["name"]) not in configured],
+                        if (item["container"], item["name"]) not in configured
+                        and not (item.get("reason") == "no_value"
+                                 and item.get("resolution") == "unset"
+                                 and (item["container"], item["name"]) in intentionally_unset)],
         }
     release = ChallengeRelease.objects.create(
         challenge=challenge,

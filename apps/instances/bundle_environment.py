@@ -89,9 +89,15 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             missing.append({"container": container["name"], "name": None, "reason": "invalid", "message": entry["error"]})
             continue
         rules_before = current_rules.get(container["name"], {})
-        env, secrets, skipped = {}, {}, []
+        env, secrets, skipped, unset_rules = {}, {}, [], {}
         for item in entry["candidates"]:
             name, value = item["name"], item["value"]
+            previous_rule = rules_before.get(name, {})
+            if (name != "FLAG" and value is None and item.get("resolution") == "unset"
+                    and previous_rule.get("required") is False):
+                # Do not revive a previous secret for an explicitly unset option.
+                unset_rules[name] = dict(previous_rule)
+                continue
             sensitive = item["sensitive"] or bool(SENSITIVE_NAME.search(name))
             kind = "secret" if sensitive else rules_before.get(name, {}).get("kind", item["kind"])
             if kind == "env":
@@ -126,6 +132,7 @@ def fill_bundle_environment(challenge, validated, found, created_by):
             rules = {name: {"kind": "env", "required": rules_before.get(name, {}).get("required", value != "")}
                      for name, value in env.items()}
             rules |= {name: {"kind": "secret", "required": True} for name in secrets}
+            rules.update(unset_rules)
             env = validate_env(env)
             aliases = validate_secret_env(aliases, env)
             rules = validate_env_rules(rules, env, aliases)
@@ -152,5 +159,10 @@ def fill_bundle_environment(challenge, validated, found, created_by):
                 latest[alias] = record
             pins[name] = str(record.pk)
         container.update(env=env, secret_env=aliases, env_rules=rules, secret_versions=pins)
-        missing.extend({"container": container["name"], "name": name, "reason": reason} for name, reason in skipped)
+        bare_names = {item["name"] for item in entry["candidates"] if item.get("resolution") == "unset"}
+        for name, reason in skipped:
+            row = {"container": container["name"], "name": name, "reason": reason}
+            if reason == "no_value" and name in bare_names:
+                row["resolution"] = "unset"
+            missing.append(row)
     return {"revision": found["revision"], "files": files, "missing": missing}

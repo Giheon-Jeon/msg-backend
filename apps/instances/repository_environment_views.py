@@ -73,6 +73,10 @@ def _repository_request(source, body):
                 raise ReleaseValidationError("새 값을 입력할 때는 기존 비밀값 연결을 해제해주세요")
             value = ""
         if value is None:
+            if (name not in overrides and candidate.get("resolution") == "unset"
+                    and entry.get("required") is False):
+                content.append(name)
+                continue
             raise ReleaseValidationError(f"{name}: 확인할 값이 없습니다 직접 입력하거나 가져오기에서 제외해주세요")
         if not isinstance(value, str) or any(char in value for char in "\r\n\0") or len(value.encode()) > 4096:
             raise ReleaseValidationError("한 줄에 4096바이트 이하의 값을 입력해주세요")
@@ -104,13 +108,17 @@ class RepositoryEnvironmentView(APIView):
                 kind = "secret" if previous or item["sensitive"] else target.env_rules.get(name, {}).get("kind", item["kind"])
                 row = {key: item[key] for key in ("name", "sources", "needs_value", "resolution")}
                 has_value = item["value"] is not None and (kind == "env" or item["value"] != "")
-                use_existing = previous is not None and not has_value
+                is_unset = (name != "FLAG" and item["value"] is None and item.get("resolution") == "unset"
+                            and target.env_rules.get(name, {}).get("required") is False)
+                use_existing = previous is not None and not has_value and not is_unset
                 row.update(kind=kind, required=target.env_rules.get(name, {}).get("required", item["value"] != ""),
-                           selected=use_existing or (has_value and item["resolution"] != "author_example"),
+                           selected=is_unset or use_existing or (has_value and item["resolution"] != "author_example"),
                            has_value=has_value,
                            locked_secret=bool(previous or item["sensitive"] or target.env_rules.get(name, {}).get("kind") == "secret"),
                            secret_name=previous.name if previous else default_secret_name(container_name, name),
                            use_existing=use_existing)
+                if is_unset:
+                    row.update(needs_value=False, resolution="unset")
                 if previous:
                     row.update(secret_id=str(previous.pk), version=previous.version)
                 if kind == "env" and item["value"] is not None:
@@ -118,10 +126,13 @@ class RepositoryEnvironmentView(APIView):
                 rows.append(row)
             evidence = {"release_id": str(source.pk), "slug": source.challenge_slug, "container": container_name,
                         "repository": snapshot.repository, "revision": snapshot.revision}
+            warnings = list(discovery["warnings"])
+            if not any(row["needs_value"] for row in rows):
+                warnings = [warning for warning in warnings if warning != "저장소에 값이 없는 항목은 관리자에서 입력하거나 기존 비밀값을 연결해주세요"]
             return ok({"container": container_name, "source_revision": snapshot.revision,
                        "source_url": f"https://github.com/{snapshot.repository}/tree/{snapshot.revision}/{snapshot.slug}" if getattr(snapshot, "published", True) else None,
                        "source_token": signing.dumps(evidence, salt=TOKEN_SALT, compress=True), "entries": rows,
-                       "warnings": discovery["warnings"], "build_context": discovery["build_context"],
+                       "warnings": warnings, "build_context": discovery["build_context"],
                        "source_files": discovery["source_files"]})
         except ReleaseValidationError as error:
             return fail("REPOSITORY_ENV_INVALID", error.message, 400)
