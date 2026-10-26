@@ -1,18 +1,41 @@
 import json
+import logging
 import uuid
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.challenge.exe_submissions import ExeSubmissionError, require_exe_enabled
+from apps.challenge.exe_submissions import (
+    ExeSubmissionError,
+    private_payload_storage,
+    require_exe_enabled,
+)
 from apps.challenge.models import ExeSubmission
 from apps.instances.services import SchedulerError, scheduler_auth_header
 
 MAX_RESPONSE_BYTES = 64 * 1024
+logger = logging.getLogger(__name__)
+
+
+def purge_released_payload(submission):
+    if (
+        submission.lease_released_at is None
+        or submission.cleanup_complete is not True
+        or not submission.payload_key
+    ):
+        return False
+    try:
+        private_payload_storage().delete(submission.payload_key)
+    except (OSError, ExeSubmissionError):
+        logger.error("Resolved EXE payload cleanup requires retry")
+        return False
+    submission.payload_key = ""
+    submission.save(update_fields=["payload_key", "updated_at"])
+    return True
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -33,7 +56,7 @@ def _post_scheduler(path, body=None):
     )
     try:
         # Only the validated deployment base URL is used, never the returned VM address.
-        with build_opener(_NoRedirect()).open(
+        with build_opener(ProxyHandler({}), _NoRedirect()).open(
             request, timeout=settings.SCHEDULER_TIMEOUT_SECONDS
         ) as response:  # nosec B310
             raw = response.read(MAX_RESPONSE_BYTES + 1)
@@ -96,8 +119,9 @@ def request_windows_assignment(submission):
             or uuid.UUID(result["submission_id"]) != submission.pk
         ):
             raise ValueError
-        lease_id, worker_id = uuid.UUID(result["lease_id"]), uuid.UUID(
-            result["worker_id"]
+        lease_id, worker_id = (
+            uuid.UUID(result["lease_id"]),
+            uuid.UUID(result["worker_id"]),
         )
         address = result["address"]
         expires_at = parse_datetime(result["expires_at"])
@@ -116,16 +140,44 @@ def request_windows_assignment(submission):
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "Invalid or expired Windows assignment.", 503
         ) from None
-    return {
+    fields = {
         "lease_id": lease_id,
         "worker_id": worker_id,
         "worker_address": address,
         "lease_expires_at": expires_at,
     }
+    readiness = result.get("vm_readiness", "UNKNOWN")
+    if readiness not in ["READY", "UNKNOWN", "NOT_READY"]:
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "Invalid Windows readiness.", 503)
+    fields["vm_readiness"] = readiness
+    if readiness == "READY":
+        try:
+            checked = parse_datetime(result["readiness_checked_at"])
+            if (
+                checked is None
+                or timezone.is_naive(checked)
+                or not 0 <= (timezone.now() - checked).total_seconds() <= 30
+                or any(
+                    not isinstance(result[name], str)
+                    or not 1 <= len(result[name]) <= 200
+                    for name in ["readiness_check_id", "vm_id"]
+                )
+            ):
+                raise ValueError
+            fields.update(
+                readiness_checked_at=checked,
+                readiness_check_id=result["readiness_check_id"],
+                vm_id=result["vm_id"],
+            )
+        except (KeyError, ValueError, TypeError):
+            raise SchedulerError(
+                "SCHEDULER_UNAVAILABLE", "Guest readiness proof is required.", 503
+            ) from None
+    return fields
 
 
 def assign_oldest_exe_submission():
-    """Test-only queue step; no worker or checker dispatch is enabled in this PR."""
+    """Reserve using the persisted submission ID; an uncertain reply never changes it."""
     require_exe_enabled()
     with transaction.atomic():
         # Do not skip locked rows: parallel callers must not overtake the FIFO head.
@@ -161,6 +213,7 @@ def release_windows_assignment(submission_id):
     with transaction.atomic():
         submission = ExeSubmission.objects.select_for_update().get(pk=submission_id)
         if submission.lease_released_at is not None:
+            purge_released_payload(submission)
             return submission
         if (
             submission.lease_id is None
@@ -173,6 +226,7 @@ def release_windows_assignment(submission_id):
                 ExeSubmission.Status.INFRA_ERROR,
             }
             or submission.attempt_state == ExeSubmission.AttemptState.RESERVED
+            or submission.cleanup_complete is not True
         ):
             raise ExeSubmissionError(
                 "EXECUTION_NOT_RESOLVED",
@@ -183,4 +237,5 @@ def release_windows_assignment(submission_id):
         submission.lease_released_at = timezone.now()
         # Release ACK is not proof of Broker VM recreation or cleanup completion.
         submission.save(update_fields=["lease_released_at", "updated_at"])
+        purge_released_payload(submission)
         return submission

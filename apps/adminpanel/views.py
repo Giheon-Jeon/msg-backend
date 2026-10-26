@@ -1309,6 +1309,7 @@ CHALLENGE_SORT = {
 
 
 def _serialize_challenge(challenge):
+    from apps.challenge.remote_run_config import remote_run_data
     return {
         "challenge_id": str(challenge.challenge_id),
         "challenge_slug": challenge.challenge_slug,
@@ -1323,6 +1324,7 @@ def _serialize_challenge(challenge):
         "current_score": num(challenge.current_score),
         "is_published": challenge.is_published,
         "created_at": challenge.created_at,
+        "remote_run": remote_run_data(challenge),
     }
 
 
@@ -1515,6 +1517,7 @@ def challenge_list(request):
     rows = list(queryset.order_by(CHALLENGE_SORT[sort], "title")[offset : offset + size])
     deployments = deployment_summaries(rows)
 
+    from apps.challenge.remote_run_config import remote_run_data
     challenges = [
         {
             "challenge_id": str(c.challenge_id),
@@ -1528,6 +1531,7 @@ def challenge_list(request):
             "running_instance_count": c.running_instance_count,
             "failed_instance_count": c.failed_instance_count,
             "deployment": deployments.get(c.pk),
+            "remote_run": remote_run_data(c),
         }
         for c in rows
     ]

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 import struct
 import tempfile
 import uuid
@@ -43,6 +44,7 @@ from apps.challenge.models import (
     FlagSubmission,
     FlagSubmissionLock,
     Solve,
+    RemoteRunConfig,
 )
 from apps.challenge.services import hash_flag
 from apps.challenge.windows_assignments import (
@@ -54,6 +56,7 @@ from apps.challenge.windows_assignments import (
 )
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig
 from apps.instances.services import SchedulerError
+from apps.instances.runtime_secrets import create_runtime_secret
 from apps.teams.models import MileageHistory
 
 
@@ -87,6 +90,18 @@ class ExeFixtures:
         self.root = Path(directory.name)
         configured = override_settings(
             EXE_SUBMISSIONS_ENABLED=True,
+            EXE_DISPATCH_ENABLED=True,
+            EXE_CHECKER_SIGNING_KEY="fixture-signing-key-" * 3,
+            EXE_CHECKERS={
+                "00000000-0000-0000-0000-000000000001": {
+                    "base_url": "https://checker.example.invalid",
+                    "service_token_env": "EXE_CHECKER_FIXTURE_TOKEN",
+                    "checker_commit_sha": "a" * 40,
+                    "vm_template_sha256": "b" * 64,
+                    "driver_sha256": "c" * 64,
+                    "config_version": "fixture-v1",
+                }
+            },
             EXE_SUBMISSION_STORAGE_ROOT=str(self.root),
             SECURE_SSL_REDIRECT=False,
             SCHEDULER_API_TOKEN="local-" + "test",
@@ -94,6 +109,11 @@ class ExeFixtures:
         )
         configured.enable()
         self.addCleanup(configured.disable)
+        env = patch.dict(
+            os.environ, {"EXE_CHECKER_FIXTURE_TOKEN": "fixture-token-" * 4}
+        )
+        env.start()
+        self.addCleanup(env.stop)
         network = patch(
             "apps.challenge.windows_assignments.build_opener",
             side_effect=AssertionError("Live Scheduler forbidden"),
@@ -113,6 +133,10 @@ class ExeFixtures:
             flag_hash=hash_flag("local-exe-test"),
             is_published=True,
         )
+        self.remote = RemoteRunConfig.objects.create(
+            challenge=self.challenge, enabled=True
+        )
+        create_runtime_secret(self.challenge, "flag", "local-exe-test", "test")
         cell = Cell.objects.create(
             cell_index=1, type="CHALLENGE", difficulty="EASY", name="exe-cell"
         )
@@ -130,6 +154,7 @@ class ExeFixtures:
             cpu_millicores=1000,
             memory_mib=4096,
             ephemeral_storage_mib=1024,
+            approved_at=timezone.now(),
         )
         ChallengeRuntimeConfig.objects.create(
             challenge=self.challenge, current_release=self.release
@@ -153,6 +178,22 @@ class ExeFixtures:
 
     def accepted(self):
         response = self.post_exe()
+        self.assertEqual(response.status_code, 202, response.data)
+        return ExeSubmission.objects.get(pk=response.data["data"]["submission_id"])
+
+    def accepted_other_team(self):
+        team = Team.objects.create(team_name="another-exe-team")
+        user = User.objects.create_user(
+            login_id="another-exe-user", nickname="other", team=team
+        )
+        TeamChallengeAccess.objects.create(
+            team=team,
+            challenge=self.challenge,
+            source_cell=Cell.objects.get(cell_index=1),
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        response = self.post_exe(client=client)
         self.assertEqual(response.status_code, 202, response.data)
         return ExeSubmission.objects.get(pk=response.data["data"]["submission_id"])
 
@@ -188,7 +229,7 @@ class ExeSubmissionTests(ExeFixtures, TestCase):
                 data["reserved_attempts"],
                 data["available_attempts"],
             ),
-            (0, 1, 2),
+            (0, 1, None),
         )
         self.assertIsNone(data["output"])
         self.assertFalse(Solve.objects.exists())
@@ -219,11 +260,11 @@ class ExeSubmissionTests(ExeFixtures, TestCase):
         self.assertEqual(ExeSubmission.objects.count(), 1)
         self.assertEqual(len(list(self.root.rglob("payload.exe"))), 1)
 
-    def test_three_reservations_block_fourth_without_counting_as_wrong_flags(self):
+    def test_request_interval_blocks_new_keys_without_counting_as_wrong_flags(self):
         self.assertEqual(
-            [self.post_exe().status_code for _ in range(4)], [202, 202, 202, 409]
+            [self.post_exe().status_code for _ in range(4)], [202, 429, 429, 429]
         )
-        self.assertEqual(ExeSubmission.objects.count(), 3)
+        self.assertEqual(ExeSubmission.objects.count(), 1)
         self.assertFalse(FlagSubmissionLock.objects.exists())
 
     def test_missing_invalid_key_and_extra_fields(self):
@@ -310,8 +351,12 @@ class ExeSubmissionTests(ExeFixtures, TestCase):
 
     def test_private_storage_required_and_no_media_directory(self):
         for root in ("", "relative", str(self.root / "public" / "nested")):
-            with self.subTest(root=root), override_settings(
-                EXE_SUBMISSION_STORAGE_ROOT=root, MEDIA_ROOT=str(self.root / "public")
+            with (
+                self.subTest(root=root),
+                override_settings(
+                    EXE_SUBMISSION_STORAGE_ROOT=root,
+                    MEDIA_ROOT=str(self.root / "public"),
+                ),
             ):
                 with self.assertRaises(ExeSubmissionError):
                     private_payload_storage()
@@ -602,9 +647,12 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
             {"address": "https://untrusted.invalid"},
             {"address": "10.0.0.1\nheader"},
         ):
-            with self.subTest(changes=changes), patch(
-                "apps.challenge.windows_assignments._post_scheduler",
-                return_value={**self.assignment(submission), **changes},
+            with (
+                self.subTest(changes=changes),
+                patch(
+                    "apps.challenge.windows_assignments._post_scheduler",
+                    return_value={**self.assignment(submission), **changes},
+                ),
             ):
                 with self.assertRaises(SchedulerError):
                     request_windows_assignment(submission)
@@ -624,27 +672,38 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
             )
             opener = MagicMock()
             opener.open.side_effect = error
-            with self.subTest(status=status, code=code), patch(
-                "apps.challenge.windows_assignments.build_opener", return_value=opener
+            with (
+                self.subTest(status=status, code=code),
+                patch(
+                    "apps.challenge.windows_assignments.build_opener",
+                    return_value=opener,
+                ),
             ):
                 with self.assertRaises(SchedulerError) as raised:
                     _post_scheduler("/api/windows-assignments")
                 self.assertEqual(raised.exception.code, expected)
         opener = MagicMock()
         opener.open.side_effect = URLError("connection lost")
-        with patch(
-            "apps.challenge.windows_assignments.build_opener", return_value=opener
-        ), self.assertRaises(SchedulerError):
+        with (
+            patch(
+                "apps.challenge.windows_assignments.build_opener", return_value=opener
+            ),
+            self.assertRaises(SchedulerError),
+        ):
             _post_scheduler("/api/windows-assignments")
         for payload in (b"invalid JSON", b"x" * 65537, b"[]", b'{"code":"FAILURE"}'):
-            with self.subTest(size=len(payload)), patch(
-                "apps.challenge.windows_assignments.build_opener",
-                return_value=self.http_response(payload),
-            ), self.assertRaises(SchedulerError):
+            with (
+                self.subTest(size=len(payload)),
+                patch(
+                    "apps.challenge.windows_assignments.build_opener",
+                    return_value=self.http_response(payload),
+                ),
+                self.assertRaises(SchedulerError),
+            ):
                 _post_scheduler("/api/windows-assignments")
 
     def test_fifo_busy_and_uncertain_responses_keep_oldest_id(self):
-        first, second = self.accepted(), self.accepted()
+        first, second = self.accepted(), self.accepted_other_team()
         for code, status in (
             ("NO_WINDOWS_WORKER_AVAILABLE", 409),
             ("SCHEDULER_UNAVAILABLE", 503),
@@ -693,11 +752,15 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.attempt_state = "USED"
         submission.started_at = timezone.now()
         submission.finished_at = timezone.now()
+        submission.cleanup_complete = True
         submission.save()
-        with patch(
-            "apps.challenge.windows_assignments._post_scheduler",
-            side_effect=SchedulerError("SCHEDULER_UNAVAILABLE", "test", 503),
-        ), self.assertRaises(SchedulerError):
+        with (
+            patch(
+                "apps.challenge.windows_assignments._post_scheduler",
+                side_effect=SchedulerError("SCHEDULER_UNAVAILABLE", "test", 503),
+            ),
+            self.assertRaises(SchedulerError),
+        ):
             release_windows_assignment(submission.pk)
         submission.refresh_from_db()
         self.assertIsNone(submission.lease_released_at)
@@ -711,7 +774,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
             )
         submission.refresh_from_db()
         self.assertIsNotNone(submission.lease_released_at)
-        self.assertIsNone(submission.cleanup_complete)
+        self.assertTrue(submission.cleanup_complete)
 
     def test_unknown_or_running_execution_cannot_release(self):
         submission = self.accepted()
@@ -719,9 +782,10 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         for state in ("ASSIGNED", "RUNNING", "START_UNKNOWN"):
             submission.status = state
             submission.save()
-            with self.subTest(state=state), patch(
-                "apps.challenge.windows_assignments._post_scheduler"
-            ) as called:
+            with (
+                self.subTest(state=state),
+                patch("apps.challenge.windows_assignments._post_scheduler") as called,
+            ):
                 with self.assertRaises(ExeSubmissionError):
                     release_windows_assignment(submission.pk)
                 called.assert_not_called()
@@ -786,11 +850,11 @@ class ConcurrentExeSubmissionTests(ExeFixtures, TransactionTestCase):
         with ThreadPoolExecutor(max_workers=len(keys)) as pool:
             return sorted(pool.map(submit, keys))
 
-    def test_simultaneous_reservations_never_exceed_three(self):
+    def test_simultaneous_new_keys_create_one_job_and_rate_limit_others(self):
         self.assertEqual(
-            self.run_posts([uuid.uuid4() for _ in range(4)]), [202, 202, 202, 409]
+            self.run_posts([uuid.uuid4() for _ in range(4)]), [202, 429, 429, 429]
         )
-        self.assertEqual(ExeSubmission.objects.count(), 3)
+        self.assertEqual(ExeSubmission.objects.count(), 1)
 
     def test_concurrent_same_key_creates_one_file_and_reservation(self):
         key = uuid.uuid4()
@@ -799,7 +863,7 @@ class ConcurrentExeSubmissionTests(ExeFixtures, TransactionTestCase):
         self.assertEqual(len(list(self.root.rglob("payload.exe"))), 1)
 
     def test_parallel_queue_steps_do_not_assign_the_same_submission(self):
-        first, second = self.accepted(), self.accepted()
+        first, second = self.accepted(), self.accepted_other_team()
         ready = Barrier(2)
         requested = []
 
