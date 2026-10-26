@@ -26,6 +26,7 @@ class InstanceScopeTests(TestCase):
             "release": self.release, "status": InstanceStatus.RUNNING,
             "host": "https://original.example", "endpoints": [],
             "expires_at": timezone.now() + timedelta(minutes=30),
+            "hard_expires_at": timezone.now() + timedelta(hours=2),
         }
         values.update(overrides)
         return Instance.objects.create(**values)

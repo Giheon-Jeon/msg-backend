@@ -6,7 +6,8 @@ from django.contrib.auth.hashers import make_password
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Team, User
+from apps.accounts.models import Role, Team, User
+from apps.adminpanel.models import AdminSetting
 from apps.koth.models import KothClub
 from apps.ranking.views import collect_team_data
 
@@ -45,6 +46,127 @@ class SignatureSubmitApiTests(TestCase):
 
     def submit(self, flag):
         return self.client.post(self.url, {"flag": flag}, format="json")
+
+    def configure_flag_settings(self, **values):
+        admin, _ = User.objects.get_or_create(
+            login_id="signature-settings-admin",
+            defaults={"nickname": "settings-admin", "role": Role.ADMIN},
+        )
+        client = APIClient()
+        client.force_authenticate(user=admin)
+        response = client.patch(
+            "/api/v1/admin/settings", {"flag": values}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_non_string_flags_are_rejected_without_submission_side_effects(self):
+        self.challenge.flag_hash = make_password("123")
+        self.challenge.save(update_fields=["flag_hash"])
+        for flag in (123, 1.5, True, None, [], {}):
+            with self.subTest(flag=flag):
+                with patch("apps.signature.views.is_correct_flag") as verify:
+                    response = self.submit(flag)
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertEqual(response.data["code"], "INVALID_REQUEST")
+                verify.assert_not_called()
+                self.assertFalse(SignatureSolve.objects.exists())
+                self.assertFalse(SignatureFlagSubmission.objects.exists())
+                self.assertFalse(SignatureSubmissionLock.objects.exists())
+
+    def test_numeric_string_flag_preserves_whitespace(self):
+        self.challenge.flag_hash = make_password(" 123 ")
+        self.challenge.save(update_fields=["flag_hash"])
+        response = self.submit(" 123 ")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["code"], "SUCCESS")
+
+    def test_submission_uses_admin_attempt_and_duration_settings(self):
+        self.configure_flag_settings(max_attempts=2, lock_seconds=45)
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            first = self.submit("wrong-1")
+            second = self.submit("wrong-2")
+            blocked = self.submit("MSG{correct_signature}")
+        self.assertEqual(first.data["code"], "INCORRECT_FLAG")
+        self.assertEqual(second.status_code, 429, second.data)
+        self.assertEqual(second.data["data"]["retry_after_seconds"], 45)
+        self.assertEqual(
+            second.data["message"],
+            "오답을 2회 연속 제출했습니다. 45초 후 다시 시도해주세요.",
+        )
+        self.assertEqual(blocked.status_code, 429)
+        lock = SignatureSubmissionLock.objects.get()
+        self.assertEqual(lock.failed_count, 2)
+        self.assertEqual(lock.locked_until, BASE_TIME + timedelta(seconds=45))
+        self.assertFalse(SignatureSolve.objects.exists())
+
+    def test_attempt_setting_defaults_duration_when_not_stored(self):
+        self.configure_flag_settings(max_attempts=1)
+        self.assertFalse(AdminSetting.objects.filter(key="flag.lock_seconds").exists())
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            response = self.submit("wrong")
+        self.assertEqual(response.status_code, 429, response.data)
+        self.assertEqual(response.data["data"]["retry_after_seconds"], 30)
+
+    def test_duration_setting_defaults_attempts_when_not_stored(self):
+        self.configure_flag_settings(lock_seconds=60)
+        self.assertFalse(AdminSetting.objects.filter(key="flag.max_attempts").exists())
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            responses = [self.submit("wrong") for _ in range(3)]
+        self.assertEqual([response.status_code for response in responses], [200, 200, 429])
+        self.assertEqual(responses[-1].data["data"]["retry_after_seconds"], 60)
+
+    def test_settings_change_applies_to_existing_failed_count(self):
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            self.assertEqual(self.submit("wrong-1").status_code, 200)
+            self.configure_flag_settings(max_attempts=2, lock_seconds=60)
+            response = self.submit("wrong-2")
+        self.assertEqual(response.status_code, 429, response.data)
+        lock = SignatureSubmissionLock.objects.get()
+        self.assertEqual(lock.failed_count, 2)
+        self.assertEqual(lock.locked_until, BASE_TIME + timedelta(seconds=60))
+
+    def test_increased_attempt_limit_preserves_existing_failed_count(self):
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            self.assertEqual(self.submit("wrong-1").status_code, 200)
+            self.configure_flag_settings(max_attempts=4, lock_seconds=60)
+            responses = [self.submit("wrong") for _ in range(3)]
+        self.assertEqual([response.status_code for response in responses], [200, 200, 429])
+        lock = SignatureSubmissionLock.objects.get()
+        self.assertEqual(lock.failed_count, 4)
+        self.assertEqual(lock.locked_until, BASE_TIME + timedelta(seconds=60))
+
+    def test_settings_change_preserves_active_lock_and_uses_remaining_seconds(self):
+        self.configure_flag_settings(max_attempts=1, lock_seconds=45)
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            self.submit("wrong")
+        self.configure_flag_settings(max_attempts=5, lock_seconds=120)
+        with patch(
+            "apps.signature.views.timezone.now",
+            return_value=BASE_TIME + timedelta(seconds=10),
+        ):
+            response = self.submit("MSG{correct_signature}")
+        self.assertEqual(response.status_code, 429, response.data)
+        self.assertEqual(response.data["data"]["retry_after_seconds"], 35)
+        self.assertIn("35초", response.data["message"])
+        lock = SignatureSubmissionLock.objects.get()
+        self.assertEqual(lock.failed_count, 1)
+        self.assertEqual(lock.locked_until, BASE_TIME + timedelta(seconds=45))
+        self.assertFalse(SignatureSolve.objects.exists())
+
+    def test_expired_lock_uses_new_settings_for_next_lock(self):
+        self.configure_flag_settings(max_attempts=1, lock_seconds=45)
+        with patch("apps.signature.views.timezone.now", return_value=BASE_TIME):
+            self.assertEqual(self.submit("wrong").status_code, 429)
+        self.configure_flag_settings(max_attempts=2, lock_seconds=60)
+        later = BASE_TIME + timedelta(seconds=46)
+        with patch("apps.signature.views.timezone.now", return_value=later):
+            first = self.submit("wrong-1")
+            second = self.submit("wrong-2")
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(second.status_code, 429, second.data)
+        lock = SignatureSubmissionLock.objects.get()
+        self.assertEqual(lock.failed_count, 2)
+        self.assertEqual(lock.locked_until, later + timedelta(seconds=60))
 
     def test_correct_flag_creates_solve_and_updates_team_ranking_score(self):
         response = self.submit("MSG{correct_signature}")

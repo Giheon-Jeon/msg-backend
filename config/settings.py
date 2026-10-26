@@ -1,6 +1,7 @@
+import math
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
@@ -115,15 +116,82 @@ DATABASES = {
 # Cache
 # https://docs.djangoproject.com/en/5.2/topics/cache/
 
+_redis_timeouts = {}
+for _name in ("REDIS_CONNECT_TIMEOUT_SECONDS", "REDIS_SOCKET_TIMEOUT_SECONDS"):
+    try:
+        _timeout = float(os.getenv(_name, "1"))
+    except ValueError:
+        raise ImproperlyConfigured(
+            f"{_name} must be a finite number greater than zero"
+        ) from None
+    if not math.isfinite(_timeout) or _timeout <= 0:
+        raise ImproperlyConfigured(f"{_name} must be a finite number greater than zero")
+    _redis_timeouts[_name] = _timeout
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/1"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": _redis_timeouts["REDIS_CONNECT_TIMEOUT_SECONDS"],
+            "SOCKET_TIMEOUT": _redis_timeouts["REDIS_SOCKET_TIMEOUT_SECONDS"],
         },
     }
 }
+
+# Migration jobs can enable PostgreSQL TLS alone without Redis credentials.
+_tls_required = os.getenv("DATASTORE_TLS_REQUIRED", "False").lower()
+if _tls_required not in {"true", "false"}:
+    raise ImproperlyConfigured("DATASTORE_TLS_REQUIRED must be True or False")
+DATASTORE_TLS_REQUIRED = _tls_required == "true"
+_pg_sslmode = os.getenv("POSTGRES_SSLMODE", "").strip()
+_pg_ca = os.getenv("POSTGRES_SSLROOTCERT", "").strip()
+if DATASTORE_TLS_REQUIRED or _pg_sslmode or _pg_ca:
+    if _pg_sslmode != "verify-full":
+        raise ImproperlyConfigured("POSTGRES_SSLMODE must be verify-full for TLS")
+    if not _pg_ca or not Path(_pg_ca).is_file():
+        raise ImproperlyConfigured("POSTGRES_SSLROOTCERT must name an existing CA file")
+    DATABASES["default"]["OPTIONS"] = {
+        "sslmode": "verify-full",
+        "sslrootcert": _pg_ca,
+    }
+
+_redis_ca = os.getenv("REDIS_SSL_CA_CERTS", "").strip()
+try:
+    _redis_url = urlsplit(CACHES["default"]["LOCATION"])
+    _redis_url.port
+except ValueError:
+    raise ImproperlyConfigured("REDIS_URL is invalid") from None
+if DATASTORE_TLS_REQUIRED or _redis_ca or _redis_url.scheme == "rediss":
+    if _redis_url.scheme != "rediss" or not _redis_url.hostname:
+        raise ImproperlyConfigured("REDIS_URL must use rediss:// with a host for TLS")
+    if not _redis_ca or not Path(_redis_ca).is_file():
+        raise ImproperlyConfigured("REDIS_SSL_CA_CERTS must name an existing CA file")
+    # redis-py gives URL query options priority over connection pool kwargs.
+    if any(key.startswith("ssl_") for key, _ in parse_qsl(_redis_url.query)):
+        raise ImproperlyConfigured(
+            "Configure Redis TLS through environment variables, not REDIS_URL query options"
+        )
+    CACHES["default"]["OPTIONS"]["CONNECTION_POOL_KWARGS"] = {
+        "ssl_cert_reqs": "required",
+        "ssl_ca_certs": _redis_ca,
+        "ssl_check_hostname": True,
+    }
+
+# URL query options take precedence over pool kwargs in redis-py.
+try:
+    _redis_query = parse_qsl(urlsplit(CACHES["default"]["LOCATION"]).query)
+except ValueError:
+    raise ImproperlyConfigured("REDIS_URL is invalid") from None
+if any(
+    key in {"socket_connect_timeout", "socket_timeout", "retry", "retry_on_error", "retry_on_timeout"}
+    for key, _ in _redis_query
+):
+    raise ImproperlyConfigured(
+        "Set Redis timeouts through environment variables; URL timeout/retry overrides are not allowed"
+    )
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -227,6 +295,9 @@ REFRESH_TOKEN_HOURS = 12
 # 생성한다. 기존 개발 환경은 JWT_SECRET을 fallback으로 사용하되 운영에서는
 # 반드시 별도 값을 설정한다.
 KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
+KOTH_IMAGE_EXPORT_SIGNING_KEY = os.getenv("KOTH_IMAGE_EXPORT_SIGNING_KEY", "")
+KOTH_IMAGE_EXPORT_URL = os.getenv("KOTH_IMAGE_EXPORT_URL", "")
+KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
@@ -245,6 +316,7 @@ REST_FRAMEWORK = {
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
+        "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
     },
 }
 SCHEDULER_API_TOKEN = os.getenv("SCHEDULER_API_TOKEN", "")

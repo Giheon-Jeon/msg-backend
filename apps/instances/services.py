@@ -490,6 +490,27 @@ def call_scheduler_delete(instance, auth_header=None):
     )
 
 
+def call_scheduler_force_cleanup(instance, auth_header=None):
+    # 생성 실패 확인과 실제 workload 유무 판단은 스케줄러의 운영자 경로가 맡는다
+    data = scheduler_request(
+        "POST", f"/api/instances/{instance.instance_id}/force-cleanup",
+        body={}, auth_header=auth_header,
+    )
+    expected = {
+        "instance_id": str(instance.pk), "team_id": str(instance.team_id),
+        "challenge_id": str(instance.challenge_id),
+    }
+    if instance.release_id is not None:
+        expected["release_id"] = str(instance.release_id)
+    if (
+        not isinstance(data, dict)
+        or any(data.get(key) != value for key, value in expected.items())
+        or data.get("status") not in (InstanceStatus.FAILED, InstanceStatus.CLEANED)
+    ):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "강제 정리 결과를 확인할 수 없습니다", 503)
+    return data
+
+
 def call_scheduler_reset(instance, auth_header=None):
     # Scheduler에 인스턴스 초기화를 요청한다
     return scheduler_request(
@@ -552,6 +573,11 @@ def update_instance_from_scheduler(instance, scheduler_data):
     if not scheduler_data:
         return instance
 
+    before = {
+        field: getattr(instance, field)
+        for field in ("status", "delete_reason", "endpoints", "host", "ports", "expires_at", "hard_expires_at")
+    }
+
     _validate_scheduler_response_scope(
         scheduler_data, instance_id=instance.pk, user_id=instance.user_id,
         team_id=instance.team_id, challenge_id=instance.challenge_id,
@@ -600,7 +626,10 @@ def update_instance_from_scheduler(instance, scheduler_data):
         )
         update_fields.append("hard_expires_at")
 
-    instance.save(update_fields=update_fields)
+    changed = [field for field in dict.fromkeys(update_fields) if field != "updated_at" and getattr(instance, field) != before[field]]
+    # 같은 상태를 조회하는 것만으로 종료 대기 시간이 새로 시작되지 않게 한다
+    if changed:
+        instance.save(update_fields=[*changed, "updated_at"])
     return instance
 
 

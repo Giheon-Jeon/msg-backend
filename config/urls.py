@@ -1,12 +1,13 @@
 from django.conf import settings
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 
 from apps.board.views import (
     BoardView,
     DebugSolveActiveChallengeView,
 )
 from apps.common.health import healthz
+from apps.common.views import api_not_found
 from apps.instances.secret_views import RuntimeSecretResolveView
 
 urlpatterns = [
@@ -26,6 +27,8 @@ urlpatterns = [
     path("api/v1/board/", include("apps.board.urls")),
     path("api/v1/", include("apps.koth.urls")),
     path("", include("apps.koth.internal_urls")),
+    # Keep this after API includes so existing authentication and resource errors win.
+    re_path(r"^api(?:/|$)", api_not_found),
 ]
 
 if settings.DEBUG:

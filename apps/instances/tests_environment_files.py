@@ -15,6 +15,9 @@ from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
 
 
 class EnvironmentFileParserTests(SimpleTestCase):
+    def test_bare_name_is_distinct_from_an_empty_string(self):
+        self.assertEqual(parse_environment_file("OPTIONAL\nEMPTY=\n"), {"OPTIONAL": None, "EMPTY": ""})
+
     def test_bom_crlf_quotes_and_literal_characters(self):
         content = '\ufeff# comment\r\nPORT=8080\r\nTEXT="  한글 # $VALUE ${OTHER}=yes \\n  "\r\nEMPTY=\r\n'
         self.assertEqual(parse_environment_file(content), {
@@ -211,3 +214,45 @@ class EnvironmentFileImportTests(ReleaseTestBase):
         self.auth("player")
         for suffix in ("/preview", "/import"):
             self.assertEqual(self.client.post(self.url + suffix, body, format="json").status_code, 403)
+
+    def test_explicit_optional_unset_removes_only_the_selected_plain_binding(self):
+        body = self.import_body("PORT", lambda rows: rows[0].update(required=False))
+        preview = self.client.post(self.url + "/preview", body, format="json")
+        self.assertTrue(preview.data["data"]["can_import"])
+        self.assertEqual(preview.data["data"]["entries"][0]["action"], "unset")
+        self.assertFalse(preview.data["data"]["entries"][0]["has_value"])
+        response = self.save(body)
+        self.assertEqual(response.status_code, 200, response.data)
+        release = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        app = release.containers.get(name="app")
+        self.assertNotIn("PORT", app.env)
+        self.assertEqual(app.env_rules["PORT"], {"kind": "env", "required": False})
+        self.assertEqual(self.source.containers.get(name="app").env["PORT"], "8080")
+        repeated = self.save(body)
+        self.assertEqual(repeated.data["data"]["release_id"], str(release.pk))
+
+    def test_explicit_unset_does_not_reuse_or_rotate_a_shared_secret(self):
+        body = self.import_body("INTERNAL_TOKEN", lambda rows: rows[0].update(required=False))
+        counts = RuntimeSecret.objects.count()
+        response = self.save(body)
+        self.assertEqual(response.status_code, 200, response.data)
+        release = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"])
+        self.assertNotIn("INTERNAL_TOKEN", release.containers.get(name="app").secret_env)
+        self.assertEqual(release.containers.get(name="helper").secret_env["INTERNAL_TOKEN"], str(self.shared.pk))
+        self.assertEqual(RuntimeSecret.objects.count(), counts)
+
+    def test_required_unset_and_flag_unset_never_write_a_release(self):
+        before = (RuntimeSecret.objects.count(), ChallengeRelease.objects.count())
+        bodies = [self.import_body("PORT"), self.import_body("FLAG", lambda rows: rows[0].update(required=False))]
+        for body in bodies:
+            preview = self.client.post(self.url + "/preview", body, format="json")
+            self.assertFalse(preview.data["data"]["can_import"])
+            self.assertEqual(self.save(body).status_code, 400)
+        self.assertEqual((RuntimeSecret.objects.count(), ChallengeRelease.objects.count()), before)
+
+    def test_optional_empty_string_still_injects_an_empty_string(self):
+        body = self.import_body("PORT=", lambda rows: rows[0].update(required=False))
+        response = self.save(body)
+        self.assertEqual(response.status_code, 200, response.data)
+        app = ChallengeRelease.objects.get(pk=response.data["data"]["release_id"]).containers.get(name="app")
+        self.assertEqual(app.env["PORT"], "")

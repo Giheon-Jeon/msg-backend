@@ -7,6 +7,7 @@ from .models import (
     KothSolve,
     KothTeamToken,
     KothTokenVerificationAttempt,
+    KothUserFileBundle,
 )
 
 
@@ -20,7 +21,20 @@ class KothClubAdmin(admin.ModelAdmin):
 class KothChallengeAdmin(admin.ModelAdmin):
     list_display = ("title", "club", "status", "open_group", "opened_at", "closed_at")
     list_filter = ("status", "club")
-    search_fields = ("title",)
+    search_fields = ("title", "repository_slug")
+
+
+@admin.register(KothUserFileBundle)
+class KothUserFileBundleAdmin(admin.ModelAdmin):
+    list_display = ("challenge", "registry_revision", "source_sha", "present", "created_at")
+    list_filter = ("challenge", "present")
+    readonly_fields = tuple(field.name for field in KothUserFileBundle._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(KothSolve)

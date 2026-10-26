@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views, challenge_settings, challenge_files, challenge_solves, published_challenges, board_readiness, challenge_preview
+from . import submission_history
 
 urlpatterns = [
     path("admin/teams", views.team_list),
@@ -16,6 +17,8 @@ urlpatterns = [
     path("admin/challenges/<uuid:challenge_id>", views.challenge_detail),
     path("admin/challenges/<uuid:challenge_id>/preview", challenge_preview.challenge_preview),
     path("admin/challenges/<uuid:challenge_id>/solves", challenge_solves.challenge_solves),
+    path("admin/challenges/<uuid:challenge_id>/submissions", submission_history.challenge_submissions),
+    path("admin/signatures/<uuid:signature_id>/submissions", submission_history.signature_submissions),
     path("admin/challenges/<uuid:challenge_id>/flag", challenge_settings.challenge_flag),
     path("admin/challenges/<uuid:challenge_id>/flag/reveal", challenge_settings.challenge_flag_reveal),
     path("admin/challenges/<uuid:challenge_id>/repository-files", challenge_settings.challenge_repository_files),

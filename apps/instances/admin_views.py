@@ -160,6 +160,13 @@ class ReleaseActivateView(APIView):
                     400,
                 )
 
+            if release.repository_env.get("missing"):
+                return fail(
+                    "RELEASE_ENV_INCOMPLETE",
+                    "저장소 환경변수 중 채우지 못한 값이 있습니다 환경변수에서 값을 넣어 새 버전을 만든 뒤 사용해주세요",
+                    400,
+                )
+
             if release.approved_at is None:
                 release.approved_at = timezone.now()
                 release.save(update_fields=["approved_at"])

@@ -1,6 +1,14 @@
+from collections.abc import Mapping
 from decimal import Decimal
 
 from rest_framework import serializers
+
+
+class SignatureListQuerySerializer(serializers.Serializer):
+    search = serializers.CharField(max_length=200, allow_blank=True, default="")
+    sort = serializers.ChoiceField(choices=("club", "title", "score", "solved"), default="club")
+    page = serializers.IntegerField(min_value=1, max_value=10000, default=1)
+    size = serializers.IntegerField(min_value=1, max_value=100, default=50)
 
 
 class SignatureCreateSerializer(serializers.Serializer):
@@ -56,3 +64,12 @@ class SignatureSubmitSerializer(serializers.Serializer):
         max_length=512,
         trim_whitespace=False,
     )
+
+    def to_internal_value(self, data):
+        if (
+            isinstance(data, Mapping)
+            and "flag" in data
+            and not isinstance(data["flag"], str)
+        ):
+            raise serializers.ValidationError({"flag": "플래그는 문자열이어야 합니다"})
+        return super().to_internal_value(data)

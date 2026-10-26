@@ -34,6 +34,7 @@ from apps.challenge.models import Challenge, Solve
 from apps.challenge.services import (
     get_team_total_score,
     hash_flag,
+    is_correct_flag,
     update_dynamic_score_and_team_scores,
 )
 from apps.board.models import (
@@ -97,11 +98,13 @@ from apps.instances.services import (
     RESETTABLE_INSTANCE_STATUSES,
     SchedulerError,
     call_scheduler_delete,
+    call_scheduler_force_cleanup,
     call_scheduler_reset,
     create_instance_from_scheduler,
     isoformat_z,
     mark_instance_replaced,
     scheduler_auth_header,
+    update_instance_from_scheduler,
 )
 from .resource_broker import fetch_resource_targets
 from .node_allocation import enrich_allocations
@@ -491,14 +494,15 @@ def challenge_visibility(request, challenge_id):
             affected_team_count = TeamChallengeAccess.objects.filter(
                 challenge=challenge
             ).count()
-            _record_event(
-                AdminEvent.EventType.CHALLENGE_VISIBILITY_CHANGED,
-                f"문제 {'공개' if is_published else '비공개'} 전환"
-                f" (영향 팀 {affected_team_count}): {reason}",
-                request.user.login_id,
-                severity=AdminEvent.Severity.WARNING,
-                challenge=challenge,
-            )
+            if previous != is_published:
+                _record_event(
+                    AdminEvent.EventType.CHALLENGE_VISIBILITY_CHANGED,
+                    f"문제 {'공개' if is_published else '비공개'} 전환"
+                    f" (is_published: {previous} -> {is_published}, 영향 팀 {affected_team_count}): {reason}",
+                    request.user.login_id,
+                    severity=AdminEvent.Severity.WARNING,
+                    challenge=challenge,
+                )
     except (Challenge.DoesNotExist, ValidationError, ValueError):
         return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
 
@@ -699,7 +703,6 @@ def payment_checkout(request):
     if len(item_name) > MAX_ITEM_NAME_LENGTH:
         raise InvalidRequest(f"item_name 은 {MAX_ITEM_NAME_LENGTH}자 이하여야 합니다")
 
-    now = timezone.now().replace(microsecond=0)
     token_hash = hash_token(raw_token)
 
     # QR 재발급이 팀 → 토큰 순으로 잠그므로 같은 순서를 따른다. 반대로 잠그면 둘이 겹칠 때
@@ -722,8 +725,10 @@ def payment_checkout(request):
         )
         if token is None or token.status != PaymentTokenStatus.ACTIVE:
             raise PaymentTokenInvalid()
-        if token.expires_at < now:
+        checked_at = timezone.now()
+        if token.expires_at <= checked_at:
             raise PaymentTokenExpired()
+        now = checked_at.replace(microsecond=0)
 
         if team.is_banned:
             raise TeamBanned()
@@ -957,6 +962,7 @@ def instance_list(request):
             "challenge_title": r.challenge.title,
             "status": r.status,
             "created_at": isoformat_z(r.created_at),
+            "updated_at": isoformat_z(r.updated_at),
             "expires_at": isoformat_z(r.expires_at),
         }
         for r in rows
@@ -996,7 +1002,11 @@ def instance_force_delete(request, instance_id):
         if instance is None:
             return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
 
-        if instance.status not in DELETABLE_INSTANCE_STATUSES:
+        cleanup = instance.status == InstanceStatus.CLEANUP_PENDING
+        if not cleanup and instance.status not in DELETABLE_INSTANCE_STATUSES:
+            if instance.status not in (InstanceStatus.STOPPED, InstanceStatus.FAILED, InstanceStatus.EXPIRED, InstanceStatus.CLEANED):
+                return fail("INVALID_STATE_TRANSITION", "현재 상태에서는 강제 종료할 수 없습니다", 400,
+                            data={"instance_id": str(instance.pk), "status": instance.status})
             return fail(
                 "INSTANCE_ALREADY_TERMINATED",
                 "이미 종료된 인스턴스입니다",
@@ -1008,13 +1018,18 @@ def instance_force_delete(request, instance_id):
             )
 
         try:
-            call_scheduler_delete(instance, scheduler_auth_header(request))
+            if cleanup:
+                data = call_scheduler_force_cleanup(instance, scheduler_auth_header(request))
+                update_instance_from_scheduler(instance, data)
+            else:
+                call_scheduler_delete(instance, scheduler_auth_header(request))
         except SchedulerError as error:
             return fail(error.code, error.message, error.status_code)
 
-        instance.status = InstanceStatus.STOPPING
-        instance.delete_reason = DeleteReason.ADMIN_FORCED
-        instance.save(update_fields=["status", "delete_reason", "updated_at"])
+        if not cleanup:
+            instance.status = InstanceStatus.STOPPING
+            instance.delete_reason = DeleteReason.ADMIN_FORCED
+            instance.save(update_fields=["status", "delete_reason", "updated_at"])
         _record_event(
             AdminEvent.EventType.INSTANCE_FORCED,
             "인스턴스 강제 종료",
@@ -1034,8 +1049,8 @@ def instance_force_delete(request, instance_id):
             "forced_by": request.user.login_id,
             "forced_at": isoformat_z(now),
         },
-        message="인스턴스 종료 요청이 접수되었습니다.",
-        status=202,
+        message="인스턴스 강제 정리가 완료되었습니다" if cleanup else "인스턴스 종료 요청이 접수되었습니다.",
+        status=200 if cleanup else 202,
     )
 
 
@@ -1289,7 +1304,7 @@ def dashboard(request):
 CHALLENGE_SORT = {
     "running": "-running_instance_count",
     "title": "title",
-    "score": "-score",
+    "score": "-current_score",
 }
 
 
@@ -1399,6 +1414,8 @@ def challenge_detail(request, challenge_id):
         values = serializer.validated_data
 
         update_fields = []
+        changes = []
+        previous_current_score = num(challenge.current_score)
         for field in (
             "title",
             "category",
@@ -1408,16 +1425,24 @@ def challenge_detail(request, challenge_id):
             "minimum_score",
             "decay",
         ):
-            if field in values:
+            if field in values and values[field] != getattr(challenge, field):
+                if field in ("title", "description"):
+                    changes.append(f"{field} 변경")
+                else:
+                    previous = getattr(challenge, field)
+                    if field in ("initial_score", "minimum_score", "decay"):
+                        previous = num(previous)
+                    changes.append(f"{field}: {previous} -> {values[field]}")
                 setattr(challenge, field, values[field])
                 update_fields.append(field)
 
-        if "flag" in values:
+        if "flag" in values and not is_correct_flag(values["flag"], challenge.flag_hash):
             challenge.flag_hash = hash_flag(values["flag"])
             update_fields.append("flag_hash")
+            changes.append("flag 변경")
 
         scoring_changed = any(
-            field in values for field in ("initial_score", "minimum_score", "decay")
+            field in update_fields for field in ("initial_score", "minimum_score", "decay")
         )
         if scoring_changed:
             challenge.score = challenge.initial_score
@@ -1426,6 +1451,18 @@ def challenge_detail(request, challenge_id):
         challenge.save(update_fields=update_fields)
         if scoring_changed:
             update_dynamic_score_and_team_scores(challenge)
+            changes.append(f"current_score: {previous_current_score} -> {num(challenge.current_score)}")
+        if changes:
+            solved_teams = Solve.objects.filter(challenge=challenge).count()
+            access_teams = TeamChallengeAccess.objects.filter(challenge=challenge).count()
+            _record_event(
+                AdminEvent.EventType.CHALLENGE_UPDATED,
+                f"문제 수정 {challenge.pk} (풀이 팀 {solved_teams}, 접근 팀 {access_teams}): "
+                + "; ".join(changes),
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
+                challenge=challenge,
+            )
 
     return ok(_serialize_challenge(challenge), message="문제가 수정되었습니다.")
 
@@ -1485,7 +1522,7 @@ def challenge_list(request):
             "title": c.title,
             "category": c.category,
             "difficulty": c.difficulty,
-            "score": num(c.score),
+            "score": num(c.current_score),
             "is_published": c.is_published,
             "solved_team_count": c.solved_team_count,
             "running_instance_count": c.running_instance_count,
@@ -2095,6 +2132,14 @@ def _team_update(request, team_id):
         if team_name is not None and team_name != old_name:
             team.team_name = team_name
             team.save(update_fields=["team_name", "updated_at"])
+
+        # 제외된 팀원이 가지고 있는 QR도 더는 이 팀의 잔액을 쓸 수 없어야 한다.
+        # 결제와 같은 팀 잠금 안에서 ACTIVE 토큰만 폐기해 완료된 거래는 보존한다.
+        if remove_ids:
+            PaymentToken.objects.filter(team=team, status=PaymentTokenStatus.ACTIVE).update(
+                status=PaymentTokenStatus.INVALIDATED,
+                invalidated_at=timezone.now().replace(microsecond=0),
+            )
 
         # access_token claim 에 team_id 와 is_leader 가 들어 있어 바뀐 계정은 다시 로그인하게 한다.
         RefreshToken.objects.filter(user_id__in=changed).delete()

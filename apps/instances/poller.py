@@ -12,7 +12,9 @@ from django.db.models import Max
 from django.utils import timezone
 
 from apps.challenge.models import Challenge
+from apps.instances.bundle_environment import fill_bundle_environment, read_bundle_environment
 from apps.instances.models import ChallengeRelease, PollerArtifact
+from apps.instances.repository_source import RepositorySourceUnavailable
 from apps.instances.runtime_secrets import RuntimeSecretUnavailable
 from apps.instances.releases import (
     ReleaseValidationError,
@@ -274,6 +276,14 @@ def register_bundle(artifact_data, note=None):
     challenge = match_challenge(artifact_data)
     if challenge is None:
         return "unmatched", artifact_data.get("challenge_slug", "")
+    if ChallengeRelease.objects.filter(challenge=challenge, registry_revision=validated["registry_revision"]).exists():
+        return "duplicate", validated["registry_revision"]
+
+    # 같은 커밋의 저장소 환경변수는 잠그기 전에 읽는다 저장소를 못 읽으면 다음 수집 때 다시 시도한다
+    try:
+        environment = read_bundle_environment(validated, artifact_data.get("source_sha") or artifact_data.get("commit_sha"))
+    except RepositorySourceUnavailable as error:
+        return "error", str(error)
 
     with transaction.atomic():
         challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
@@ -291,7 +301,11 @@ def register_bundle(artifact_data, note=None):
             return "invalid", error.message
 
         try:
-            release = create_release(challenge, validated, POLLER_CREATED_BY)
+            # 비밀값을 저장한 뒤 등록이 실패하면 그 비밀값도 되돌린다
+            with transaction.atomic():
+                if environment:
+                    validated["repository_env"] = fill_bundle_environment(challenge, validated, environment, POLLER_CREATED_BY)
+                release = create_release(challenge, validated, POLLER_CREATED_BY)
         except ReleaseValidationError as error:
             return "invalid", error.message
         except RuntimeSecretUnavailable:
@@ -343,10 +357,27 @@ def poll_once(token=None):
             mark_artifact_processed(artifact)
             continue
 
-        status, detail = register_bundle(
-            artifact_data,
-            note="공급망 자동 등록: " + str(artifact.get("name", "")),
-        )
+        if str(artifact_data.get("challenge_slug", "")).startswith("koth-"):
+            from apps.koth.publications import collect_artifact
+            from apps.koth.environment import EnvironmentError
+            from apps.instances.published_challenges import PublishedImportError
+            from apps.instances.runtime_secrets import RuntimeSecretUnavailable
+            from google.api_core.exceptions import GoogleAPIError
+            from google.auth.exceptions import GoogleAuthError
+            from django.db import IntegrityError
+            from django.core.exceptions import ImproperlyConfigured
+            try:
+                status, detail = collect_artifact(artifact) or ("unmatched", artifact_data.get("challenge_slug", ""))
+            except (EnvironmentError, ReleaseValidationError, PublishedImportError):
+                status, detail = "invalid", "KOTH 발행본 검증에 실패했습니다"
+            except (HTTPError, URLError, TimeoutError, ValueError, RuntimeSecretUnavailable, RepositorySourceUnavailable,
+                    GoogleAPIError, GoogleAuthError, OSError, IntegrityError, ImproperlyConfigured):
+                status, detail = "error", "KOTH 발행본 수집을 다음 주기에 재시도합니다"
+        else:
+            status, detail = register_bundle(
+                artifact_data,
+                note="공급망 자동 등록: " + str(artifact.get("name", "")),
+            )
         summary[status] += 1
         # An unknown problem needs one reviewed first import. Do not download
         # the same old bundle every five minutes; that import requeues its slug.
@@ -356,7 +387,7 @@ def poll_once(token=None):
             logger.info(
                 "release poller 등록: challenge=%s version=%s revision=%s",
                 detail.challenge_id,
-                detail.version,
+                getattr(detail, "version", detail.registry_revision),
                 detail.registry_revision,
             )
         elif status in ("unmatched", "invalid", "error"):

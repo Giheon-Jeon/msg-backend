@@ -1,0 +1,43 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Admin instance cleanup", "version": "1.0.0"},
+  "paths": {
+    "/api/v1/admin/instances": {
+      "get": {
+        "security": [{"bearer_auth": []}],
+        "parameters": [{"name": "status", "in": "query", "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Instance rows include created_at and updated_at; unchanged status polling does not advance updated_at", "content": {"application/json": {"schema": {"type": "object", "properties": {
+          "data": {"type": "object", "properties": {"instances": {"type": "array", "items": {"$ref": "#/components/schemas/instance_row"}}}}
+        }}}}}, "403": {"description": "Admin role required"}}
+      }
+    },
+    "/api/v1/admin/instances/{instance_id}": {
+      "delete": {
+        "security": [{"bearer_auth": []}],
+        "parameters": [{"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {
+          "200": {"description": "CLEANUP_PENDING uses the scheduler operator endpoint; confirmed failed creation, minimum age and runtime state guards still apply; the returned terminal status is preserved, FAILED does not certify physical cleanup"},
+          "202": {"description": "RUNNING deletion accepted as STOPPING"},
+          "400": {"description": "Scheduler force cleanup eligibility guard rejected the request"},
+          "403": {"description": "Admin role required"},
+          "409": {"description": "Already terminal or current state cannot be stopped"},
+          "503": {"description": "Scheduler unavailable or identity / terminal result validation failed"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"bearer_auth": {"type": "http", "scheme": "bearer"}},
+    "schemas": {"instance_row": {"type": "object", "properties": {
+      "instance_id": {"type": "string", "format": "uuid"},
+      "team_id": {"type": "string", "format": "uuid"},
+      "team_name": {"type": "string"},
+      "challenge_id": {"type": "string", "format": "uuid"},
+      "challenge_title": {"type": "string"},
+      "status": {"type": "string"},
+      "created_at": {"type": "string", "format": "date-time"},
+      "updated_at": {"type": "string", "format": "date-time"},
+      "expires_at": {"type": ["string", "null"], "format": "date-time"}
+    }}}
+  }
+}

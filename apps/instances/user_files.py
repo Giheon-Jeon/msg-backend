@@ -230,7 +230,9 @@ def register_user_files_bundle(manifest, archive_bytes, artifact):
 
     challenge = match_challenge(manifest)
     if challenge is None:
-        return "unmatched", validated["challenge_slug"]
+        from apps.koth.files import register_koth_user_files
+
+        return register_koth_user_files(validated, archive_bytes, artifact)
 
     release = ChallengeRelease.objects.filter(
         challenge=challenge,
