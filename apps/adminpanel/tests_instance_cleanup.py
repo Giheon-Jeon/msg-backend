@@ -55,7 +55,7 @@ class AdminCleanupTests(TestCase):
                 self.assertEqual((response.status_code, response.data["code"]), (status, code))
                 instance.refresh_from_db()
                 self.assertEqual(instance.status, "CLEANUP_PENDING")
-                self.assertFalse(AdminEvent.objects.filter(instance_id=instance.pk).exists())
+                self.assertFalse(AdminEvent.objects.filter(instance_id=instance.pk).exclude(severity=AdminEvent.Severity.CRITICAL).exists())
 
     @patch("apps.instances.services.scheduler_request")
     def test_wrong_identity_or_nonterminal_result_is_rejected(self, request):
@@ -70,7 +70,7 @@ class AdminCleanupTests(TestCase):
                 self.assertEqual(response.status_code, 503)
                 instance.refresh_from_db()
                 self.assertEqual(instance.status, "CLEANUP_PENDING")
-                self.assertFalse(AdminEvent.objects.filter(instance_id=instance.pk).exists())
+                self.assertFalse(AdminEvent.objects.filter(instance_id=instance.pk).exclude(severity=AdminEvent.Severity.CRITICAL).exists())
 
     @patch("apps.instances.services.scheduler_request")
     def test_release_identity_is_required(self, request):

@@ -6,8 +6,10 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.views import APIView
 
+from apps.accounts.models import Team
 from apps.board.idempotency import idempotent
 from apps.board.models import TeamChallengeAccess
+from apps.common.exceptions import TeamBanned
 from apps.common.permissions import IsAuthenticated
 from apps.challenge.models import Challenge
 from apps.common.response import fail, ok
@@ -40,6 +42,13 @@ MAX_EXTEND_COUNT = 3
 def lock_instance_user(user):
     # 같은 사용자의 인스턴스 변경 요청을 순차 처리하기 위해 잠금 row를 잡는다
     InstanceLock.objects.select_for_update().get_or_create(user=user)
+
+
+def reject_if_team_banned(team_id):
+    # 정지 검사는 인증 단계에서 한 번뿐이라 잠금을 기다리는 사이 정지될 수 있다.
+    # 관리자 정지도 이 사용자 잠금을 잡고 인스턴스를 정리하므로, 잠금 뒤 다시 확인해 새 인스턴스를 막는다.
+    if Team.objects.filter(pk=team_id, is_banned=True).exists():
+        raise TeamBanned()
 
 
 def can_create_instance_for_challenge(team, challenge):
@@ -90,6 +99,7 @@ class InstanceCreateView(APIView):
 
         with transaction.atomic():
             lock_instance_user(user)
+            reject_if_team_banned(team.pk)
 
             try:
                 scheduler_data = call_scheduler_create(
@@ -229,6 +239,7 @@ class InstanceResetView(APIView):
                     400,
                 )
 
+            reject_if_team_banned(instance.team_id)
             try:
                 scheduler_data = call_scheduler_reset(
                     instance, scheduler_auth_header(request)

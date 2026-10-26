@@ -2,13 +2,10 @@ from decimal import Decimal
 
 from django.db import IntegrityError, models, transaction
 
+from apps.adminpanel.models import setting_values
 from apps.board.models import TeamChallengeAccess
 from apps.challenge.models import Solve
 from apps.ranking.models import LineMonopoly
-
-
-LINE_BONUS_RATE = Decimal("0.30")
-LINE_CATEGORY_BONUS_RATE = Decimal("0.45")
 
 
 def check_and_record_line_monopoly(team, challenge=None, *, line_number=None):
@@ -40,8 +37,11 @@ def check_and_record_line_monopoly(team, challenge=None, *, line_number=None):
     ).aggregate(total=models.Sum("earned_score"))["total"] or Decimal("0")
 
     is_category_bonus = len(categories) == 1
-    rate = LINE_CATEGORY_BONUS_RATE if is_category_bonus else LINE_BONUS_RATE
-    earned_score = (score_sum * rate).quantize(Decimal("0.01"))
+    line_percent, category_percent = setting_values(
+        "board.line_bonus_percent", "board.line_category_bonus_percent"
+    )
+    percent = category_percent if is_category_bonus else line_percent
+    earned_score = (score_sum * percent / 100).quantize(Decimal("0.01"))
 
     try:
         # The savepoint keeps a duplicate-award IntegrityError from breaking

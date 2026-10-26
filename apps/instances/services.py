@@ -299,14 +299,30 @@ def normalize_scheduler_endpoints(raw_endpoints):
                 "Scheduler 응답의 endpoint 값이 올바르지 않습니다.",
                 503,
             )
-        endpoints.append(
-            {
-                "container_name": container_name,
-                "port": port,
-                "protocol": protocol,
-                "service_url": service_url,
-            }
-        )
+        endpoint = {
+            "container_name": container_name,
+            "port": port,
+            "protocol": protocol,
+            "service_url": service_url,
+        }
+        # Keep omission, explicit null, and false distinct for old and Gateway callers.
+        for field in ("hostname", "connection_port", "tls", "server_name"):
+            if field not in raw:
+                continue
+            value = raw[field]
+            valid = value is None or (
+                (field in {"hostname", "server_name"} and isinstance(value, str) and bool(value))
+                or (field == "connection_port" and type(value) is int and 1 <= value <= 65535)
+                or (field == "tls" and isinstance(value, bool))
+            )
+            if not valid:
+                raise SchedulerError(
+                    "SCHEDULER_UNAVAILABLE",
+                    "Scheduler 응답의 endpoint 연결 값이 올바르지 않습니다.",
+                    503,
+                )
+            endpoint[field] = value
+        endpoints.append(endpoint)
     return endpoints
 
 

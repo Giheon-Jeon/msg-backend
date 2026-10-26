@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.forms import modelform_factory
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -24,9 +24,58 @@ from .models import (
     KothTeamToken,
     KothTokenVerificationAttempt,
 )
-from .services import ScoreFetchError, _request_scores, poll_challenge_period
+from .services import ScoreFetchError, _request_scores, poll_challenge_period, rank_points
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
+
+class KothRankPointTests(SimpleTestCase):
+    def test_single_team_group_still_awards_first_place(self):
+        self.assertEqual(rank_points(1), (40,))
+
+    def test_internal_25_team_curve_is_strict_integer_sequence(self):
+        points = rank_points(25)
+
+        self.assertEqual(points, (40, 28, 22, 18, 15, 12, 10, 8, 6, 4, 2, 1))
+        self.assertTrue(all(isinstance(point, int) for point in points))
+        self.assertEqual(len(points), 12)
+        self.assertEqual(len(set(points)), len(points))
+
+    def test_external_49_team_curve_is_strict_integer_sequence(self):
+        points = rank_points(49)
+
+        self.assertEqual(
+            points,
+            (
+                40,
+                33,
+                29,
+                26,
+                24,
+                22,
+                20,
+                18,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+            ),
+        )
+        self.assertTrue(all(isinstance(point, int) for point in points))
+        self.assertEqual(len(points), 24)
+        self.assertEqual(len(set(points)), len(points))
 
 
 @override_settings(CACHES=LOCMEM, KOTH_TEAM_TOKEN_SECRET="test-koth-token-secret")
@@ -594,6 +643,9 @@ class KothApiTests(TestCase):
             **headers,
         )
         self.assertTrue(response.data["data"]["valid"])
+        self.assertEqual(
+            response.data["data"]["koth_division"], Team.KothDivision.EXTERNAL
+        )
         invalid = self.client.post(
             "/internal/koth/team_tokens/verify",
             {
@@ -616,6 +668,14 @@ class KothApiTests(TestCase):
         returned_ids = {team["team_id"] for team in teams.data["data"]["teams"]}
         self.assertIn(str(self.team.team_id), returned_ids)
         self.assertNotIn(str(self.banned.team_id), returned_ids)
+        returned_team = next(
+            team
+            for team in teams.data["data"]["teams"]
+            if team["team_id"] == str(self.team.team_id)
+        )
+        self.assertEqual(
+            returned_team["koth_division"], Team.KothDivision.EXTERNAL
+        )
 
 
 @override_settings(CACHES=LOCMEM)
@@ -675,14 +735,14 @@ class KothScorePollingTests(TestCase):
     ):
         request_scores.return_value = self.payload()
         self.assertTrue(poll_challenge_period(self.challenge, self.period))
-        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 32)
-        self.assertEqual(KothSolve.objects.get(team=self.second).earned_score, 32)
-        self.assertEqual(KothSolve.objects.get(team=self.third).earned_score, 15)
+        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 20)
+        self.assertEqual(KothSolve.objects.get(team=self.second).earned_score, 20)
+        self.assertFalse(KothSolve.objects.filter(team=self.third).exists())
         self.assertFalse(poll_challenge_period(self.challenge, self.period))
         self.assertEqual(
             KothScorePeriod.objects.get().status, KothScorePeriodStatus.APPLIED
         )
-        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 32)
+        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 20)
 
         user = User.objects.create_user(
             login_id="first", password="pw1234", nickname="첫", team=self.first
@@ -697,8 +757,133 @@ class KothScorePollingTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {login.data['data']['access_token']}"
         )
         summary = client.get("/api/v1/teams/me")
-        self.assertEqual(summary.data["data"]["koth_score"], 32)
-        self.assertEqual(summary.data["data"]["team_score"], 32)
+        self.assertEqual(summary.data["data"]["koth_score"], 20)
+        self.assertEqual(summary.data["data"]["team_score"], 20)
+
+    @patch("apps.koth.services._request_scores")
+    def test_poll_scores_divisions_independently_and_missing_answers_stay_zero(
+        self, request_scores
+    ):
+        self.first.koth_division = Team.KothDivision.INTERNAL
+        self.first.save(update_fields=["koth_division"])
+        internal_second = Team.objects.create(
+            team_name="internal-second",
+            koth_division=Team.KothDivision.INTERNAL,
+        )
+        internal_missing = Team.objects.bulk_create(
+            [
+                Team(
+                    team_name=f"internal-missing-{index}",
+                    koth_division=Team.KothDivision.INTERNAL,
+                )
+                for index in range(23)
+            ]
+        )
+        external_missing = Team.objects.bulk_create(
+            [Team(team_name=f"external-missing-{index}") for index in range(47)]
+        )
+        request_scores.return_value = {
+            "code": "SUCCESS",
+            "message": "성공",
+            "data": {
+                "koth_challenge_id": str(self.challenge.pk),
+                "period_id": "2026-07-31T10:15:00Z",
+                "results": [
+                    {
+                        "team_id": str(self.second.pk),
+                        "period_rank": 1,
+                        "metric_score": 100,
+                    },
+                    {
+                        "team_id": str(self.first.pk),
+                        "period_rank": 2,
+                        "metric_score": 90,
+                    },
+                    {
+                        "team_id": str(self.third.pk),
+                        "period_rank": 3,
+                        "metric_score": 80,
+                    },
+                    {
+                        "team_id": str(internal_second.pk),
+                        "period_rank": 4,
+                        "metric_score": 70,
+                    },
+                    {
+                        "team_id": str(external_missing[0].pk),
+                        "period_rank": 5,
+                        "metric_score": 0,
+                    },
+                ],
+            },
+        }
+
+        self.assertTrue(poll_challenge_period(self.challenge, self.period))
+
+        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 40)
+        self.assertEqual(
+            KothSolve.objects.get(team=internal_second).earned_score,
+            28,
+        )
+        self.assertEqual(KothSolve.objects.get(team=self.second).earned_score, 40)
+        self.assertEqual(KothSolve.objects.get(team=self.third).earned_score, 33)
+        self.assertIsInstance(
+            KothSolve.objects.get(team=self.third).earned_score,
+            int,
+        )
+        self.assertFalse(
+            KothSolve.objects.filter(
+                team__in=[*internal_missing, *external_missing]
+            ).exists()
+        )
+
+    @patch("apps.koth.services._request_scores")
+    def test_division_change_after_validation_uses_one_current_snapshot(
+        self, request_scores
+    ):
+        from . import services
+
+        self.first.koth_division = Team.KothDivision.INTERNAL
+        self.first.save(update_fields=["koth_division"])
+        request_scores.return_value = {
+            "code": "SUCCESS",
+            "message": "성공",
+            "data": {
+                "koth_challenge_id": str(self.challenge.pk),
+                "period_id": "2026-07-31T10:15:00Z",
+                "results": [
+                    {
+                        "team_id": str(self.first.pk),
+                        "period_rank": 1,
+                        "metric_score": 100,
+                    }
+                ],
+            },
+        }
+        validate = services._validated_results
+
+        def validate_then_move_team(*args, **kwargs):
+            results = validate(*args, **kwargs)
+            Team.objects.filter(pk=self.first.pk).update(
+                koth_division=Team.KothDivision.EXTERNAL
+            )
+            return results
+
+        with patch(
+            "apps.koth.services._validated_results",
+            side_effect=validate_then_move_team,
+        ):
+            self.assertTrue(poll_challenge_period(self.challenge, self.period))
+
+        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 40)
+        snapshot = KothScorePeriod.objects.get().award_snapshot
+        self.assertEqual(
+            snapshot["team_divisions"][str(self.first.pk)],
+            Team.KothDivision.EXTERNAL,
+        )
+        self.assertEqual(snapshot["team_count_by_division"]["INTERNAL"], 0)
+        self.assertEqual(snapshot["team_count_by_division"]["EXTERNAL"], 3)
+        self.assertEqual(snapshot["awarded_scores"][str(self.first.pk)], 40)
 
     @patch("apps.koth.services._request_scores")
     def test_empty_period_is_applied_without_a_solve(self, request_scores):
@@ -738,5 +923,5 @@ class KothScorePollingTests(TestCase):
             KothScorePeriod.objects.get().status, KothScorePeriodStatus.APPLIED
         )
         self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 40)
-        self.assertEqual(KothSolve.objects.get(team=self.third).earned_score, 15)
+        self.assertFalse(KothSolve.objects.filter(team=self.third).exists())
         self.assertFalse(KothSolve.objects.filter(team=self.second).exists())

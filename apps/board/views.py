@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Mapping
+from decimal import Decimal
 
 from django.conf import settings
 from django.db import DatabaseError
@@ -13,6 +14,7 @@ from apps.common.exceptions import InvalidRequest, UserHasNoTeam
 from apps.common.permissions import IsAuthenticated
 from apps.common.response import ok
 from apps.common.throttling import ReadApiThrottle
+from apps.common.utils import num
 
 from .exceptions import BoardLoadFailed, ChallengeIdRequired, RequestBodyNotAllowed
 from .idempotency import idempotent
@@ -121,7 +123,10 @@ class BoardMeView(APIView):
     def get(self, request, *args, **kwargs):
         team = _get_team(request)
         state = get_board_state_for_read(
-            team, include_completion=True, include_cards=True
+            team,
+            include_completion=True,
+            include_cards=True,
+            include_line_monopolies=True,
         )
         cell_states, consumed_cell_indexes = build_cell_states(team)
         board_completed = state.board_completed
@@ -147,6 +152,14 @@ class BoardMeView(APIView):
                     else []
                 ),
                 "active_challenge": _serialize_active_challenge(active_access),
+                "line_monopolies": [
+                    {
+                        "line_number": row["line_number"],
+                        "earned_score": num(Decimal(row["earned_score"])),
+                        "is_category_bonus": row["is_category_bonus"],
+                    }
+                    for row in state.line_monopolies
+                ],
             }
         )
 

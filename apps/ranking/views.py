@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from apps.common.throttling import ReadApiThrottle
 
 from apps.accounts.models import Team, User
+from apps.challenge.models import Challenge, Solve
 from apps.common.exceptions import UserHasNoTeam
 from apps.common.permissions import IsAuthenticated
 from apps.common.response import ok
@@ -20,6 +21,22 @@ def format_datetime(value):
     if value is None:
         return None
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def collect_category_scores(team_ids):
+    """팀별 제오파디 점수를 문제 분야별로 나눠 합산한다. 점수는 순위와 같은 현재 점수를 쓴다."""
+    scores = {
+        team_id: {category: 0 for category in Challenge.CategoryType.values}
+        for team_id in team_ids
+    }
+    rows = (
+        Solve.objects.filter(team_id__in=team_ids)
+        .values("team_id", "challenge__category")
+        .annotate(total=Sum("challenge__current_score"))
+    )
+    for row in rows:
+        team_scores = scores[str(row["team_id"])]
+        team_scores[row["challenge__category"]] = num(row["total"])
+    return scores
 
 
 def collect_team_data():
@@ -144,6 +161,12 @@ def team_ranking(request):
 
     start = (page - 1) * size
     end = start + size
+
+    page_rows = rankings[start:end]
+
+    category_scores = collect_category_scores([row["team_id"] for row in page_rows])
+    for row in page_rows:
+        row["category_scores"] = category_scores[row["team_id"]]
 
     return ok(
         {

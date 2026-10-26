@@ -240,6 +240,10 @@ def unresolved(publication, version):
     values = {c["name"]: c["entries"] for c in decode_settings(version)["containers"]}
     remaining = []
     for item in publication.missing:
+        if item["reason"] == "operator_value_required":
+            entry = values.get(item["container"], {}).get(item["name"], {})
+            if item["name"] in PROTECTED_NAMES and entry.get("locked") and entry.get("value") is not None:
+                continue
         if item["reason"] == "value_required" and values.get(item["container"], {}).get(item["name"], {}).get("value") is not None:
             continue
         if item["reason"] == "running_publication_required":

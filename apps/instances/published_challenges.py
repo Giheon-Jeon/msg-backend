@@ -11,6 +11,7 @@ from django.conf import settings
 from django.core import signing
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.views.decorators.debug import sensitive_variables
 
@@ -19,7 +20,8 @@ from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.exceptions import APIError
 from apps.instances import poller, user_files
 from apps.instances.bundle_environment import environment_counts, fill_bundle_environment, read_bundle_environment
-from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, PublicationRequest, RuntimeSecret
+from apps.instances.publication_dispatch import REPOSITORY, validate_publication_request, validate_publication_run
 from apps.instances.releases import ReleaseValidationError, create_release, validate_release_payload
 from apps.instances.repository_source import RepositorySourceUnavailable
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
@@ -145,16 +147,42 @@ def _release_artifact(artifact):
         return json.loads(archive.read(entries[0]))
 
 
+def _linked_request(request_id, *, lock=False):
+    row = PublicationRequest.objects.select_related("reused_request").filter(pk=request_id).first()
+    if row is None:
+        raise PublishedImportError("PUBLICATION_REQUEST_NOT_FOUND", "발행 요청을 찾지 못했습니다", 404)
+    effective = row.reused_request if row.reused_request_id else row
+    if lock:
+        effective = PublicationRequest.objects.select_for_update().get(pk=effective.pk)
+    fields = ("repository", "workflow", "ref", "challenge_id", "challenge_slug", "requested_sha", "publish_images", "runtime_smoke")
+    if (effective.reused_request_id or any(getattr(row, field) != getattr(effective, field) for field in fields)
+            or settings.RELEASE_POLL_REPO != REPOSITORY
+            or effective.dispatch_status != "DISPATCHED" or effective.run_id is None
+            or effective.dispatch_started_at is None or effective.challenge_id is None):
+        raise PublishedImportError("PUBLICATION_REQUEST_MISMATCH", "발행 요청의 실행 상태와 출처를 확인해주세요", 409)
+    validate_publication_request(effective)
+    return effective
+
+
 @sensitive_variables()
-def prepare_publication(artifact_id, *, metadata_reader=None):
+def prepare_publication(artifact_id, *, metadata_reader=None, publication_request_id=None):
+    linked = _linked_request(publication_request_id) if publication_request_id is not None else None
     artifact = _json(f"/actions/artifacts/{artifact_id}")
     identity = artifact_identity(artifact)
     if identity is None:
         raise PublishedImportError("PUBLICATION_UNAVAILABLE", "가져올 수 없는 발행본입니다 목록을 다시 확인해주세요", 409)
+    if linked and (identity["run_id"] != linked.run_id or identity["challenge_slug"] != linked.challenge_slug
+                   or identity["source_sha"] != linked.requested_sha):
+        raise PublishedImportError("PUBLICATION_REQUEST_MISMATCH", "선택한 발행본이 요청한 실행·문제·SHA와 다릅니다", 409)
+    observed_at = timezone.now()
     run = poller.get_workflow_run(artifact, token=settings.RELEASE_POLL_GITHUB_TOKEN)
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise PublishedImportError("PUBLICATION_NOT_READY", "발행 작업이 완료되지 않았거나 실패했습니다 성공한 발행본을 선택해주세요", 409)
     poller.validate_workflow_run_source(artifact, run)
+    verified_run = validate_publication_run(linked, run) if linked else None
+    if linked and ((linked.run_attempt and linked.run_attempt > verified_run["run_attempt"])
+                   or (linked.run_number is not None and linked.run_number != verified_run["run_number"])):
+        raise PublishedImportError("PUBLICATION_REQUEST_MISMATCH", "발행 실행 정보가 변경됐습니다 상태를 다시 확인해주세요", 409)
     slug, sha = identity["challenge_slug"], identity["source_sha"]
     matching = {}
     for page in range(1, 6):
@@ -165,6 +193,8 @@ def prepare_publication(artifact_id, *, metadata_reader=None):
         for item in entries:
             if not isinstance(item, dict):
                 raise ReleaseValidationError("발행 파일 형식을 확인해주세요")
+            if linked and item.get("workflow_run") is not None:
+                poller.validate_workflow_run_source(item, run)
             # The run-artifacts endpoint may omit workflow_run; it is supplied by this verified run.
             item = {**item, "workflow_run": {"id": run["id"], "head_branch": run["head_branch"], "head_sha": run["head_sha"]}}
             candidate = artifact_identity(item)
@@ -183,6 +213,8 @@ def prepare_publication(artifact_id, *, metadata_reader=None):
     if "publish" in matching:
         release_data = _release_artifact(matching["publish"])
         poller.validate_bundle_source(matching["publish"], run, release_data)
+        if linked and release_data.get("source_sha") != linked.requested_sha:
+            raise PublishedImportError("PUBLICATION_REQUEST_MISMATCH", "bundle SHA가 발행 요청 SHA와 다릅니다", 409)
         if release_data.get("challenge_slug") != slug or release_data.get("challenge_id"):
             raise ReleaseValidationError("실행 발행 파일의 문제 식별자가 일치하지 않습니다")
         release_validated = validate_release_payload({"artifact": release_data})
@@ -212,12 +244,17 @@ def prepare_publication(artifact_id, *, metadata_reader=None):
     if not release_validated and not file_validated:
         raise ReleaseValidationError("가져올 발행 파일이 없습니다")
     revision = (release_validated or file_validated)["registry_revision"]
+    if linked and revision != verified_run["run_number"]:
+        raise PublishedImportError("PUBLICATION_REQUEST_MISMATCH", "bundle 발행번호와 요청 실행의 발행번호가 다릅니다", 409)
+    binding = {"publication_request_id": str(publication_request_id), "dispatch_request_id": str(linked.pk),
+               "verified_run": verified_run} if linked else {}
     fingerprint = salted_hmac(SALT, json.dumps({"metadata": metadata, "release": release_data,
-        "files": manifest, "artifact_ids": sorted(item["id"] for item in matching.values())}, sort_keys=True)).hexdigest()
+        "files": manifest, "artifact_ids": sorted(item["id"] for item in matching.values()), **binding}, sort_keys=True)).hexdigest()
     return {"artifact_id": artifact_id, "slug": slug, "source_sha": sha, "revision": revision,
             "run_id": run["id"], "metadata": metadata, "release": release_data,
             "file_manifest": manifest, "file_validated": file_validated, "archive": archive_bytes,
-            "artifacts": matching, "fingerprint": fingerprint, "environment": environment}
+            "artifacts": matching, "fingerprint": fingerprint, "environment": environment,
+            **binding, "observed_at": observed_at}
 
 
 def existing_problem(prepared, lock=False):
@@ -258,7 +295,8 @@ def preview_publication(prepared, user):
     if release and existing_release and not _same_release(existing_release, validate_release_payload({"artifact": release})):
         blocked_reason = blocked_reason or "같은 발행번호로 다른 실행 설정이 등록되어 있습니다 배포 이력을 확인해주세요"
     token = signing.dumps({"artifact_id": prepared["artifact_id"], "fingerprint": prepared["fingerprint"],
-                          "user_id": str(user.pk), "challenge_state": metadata_state(challenge)}, salt=SALT)
+                          "user_id": str(user.pk), "challenge_state": metadata_state(challenge),
+                          **({"publication_request_id": prepared["publication_request_id"]} if prepared.get("publication_request_id") else {})}, salt=SALT)
     return {"preview_token": token, "challenge_slug": prepared["slug"], "registry_revision": prepared["revision"],
         "title": prepared["metadata"]["title"], "description": prepared["metadata"]["description"], "category": prepared["metadata"]["category"],
         "challenge_id": str(challenge.pk) if challenge else None, "existing_title": challenge.title if challenge else None,
@@ -276,7 +314,10 @@ def preview_publication(prepared, user):
                   "file_count": file_data["file_count"] if file_data else 0, "size_bytes": file_data["size_bytes"] if file_data else 0},
         "source_sha": prepared["source_sha"],
         "run_url": f"https://github.com/{settings.RELEASE_POLL_REPO}/actions/runs/{prepared['run_id']}",
-        "defaults": {"difficulty": "UNASSIGNED", "initial_score": 1000, "minimum_score": 100, "decay": 70}}
+        "defaults": {"difficulty": "UNASSIGNED", "initial_score": 1000, "minimum_score": 100, "decay": 70},
+        **({"publication_request_id": prepared["publication_request_id"], "dispatch_request_id": prepared["dispatch_request_id"],
+            "sha_verified": True, "artifact_ids": {kind: item["id"] for kind, item in prepared["artifacts"].items()}}
+           if prepared.get("publication_request_id") else {})}
 
 
 def _same_release(release, validated):
@@ -311,6 +352,17 @@ def save_publication(prepared, user, difficulty, update_metadata=False):
             "difficulty": difficulty, "score": 1000, "flag_hash": hash_flag(meta["flag"]), "is_published": False,
         })
         challenge = Challenge.objects.select_for_update().get(pk=challenge.pk)
+        linked = None
+        if prepared.get("publication_request_id"):
+            linked = _linked_request(prepared["publication_request_id"], lock=True)
+            verified = prepared["verified_run"]
+            if (str(linked.pk) != prepared["dispatch_request_id"] or linked.challenge_id != challenge.pk
+                    or linked.challenge_slug != prepared["slug"] or linked.requested_sha != prepared["source_sha"]
+                    or linked.run_id != verified["run_id"]
+                    or (linked.run_number is not None and linked.run_number != prepared["revision"])
+                    or (linked.run_attempt and linked.run_attempt > verified["run_attempt"])
+                    or (linked.last_checked_at and linked.last_checked_at > prepared["observed_at"])):
+                raise PublishedImportError("PUBLICATION_REQUEST_CHANGED", "발행 요청 상태가 변경됐습니다 발행본을 다시 확인해주세요", 409)
         if created:
             # The periodic poller may have seen this slug before its first
             # reviewed import. Revisit its earlier image and file revisions.
@@ -365,8 +417,25 @@ def save_publication(prepared, user, difficulty, update_metadata=False):
             if (file_status not in {"registered", "duplicate"} or stored_file is None
                     or any(getattr(stored_file, field) != prepared["file_validated"][field] for field in file_fields)):
                 raise PublishedImportError("PUBLICATION_CONFLICT", "같은 발행번호의 파일 기록이 다릅니다 기존 기록을 확인해주세요", 409)
+        connection = {}
+        if linked:
+            # Commit proof only with the release and participant files, never at preview time.
+            linked.collection = {
+                "artifact_id": prepared["artifact_id"],
+                "artifact_ids": {kind: item["id"] for kind, item in prepared["artifacts"].items()},
+                "run_id": prepared["verified_run"]["run_id"], "run_attempt": prepared["verified_run"]["run_attempt"],
+                "source_sha": prepared["source_sha"], "registry_revision": prepared["revision"],
+                "release_id": str(release.pk) if release else None, "imported_at": timezone.now().isoformat(),
+            }
+            for field, value in prepared["verified_run"].items():
+                setattr(linked, field, value)
+            linked.last_checked_at = prepared["observed_at"]
+            linked.last_error_code = ""
+            linked.save(update_fields=["collection", *prepared["verified_run"], "last_checked_at", "last_error_code", "updated_at"])
+            connection = {"publication_request_id": prepared["publication_request_id"],
+                          "dispatch_request_id": str(linked.pk), "sha_verified": True, "collection": linked.collection}
         return {"challenge_id": str(challenge.pk), "challenge_slug": challenge.challenge_slug, "title": challenge.title, "category": challenge.category,
                 "difficulty": challenge.difficulty, "is_published": challenge.is_published,
                 "challenge_created": created, "metadata_updated": metadata_updated,
                 "release_id": str(release.pk) if release else None,
-                "release_status": release_status, "files_status": file_status, "registry_revision": prepared["revision"]}
+                "release_status": release_status, "files_status": file_status, "registry_revision": prepared["revision"], **connection}

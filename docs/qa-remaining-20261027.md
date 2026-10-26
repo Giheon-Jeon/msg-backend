@@ -2,7 +2,10 @@
 
 Baseline backend: `ea1f02ce6c1042c690f454aca5b65a4e183a540f`.
 Baseline frontend: `516fbc9487fc36a32ccf9b95c98a41e5af244b97`.
-Changes are local; neither repository has been pushed or deployed to production.
+Backend changes are prepared for a backend-only PR; no production deployment has
+been performed. At the user's request, frontend commit `80b3902` was reverted by
+`7197d9c`; its tracked tree exactly matches baseline `516fbc9` again. Frontend
+findings below are handoff requests, not fixes included in this backend PR.
 
 ## Implemented
 
@@ -21,26 +24,35 @@ Changes are local; neither repository has been pushed or deployed to production.
   rank; `collection_status`, `is_stale`, period and collection timestamps describe
   collection independently of the score. Internal error details are not exposed.
 - Team-token key replacement updates `issued_at` as well as the stored hash.
-- Frontend reloads discard stale responses; starting a mutation invalidates
-  pending loads. Preserve `team_card_id` in adapters, selection, keys, use and
-  discard. Recover the discard prompt after reloading two held cards.
-- Countdown uses a monotonic clock after receiving server time. Challenge
-  deadlines use the server's field rather than a hardcoded duration.
+
+## Frontend handoff (changes reverted)
+
+- TC-439/443: reloads must discard stale responses; starting a mutation must
+  invalidate earlier loads. A delayed position-10 response overwrote position 20.
+- TC-469/474: preserve `team_card_id` in adapters, keys, selection, use and
+  discard. Reconstruct the discard prompt after reloading two held cards.
+- TC-506: calculate elapsed time with a monotonic clock after receiving server
+  time. A wall-clock jump of one hour made a ten-minute countdown become zero.
+- TC-568: display the backend's new collection-state fields independently of
+  `earned_score=0`, preserving the distinction between pending, failed and zero.
+- Use `active_challenge.solve_deadline_at` rather than a fixed deadline derived
+  from `opened_at`; the reward duration is configurable by the backend.
 
 ## Verification
 
 - PostgreSQL regression run: 185 tests passed. After public-access and key
   replacement additions, 14 focused/access checks passed (overlap exists).
-- Frontend board utilities, hook race and rendering: 204 tests passed; Vite build
-  succeeded. A delayed reload cannot revert position 20 to position 10.
+- Historical frontend prototype validation (now reverted): 204 tests and Vite
+  build passed. Those results do not establish that the restored frontend is
+  fixed; TC-439/443/469/474/506 remain for the frontend team, as does TC-568 UI.
 - `tools/qa_remaining_replay.py`: real Gunicorn HTTP, real PostgreSQL, real Redis;
   66 recorded HTTP requests, 26 assertions passed. The DB name is asserted before
   fixture writes. The script retains raw response/DB evidence with tokens
   redacted in `/tmp/qa_remaining_result.json`.
 - Local evidence copy: `C:/msg_BE/output/qa-remaining-fixed-20261027.json`.
-- Backend replay endpoint: `http://127.0.0.1:8016`; frontend browser endpoint:
-  `http://127.0.0.1:5175`. Dedicated DB: `qa_remaining_20261027`.
-- Browser: logged into the real board, selected the second of two identical
+- Backend replay endpoint: `http://127.0.0.1:8016`. Dedicated DB:
+  `qa_remaining_20261027`. The temporary frontend preview has been stopped.
+- Historical browser prototype check (before revert): logged into the real board, selected the second of two identical
   extra-roll cards, and discarded only that UUID. Using the remaining card set
   only its `used_at` and increased dice from 1 to 2. Reload restores the prompt.
 - Race and clock cases use executable React tests; no claim is made that OS

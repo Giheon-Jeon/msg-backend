@@ -517,6 +517,50 @@ class InstanceLockTests(TestCase):
             DeleteReason.REPLACED_BY_NEW_INSTANCE,
         )
 
+    def ban_while_waiting_for_lock(self):
+        """인증은 통과했고 사용자 잠금을 잡기 직전에 관리자 정지가 끝난 상황을 만든다."""
+        from apps.instances import views
+
+        lock = views.lock_instance_user
+
+        def lock_after_ban(user):
+            Team.objects.filter(pk=self.team.pk).update(is_banned=True)
+            lock(user)
+
+        return patch.object(views, "lock_instance_user", lock_after_ban)
+
+    @patch("apps.instances.views.call_scheduler_create")
+    def test_create_rejects_team_banned_before_lock(self, call_scheduler_create):
+        with self.ban_while_waiting_for_lock():
+            res = self.client.post(
+                "/api/v1/instances",
+                {"challenge_id": str(self.challenge.challenge_id)},
+                format="json",
+            )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "TEAM_BANNED")
+        call_scheduler_create.assert_not_called()
+        self.assertFalse(Instance.objects.filter(team=self.team).exists())
+
+    @patch("apps.instances.views.call_scheduler_reset")
+    def test_reset_rejects_team_banned_before_lock(self, call_scheduler_reset):
+        # 정지 때 종료에 실패해 RUNNING 으로 남은 인스턴스도 새 인스턴스로 바꿀 수 없다.
+        instance = Instance.objects.create(
+            user=self.user,
+            team=self.team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+            release=self.release,
+            endpoints=ENDPOINTS,
+        )
+        with self.ban_while_waiting_for_lock():
+            res = self.client.post(f"/api/v1/instances/{instance.pk}/reset")
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data["code"], "TEAM_BANNED")
+        call_scheduler_reset.assert_not_called()
+
     @patch("apps.instances.views.call_scheduler_reset")
     def test_instance_reset_marks_replaced_instance_stopping(self, call_scheduler_reset):
         old_instance = Instance.objects.create(

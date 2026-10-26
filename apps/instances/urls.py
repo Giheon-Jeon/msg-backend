@@ -1,6 +1,10 @@
 from django.urls import path
 
 from apps.instances.admin_views import ReleaseActivateView, ReleaseDeriveView, ReleaseListCreateView
+from apps.instances.image_preparation_views import (
+    ImagePreparationListCreateView, ImagePreparationDetailView,
+    ImagePreparationRetryView, ImagePreparationRefreshView,
+)
 from apps.instances.deployment_test_views import DeploymentTestCreateView, DeploymentTestDetailView, DeploymentTestListView
 from apps.instances.secret_views import RuntimeSecretListCreateView
 from apps.instances.release_file_views import ReleaseFilesConfigureView
@@ -15,6 +19,14 @@ from apps.instances.views import (
 )
 
 urlpatterns = [
+    path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/image_preparations",
+         ImagePreparationListCreateView.as_view(), name="admin-image-preparations"),
+    path("admin/challenges/<uuid:challenge_id>/image_preparations/<uuid:request_id>",
+         ImagePreparationDetailView.as_view(), name="admin-image-preparation-detail"),
+    path("admin/challenges/<uuid:challenge_id>/image_preparations/<uuid:request_id>/retry",
+         ImagePreparationRetryView.as_view(), name="admin-image-preparation-retry"),
+    path("admin/challenges/<uuid:challenge_id>/image_preparations/<uuid:request_id>/refresh",
+         ImagePreparationRefreshView.as_view(), name="admin-image-preparation-refresh"),
     path("admin/challenges/<uuid:challenge_id>/deployment_tests", DeploymentTestListView.as_view(), name="admin-deployment-tests"),
     path("admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/deployment_tests", DeploymentTestCreateView.as_view(), name="admin-deployment-test-create"),
     path("admin/challenges/<uuid:challenge_id>/deployment_tests/<uuid:test_id>", DeploymentTestDetailView.as_view(), name="admin-deployment-test-detail"),
