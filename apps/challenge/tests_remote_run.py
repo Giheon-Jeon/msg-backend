@@ -258,6 +258,56 @@ class RemoteRunTests(ExeFixtures, TestCase):
         called.assert_not_called()
         self.assertEqual(result.last_error_code, "WINDOWS_NOT_READY")
 
+    def test_dispatch_requires_full_execution_limit_and_finish_margin(self):
+        row = self.assigned()
+        self.checker(row)
+        now = timezone.now()
+        for limit in (10, 180):
+            for extra in (-1, 0, 1):
+                row.dispatch_state = "PENDING"
+                row.readiness_checked_at = now
+                row.lease_expires_at = now + timedelta(seconds=limit + 30 + extra)
+                row.config_snapshot["timeout_seconds"] = limit
+                row.save()
+                with (
+                    self.subTest(limit=limit, extra=extra),
+                    patch(
+                        "apps.challenge.checker_dispatch.timezone.now", return_value=now
+                    ),
+                    patch(
+                        "apps.challenge.checker_dispatch.checker_request",
+                        return_value={"checker_job_id": "job"},
+                    ) as called,
+                ):
+                    result = dispatch_submission(row.pk)
+                if extra <= 0:
+                    called.assert_not_called()
+                    self.assertEqual(result.last_error_code, "WINDOWS_LEASE_TOO_SHORT")
+                    self.assertEqual(result.dispatch_state, "PENDING")
+                else:
+                    called.assert_called_once()
+                    self.assertEqual(called.call_args.args[1], "POST")
+                row.refresh_from_db()
+                self.assertIsNone(row.started_at)
+                self.assertIsNone(row.lease_released_at)
+                self.assertEqual(row.attempt_state, "RESERVED")
+
+    def test_uncertain_job_is_queried_even_after_lease_expiry_never_reposted(self):
+        row = self.assigned()
+        row.dispatch_state = "UNKNOWN"
+        row.lease_expires_at = timezone.now() - timedelta(seconds=1)
+        row.save()
+        with patch(
+            "apps.challenge.checker_dispatch.checker_request",
+            side_effect=ExeSubmissionError("CHECKER_RESPONSE_UNKNOWN", "test", 503),
+        ) as called:
+            result = dispatch_submission(row.pk)
+        self.assertEqual(called.call_args.args[1], "GET")
+        self.assertEqual(result.dispatch_state, "UNKNOWN")
+        self.assertEqual(result.attempt_state, "RESERVED")
+        self.assertIsNone(result.cleanup_complete)
+        self.assertIsNone(result.lease_released_at)
+
     def test_fake_or_stale_guest_readiness_is_rejected(self):
         row = self.accepted()
         for body in [
@@ -360,7 +410,8 @@ class RemoteRunTests(ExeFixtures, TestCase):
         )
         key = row.payload_key
         with patch(
-            "apps.challenge.windows_assignments._post_scheduler", return_value=None
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(row.lease_id), "status": "COMPLETED"},
         ) as called:
             with patch(
                 "django.core.files.storage.FileSystemStorage.delete",
@@ -520,7 +571,8 @@ class RemoteRunTests(ExeFixtures, TestCase):
             self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
         )
         with patch(
-            "apps.challenge.windows_assignments._post_scheduler", return_value=None
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(row.lease_id), "status": "COMPLETED"},
         ) as called:
             release_windows_assignment(row.pk)
             release_windows_assignment(row.pk)

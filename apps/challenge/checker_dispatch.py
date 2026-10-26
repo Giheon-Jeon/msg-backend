@@ -12,6 +12,8 @@ from apps.challenge.exe_submissions import ExeSubmissionError
 from apps.challenge.models import ExeSubmission
 from apps.challenge.windows_assignments import _NoRedirect
 
+LEASE_FINISH_MARGIN_SECONDS = 30
+
 
 def checker_request(row, method):
     origin, token, _ = checker_configuration(row.worker_id)
@@ -102,10 +104,15 @@ def dispatch_submission(submission_id):
                 or not row.vm_id
                 or not row.readiness_checked_at
                 or not 0 <= (now - row.readiness_checked_at).total_seconds() <= 30
-                or not row.lease_expires_at
-                or row.lease_expires_at <= now + timedelta(seconds=10)
             ):
                 row.last_error_code = "WINDOWS_NOT_READY"
+                row.save(update_fields=["last_error_code", "updated_at"])
+                return row
+            # Include dispatch, result delivery and lease release before Broker expiry.
+            if not row.lease_expires_at or row.lease_expires_at <= now + timedelta(
+                seconds=limit + LEASE_FINISH_MARGIN_SECONDS
+            ):
+                row.last_error_code = "WINDOWS_LEASE_TOO_SHORT"
                 row.save(update_fields=["last_error_code", "updated_at"])
                 return row
             _, _, pins = checker_configuration(row.worker_id)

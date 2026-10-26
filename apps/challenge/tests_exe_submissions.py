@@ -662,6 +662,8 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
     def test_http_busy_auth_timeout_and_invalid_json(self):
         for status, code, expected in (
             (409, "NO_WINDOWS_WORKER_AVAILABLE", "NO_WINDOWS_WORKER_AVAILABLE"),
+            (409, "WINDOWS_ASSIGNMENT_ENDED", "WINDOWS_ASSIGNMENT_ENDED"),
+            (502, "BROKER_CALL_FAILED", "SCHEDULER_UNAVAILABLE"),
             (401, "TOKEN_INVALID", "SCHEDULER_UNAVAILABLE"),
             (409, "CONFLICT", "SCHEDULER_UNAVAILABLE"),
         ):
@@ -733,6 +735,182 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
             self.assertEqual(assign_oldest_exe_submission().pk, second.pk)
         self.assertIsNone(assign_oldest_exe_submission())
 
+    def test_ended_assignment_leaves_fifo_without_releasing_unknown_execution(self):
+        first, second = self.accepted(), self.accepted_other_team()
+        error = HTTPError(
+            "http://scheduler.invalid",
+            409,
+            "ended",
+            {},
+            io.BytesIO(json.dumps({"code": "WINDOWS_ASSIGNMENT_ENDED"}).encode()),
+        )
+        opener = MagicMock()
+        opener.open.side_effect = error
+        with patch(
+            "apps.challenge.windows_assignments.build_opener", return_value=opener
+        ):
+            result = assign_oldest_exe_submission()
+        self.assertEqual(result.pk, first.pk)
+        first.refresh_from_db()
+        self.assertEqual(first.status, "START_UNKNOWN")
+        self.assertEqual(first.last_error_code, "WINDOWS_ASSIGNMENT_ENDED")
+        self.assertEqual(first.attempt_state, "RESERVED")
+        self.assertIsNone(first.started_at)
+        self.assertIsNone(first.finished_at)
+        self.assertIsNone(first.cleanup_complete)
+        self.assertIsNone(first.lease_released_at)
+        self.assertTrue((self.root / first.payload_key).exists())
+        self.assertTrue(
+            self.client.get(f"{self.url}/{first.pk}").data["data"]["requires_review"]
+        )
+        replay = self.post_exe(first.idempotency_key)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.data["data"]["submission_id"], str(first.pk))
+        ExeSubmission.objects.filter(pk=first.pk).update(
+            created_at=timezone.now() - timedelta(minutes=2)
+        )
+        self.assertEqual(self.post_exe().data["code"], "EXECUTION_IN_PROGRESS")
+        with patch(
+            "apps.challenge.windows_assignments.request_windows_assignment",
+            return_value={
+                "lease_id": uuid.uuid4(),
+                "worker_id": uuid.uuid4(),
+                "worker_address": "10.90.20.11",
+                "lease_expires_at": timezone.now() + timedelta(minutes=5),
+            },
+        ) as called:
+            self.assertEqual(assign_oldest_exe_submission().pk, second.pk)
+            self.assertEqual(called.call_args.args[0].pk, second.pk)
+            self.assertIsNone(assign_oldest_exe_submission())
+        self.assertEqual(ExeSubmission.objects.count(), 2)
+
+    def test_release_rejects_missing_wrong_or_unfinished_ack_and_keeps_payload(self):
+        submission = self.accepted()
+        submission.lease_id = uuid.uuid4()
+        submission.status, submission.attempt_state = "COMPLETED", "USED"
+        submission.started_at = submission.finished_at = timezone.now()
+        submission.cleanup_complete = True
+        submission.save()
+        for result in (
+            None,
+            {},
+            [],
+            {"lease_id": str(uuid.uuid4()), "status": "COMPLETED"},
+            {"lease_id": "bad", "status": "COMPLETED"},
+            {"lease_id": str(submission.lease_id)},
+            {"lease_id": str(submission.lease_id), "status": "RUNNING"},
+            {"lease_id": str(submission.lease_id), "status": ["COMPLETED"]},
+        ):
+            with (
+                self.subTest(result=result),
+                patch(
+                    "apps.challenge.windows_assignments._post_scheduler",
+                    return_value=result,
+                ),
+                self.assertRaises(SchedulerError),
+            ):
+                release_windows_assignment(submission.pk)
+            submission.refresh_from_db()
+            self.assertIsNone(submission.lease_released_at)
+            self.assertTrue((self.root / submission.payload_key).exists())
+
+    def test_expired_release_ack_is_valid_and_does_not_rewrite_checker_result(self):
+        submission = self.accepted()
+        submission.lease_id = uuid.uuid4()
+        submission.status, submission.attempt_state = "TIMEOUT", "USED"
+        submission.started_at = submission.finished_at = timezone.now()
+        submission.cleanup_complete = True
+        submission.save()
+        opener = self.http_response(
+            json.dumps(
+                {
+                    "data": {
+                        "lease_id": str(submission.lease_id),
+                        "status": "EXPIRED",
+                    },
+                    "code": "SUCCESS",
+                }
+            ).encode()
+        )
+        with patch(
+            "apps.challenge.windows_assignments.build_opener", return_value=opener
+        ):
+            release_windows_assignment(submission.pk)
+            release_windows_assignment(submission.pk)
+        self.assertEqual(opener.open.call_count, 1)
+        submission.refresh_from_db()
+        self.assertIsNotNone(submission.lease_released_at)
+        self.assertEqual(submission.status, "TIMEOUT")
+        self.assertEqual(submission.attempt_state, "USED")
+
+    def test_release_http_errors_never_mark_released_and_retry_same_lease(self):
+        submission = self.accepted()
+        submission.lease_id = uuid.uuid4()
+        submission.status, submission.attempt_state = "COMPLETED", "USED"
+        submission.started_at = submission.finished_at = timezone.now()
+        submission.cleanup_complete = True
+        submission.save()
+        url = f"/api/windows-assignments/{submission.lease_id}/release"
+        for status, code in (
+            (502, "BROKER_CALL_FAILED"),
+            (404, "WINDOWS_ASSIGNMENT_NOT_FOUND"),
+        ):
+            opener = MagicMock()
+            opener.open.side_effect = HTTPError(
+                "http://scheduler.invalid",
+                status,
+                "error",
+                {},
+                io.BytesIO(json.dumps({"code": code}).encode()),
+            )
+            with (
+                self.subTest(status=status),
+                patch(
+                    "apps.challenge.windows_assignments.build_opener",
+                    return_value=opener,
+                ),
+                self.assertRaises(SchedulerError),
+            ):
+                release_windows_assignment(submission.pk)
+            self.assertEqual(
+                opener.open.call_args.args[0].full_url, "http://127.0.0.1:8001" + url
+            )
+            submission.refresh_from_db()
+            self.assertIsNone(submission.lease_released_at)
+            self.assertTrue((self.root / submission.payload_key).exists())
+        opener = self.http_response(
+            json.dumps(
+                {"lease_id": str(submission.lease_id), "status": "COMPLETED"}
+            ).encode()
+        )
+        with patch(
+            "apps.challenge.windows_assignments.build_opener", return_value=opener
+        ):
+            release_windows_assignment(submission.pk)
+        self.assertEqual(opener.open.call_args.args[0].data, b"")
+        self.assertEqual(
+            opener.open.call_args.args[0].full_url, "http://127.0.0.1:8001" + url
+        )
+
+    def test_empty_release_response_is_uncertain(self):
+        submission = self.accepted()
+        submission.lease_id = uuid.uuid4()
+        submission.status, submission.attempt_state = "COMPLETED", "USED"
+        submission.started_at = submission.finished_at = timezone.now()
+        submission.cleanup_complete = True
+        submission.save()
+        with (
+            patch(
+                "apps.challenge.windows_assignments.build_opener",
+                return_value=self.http_response(b""),
+            ),
+            self.assertRaises(SchedulerError),
+        ):
+            release_windows_assignment(submission.pk)
+        submission.refresh_from_db()
+        self.assertIsNone(submission.lease_released_at)
+        self.assertTrue((self.root / submission.payload_key).exists())
+
     def test_assignment_does_not_run_checker_or_expose_address(self):
         submission = self.accepted()
         with patch(
@@ -767,7 +945,8 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.refresh_from_db()
         self.assertIsNone(submission.lease_released_at)
         with patch(
-            "apps.challenge.windows_assignments._post_scheduler", return_value=None
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(submission.lease_id), "status": "COMPLETED"},
         ) as called:
             release_windows_assignment(submission.pk)
             release_windows_assignment(submission.pk)

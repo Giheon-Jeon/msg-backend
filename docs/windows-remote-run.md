@@ -77,3 +77,12 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 실제 Azure·게스트 준비 확인·체커 callback을 검증한 뒤 EXE_SUBMISSIONS_ENABLED와 EXE_DISPATCH_ENABLED를 켜고 관리자에서 접수를 허용한다
 워커는 dispatch_exe_submissions 명령을 주기 실행한다 한 번에 처리할 수는 --limit으로 제한한다
 일반 문제와 KOTH의 실행 경로는 사용하지 않는다
+
+## Scheduler 배정·반납 계약 보완
+
+- 배정 재시도는 저장된 submission_id·팀·release·파일 해시를 그대로 사용한다 Scheduler는 같은 ID의 다른 본문을 비교하지 않는다
+- 409 WINDOWS_ASSIGNMENT_ENDED는 자동 재배정하지 않는다 START_UNKNOWN으로 옮겨 FIFO에서 제외하고 예약·파일을 보존한다 실제 이력 확인 전에는 해당 팀의 새 실행을 막는다
+- VM 부족·502·응답 유실은 같은 submission_id로 재시도한다 새 제출을 자동 생성하지 않는다
+- 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 재시도도 같은 lease_id를 쓴다
+- 임대 기간은 기본 2시간으로 가정하지 않고 expires_at을 따른다 연장 API는 없다 새 실행은 설정된 실행 제한 시간에 dispatch·결과 수집·반납 여유 30초를 더한 시간이 남아 있어야 한다 실제 연동 전 이 여유의 적정성을 확인한다
+- 임대가 끝나도 기존 실행의 결과를 추측하지 않는다 접수 여부가 불명확한 체커 작업은 같은 ID로 조회만 하며 자동 재실행·반납하지 않는다

@@ -68,10 +68,14 @@ def _post_scheduler(path, body=None):
         if (
             error.code == 409
             and isinstance(payload, dict)
-            and payload.get("code") == "NO_WINDOWS_WORKER_AVAILABLE"
+            and payload.get("code")
+            in (
+                "NO_WINDOWS_WORKER_AVAILABLE",
+                "WINDOWS_ASSIGNMENT_ENDED",
+            )
         ):
             raise SchedulerError(
-                "NO_WINDOWS_WORKER_AVAILABLE", "No Windows VM is available.", 409
+                payload["code"], "Windows assignment is unavailable or ended.", 409
             ) from None
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "Windows assignment request failed.", 503
@@ -196,8 +200,12 @@ def assign_oldest_exe_submission():
             assignment = request_windows_assignment(submission)
         except SchedulerError as error:
             submission.last_error_code = error.code
-            submission.save(update_fields=["last_error_code", "updated_at"])
-            # Even an unknown response is retried using this same submission, never a new ID.
+            update_fields = ["last_error_code", "updated_at"]
+            if error.code == "WINDOWS_ASSIGNMENT_ENDED":
+                # A finished lease is not execution/cleanup evidence; retain the reservation for review.
+                submission.status = ExeSubmission.Status.START_UNKNOWN
+                update_fields.append("status")
+            submission.save(update_fields=update_fields)
             return submission
         for field, value in assignment.items():
             setattr(submission, field, value)
@@ -233,7 +241,20 @@ def release_windows_assignment(submission_id):
                 "Execution must be resolved before lease release.",
                 409,
             )
-        _post_scheduler(f"/api/windows-assignments/{submission.lease_id}/release")
+        result = _post_scheduler(
+            f"/api/windows-assignments/{submission.lease_id}/release"
+        )
+        try:
+            if (
+                not isinstance(result, dict)
+                or uuid.UUID(result["lease_id"]) != submission.lease_id
+                or result["status"] not in ("COMPLETED", "EXPIRED")
+            ):
+                raise ValueError
+        except (KeyError, TypeError, AttributeError, ValueError):
+            raise SchedulerError(
+                "SCHEDULER_UNAVAILABLE", "Invalid Windows release acknowledgement.", 503
+            ) from None
         submission.lease_released_at = timezone.now()
         # Release ACK is not proof of Broker VM recreation or cleanup completion.
         submission.save(update_fields=["lease_released_at", "updated_at"])
