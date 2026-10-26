@@ -19,7 +19,7 @@ def _existing(path, expected):
     try:
         metadata = path.lstat()
     except FileNotFoundError:
-        return
+        return False
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != OWNER
@@ -28,6 +28,16 @@ def _existing(path, expected):
         or path.read_bytes() != expected
     ):
         raise RuntimeError("Untrusted or conflicting unit: " + path.name)
+    return True
+
+
+def _validate_units(files):
+    for name, data in files.items():
+        for directory in (UNIT_DIR, *OTHER_UNIT_DIRS):
+            _existing(directory / name, data)
+            overrides = directory / (name + ".d")
+            if overrides.is_symlink() or overrides.exists():
+                raise RuntimeError("Unit overrides require operator review: " + name)
 
 
 def install(*, check=False):
@@ -39,17 +49,12 @@ def install(*, check=False):
     ):
         subprocess.run(COMPOSE + ["exec", "-T", "backend", "python", "manage.py"] + arguments, check=True)
     files = {name: (Path(__file__).resolve().parent / name).read_bytes() for name in UNITS}
-    for name, data in files.items():
-        for directory in (UNIT_DIR, *OTHER_UNIT_DIRS):
-            _existing(directory / name, data)
-            overrides = directory / (name + ".d")
-            if overrides.is_symlink() or overrides.exists():
-                raise RuntimeError("Unit overrides require operator review: " + name)
+    _validate_units(files)
     if check:
         return
     for name, data in files.items():
         target = UNIT_DIR / name
-        if target.exists():
+        if _existing(target, data):
             continue
         with tempfile.NamedTemporaryFile(dir=UNIT_DIR, prefix=".msg-image-preparation-", delete=False) as temporary:
             path = Path(temporary.name)
@@ -63,7 +68,10 @@ def install(*, check=False):
                 os.link(path, target)
             finally:
                 path.unlink(missing_ok=True)
+    # Recheck concurrent changes before loading units and again before enabling them.
+    _validate_units(files)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
+    _validate_units(files)
     subprocess.run(["systemctl", "enable", "--now", UNITS[1]], check=True)
 
 
