@@ -125,9 +125,8 @@ def request_windows_assignment(submission):
             or uuid.UUID(result["submission_id"]) != submission.pk
         ):
             raise ValueError
-        # Older assignment responses omitted status. An explicit Broker status
-        # must never be ignored, including an idempotent replay of an ended lease.
-        lease_status = result.get("status", "LEASED")
+        # A missing status is not proof of an active lease.
+        lease_status = result["status"]
         if lease_status not in ("LEASED", "COMPLETED", "EXPIRED"):
             raise ValueError
         lease_id, worker_id = (

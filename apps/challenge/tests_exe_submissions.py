@@ -202,6 +202,7 @@ class ExeFixtures:
     def assignment(self, submission):
         return {
             "submission_id": str(submission.pk),
+            "status": "LEASED",
             "lease_id": str(uuid.uuid4()),
             "worker_id": str(uuid.uuid4()),
             "address": "10.90.20.10",

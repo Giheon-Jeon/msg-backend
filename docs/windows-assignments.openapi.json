@@ -60,8 +60,8 @@
       },
       "Assignment": {
         "type": "object",
-        "required": ["submission_id", "lease_id", "worker_id", "address", "expires_at"],
-        "description": "For READY, vm_id, readiness_check_id and readiness_checked_at are required and the observation must be at most 30 seconds old. The checker must recheck guest state immediately before execution. Omitted readiness is UNKNOWN and never authorizes dispatch. status is accepted for compatibility with Broker lease status and should be sent by the provider.",
+        "required": ["submission_id", "lease_id", "worker_id", "address", "expires_at", "status"],
+        "description": "status is required. Missing, null or unknown status never authorizes assignment; only an unexpired LEASED response can be used. COMPLETED and EXPIRED are ended assignments. For READY, vm_id, readiness_check_id and readiness_checked_at are required and the observation must be at most 30 seconds old. The checker must recheck guest state immediately before execution. Omitted readiness is UNKNOWN and never authorizes dispatch.",
         "properties": {
           "submission_id": {"type": "string", "format": "uuid"},
           "lease_id": {"type": "string", "format": "uuid"},

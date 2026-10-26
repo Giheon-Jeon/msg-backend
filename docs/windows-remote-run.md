@@ -93,7 +93,7 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 - 배정 재시도는 저장된 submission_id·팀·release·파일 해시를 그대로 사용한다 Scheduler도 이 식별정보를 고정하고 같은 ID의 다른 본문은 거절해야 한다
 - 409 WINDOWS_ASSIGNMENT_ENDED는 자동 재배정하지 않는다 START_UNKNOWN으로 옮겨 FIFO에서 제외하고 예약·파일을 보존한다 실제 이력 확인 전에는 해당 팀의 새 실행을 막는다
 - 409 WINDOWS_ASSIGNMENT_CONFLICT도 START_UNKNOWN과 requires_review로 분리한다 같은 submission_id의 고정 정보 충돌은 자동 재시도로 해결하지 않으며 새 ID나 VM으로 바꿔 실행하지 않는다 다른 팀의 FIFO 처리는 계속한다
-- HTTP 200 응답도 status가 COMPLETED·EXPIRED이거나 expires_at이 지났으면 종료된 배정으로 처리한다 알 수 없는 status는 배정으로 저장하지 않는다 기존 초안 호환을 위해 status 생략은 허용하되 제공자는 실제 임대 상태를 함께 반환해야 한다
+- 배정 응답의 status는 필수다 누락·null·알 수 없는 값은 배정으로 저장하지 않으며 파일을 보존하고 같은 submission_id로 재조회한다 status가 LEASED인 유효한 배정만 받는다 HTTP 200 응답도 status가 COMPLETED·EXPIRED이거나 expires_at이 지났으면 종료된 배정으로 처리한다
 - VM 부족·502·응답 유실은 같은 submission_id로 재시도한다 새 제출을 자동 생성하지 않는다
 - 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 재시도도 같은 lease_id를 쓴다
 - 임대 기간은 기본 2시간으로 가정하지 않고 expires_at을 따른다 연장 API는 없다 새 실행은 설정된 실행 제한 시간에 dispatch·결과 수집·반납 여유 30초를 더한 시간이 남아 있어야 한다 실제 연동 전 이 여유의 적정성을 확인한다

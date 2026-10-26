@@ -99,7 +99,20 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
 
     def test_unknown_lease_status_cannot_become_a_usable_assignment(self):
         row = self.accepted()
-        for status in (None, False, ["LEASED"], {}, "RECREATING", "RUNNING"):
+        for status in (
+            None,
+            False,
+            True,
+            1,
+            "",
+            ["LEASED"],
+            {},
+            "RECREATING",
+            "RUNNING",
+            "leased",
+            " LEASED",
+            "LEASED\n",
+        ):
             response = {**self.assignment(row), "status": status}
             with self.subTest(status=status), self.scheduler([response]):
                 with self.assertRaises(SchedulerError):
@@ -107,6 +120,40 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
         row.refresh_from_db()
         self.assertEqual(row.status, "QUEUED")
         self.assertIsNone(row.lease_id)
+
+    def test_missing_status_never_assigns_and_retry_keeps_the_same_submission(self):
+        row = self.accepted()
+        valid = self.assignment(row)
+        missing = {key: value for key, value in valid.items() if key != "status"}
+        missing.update(
+            vm_readiness="READY",
+            vm_id="fixture-vm",
+            readiness_check_id="guest-proof",
+            readiness_checked_at=timezone.now().isoformat(),
+        )
+        path = self.root / row.payload_key
+        with self.scheduler(
+            [missing, {"code": "SUCCESS", "data": missing}, valid]
+        ) as requests:
+            for _ in range(2):
+                result = assign_oldest_exe_submission()
+                self.assertEqual(result.pk, row.pk)
+                self.assertEqual(result.status, "QUEUED")
+                self.assertEqual(result.last_error_code, "SCHEDULER_UNAVAILABLE")
+                row.refresh_from_db()
+                self.assertIsNone(row.lease_id)
+                self.assertIsNone(row.worker_id)
+                self.assertEqual(row.vm_readiness, "UNKNOWN")
+                self.assertEqual(row.dispatch_state, "PENDING")
+                self.assertIsNone(row.lease_released_at)
+                self.assertTrue(path.is_file())
+            result = assign_oldest_exe_submission()
+        self.assertEqual(result.pk, row.pk)
+        self.assertEqual(result.status, "ASSIGNED")
+        self.assertEqual(str(result.lease_id), valid["lease_id"])
+        self.assertEqual(ExeSubmission.objects.count(), 1)
+        self.assertEqual(len(requests), 3)
+        self.assertTrue(all(request == requests[0] for request in requests))
 
     def test_expired_success_response_leaves_fifo_for_other_teams(self):
         row = self.accepted()
