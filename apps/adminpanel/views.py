@@ -30,7 +30,7 @@ from apps.common.response import fail, ok
 from apps.common.utils import num
 from apps.common.jwt import hash_token
 from apps.common.idempotency import run_idempotent
-from apps.challenge.models import Challenge, Solve
+from apps.challenge.models import Challenge, ExeSubmission, Solve
 from apps.challenge.services import (
     get_team_total_score,
     hash_flag,
@@ -2183,6 +2183,8 @@ def _team_delete(request, team_id):
 
     with transaction.atomic():
         team = _get_team_for_update(team_id)
+        if ExeSubmission.objects.filter(team=team).exists():
+            return fail("EXE_SUBMISSION_EXISTS", "EXE submission records must be resolved before deleting this team.", 409)
         # 인스턴스 행만 지우면 스케줄러의 컨테이너가 고아로 남는다.
         if Instance.objects.filter(
             team=team, status__in=ACTIVE_INSTANCE_STATUSES

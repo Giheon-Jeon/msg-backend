@@ -137,3 +137,89 @@ class FlagSubmissionLock(models.Model):
         indexes = [
             models.Index(fields=["locked_until"]),
         ]
+
+
+class ExeSubmission(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "QUEUED"
+        ASSIGNED = "ASSIGNED"
+        RUNNING = "RUNNING"
+        COMPLETED = "COMPLETED"
+        CRASH = "CRASH"
+        TIMEOUT = "TIMEOUT"
+        INFRA_ERROR = "INFRA_ERROR"
+        START_UNKNOWN = "START_UNKNOWN"
+
+    class AttemptState(models.TextChoices):
+        RESERVED = "RESERVED"
+        USED = "USED"
+        RELEASED = "RELEASED"
+
+    submission_id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False
+    )
+    team = models.ForeignKey(
+        "accounts.Team", on_delete=models.PROTECT, related_name="exe_submissions"
+    )
+    challenge = models.ForeignKey(
+        Challenge, on_delete=models.PROTECT, related_name="exe_submissions"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="exe_submissions",
+    )
+    release = models.ForeignKey(
+        "instances.ChallengeRelease",
+        on_delete=models.PROTECT,
+        related_name="exe_submissions",
+    )
+    idempotency_key = models.UUIDField()
+    payload_key = models.CharField(max_length=200)
+    payload_sha256 = models.CharField(max_length=64)
+    payload_size = models.PositiveIntegerField()
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.QUEUED
+    )
+    attempt_state = models.CharField(
+        max_length=10, choices=AttemptState.choices, default=AttemptState.RESERVED
+    )
+    lease_id = models.UUIDField(null=True, blank=True, unique=True)
+    worker_id = models.UUIDField(null=True, blank=True)
+    worker_address = models.CharField(max_length=255, blank=True, default="")
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    lease_released_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    cleanup_complete = models.BooleanField(null=True, blank=True)
+    stdout = models.TextField(null=True, blank=True)
+    stderr = models.TextField(null=True, blank=True)
+    stdout_truncated = models.BooleanField(default=False)
+    stderr_truncated = models.BooleanField(default=False)
+    last_error_code = models.CharField(max_length=60, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "exe_submissions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "challenge", "idempotency_key"],
+                name="uq_exe_submission_key",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(payload_size__gt=0, payload_size__lte=10485760),
+                name="ck_exe_payload_size",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "created_at", "submission_id"],
+                name="exe_queue_order_idx",
+            ),
+            models.Index(
+                fields=["team", "challenge", "attempt_state"],
+                name="exe_attempt_count_idx",
+            ),
+        ]
