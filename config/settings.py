@@ -298,6 +298,7 @@ KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
 KOTH_IMAGE_EXPORT_SIGNING_KEY = os.getenv("KOTH_IMAGE_EXPORT_SIGNING_KEY", "")
 KOTH_IMAGE_EXPORT_URL = os.getenv("KOTH_IMAGE_EXPORT_URL", "")
 KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
+KOTH_ADMIN_PREVIEW_ORIGINS = [value.strip() for value in os.getenv("KOTH_ADMIN_PREVIEW_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
