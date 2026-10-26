@@ -90,6 +90,22 @@ class QaValidationTests(TestCase):
                     self.assertEqual(res.status_code, 400)
                     self.assertEqual(res.data["code"], "INVALID_REQUEST")
 
+    # TC-131 · 134
+    def test_challenge_flag_must_be_string_within_512(self):
+        detail = f"/api/v1/admin/challenges/{self.challenge.challenge_id}"
+        base = {"title": "새 문제", "category": "WEB", "difficulty": "EASY"}
+        for flag in (123, ["a"], "", "a" * 513):
+            with self.subTest(flag=flag):
+                res = self.raw("post", "/api/v1/admin/challenges", {**base, "flag": flag})
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+                res = self.raw("patch", detail, {"flag": flag})
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+
+        res = self.raw("patch", detail, {"flag": "a" * 512})
+        self.assertEqual(res.status_code, 200)
+
     # TC-71 · 74
     def test_mileage_beyond_integer_range_is_400(self):
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
