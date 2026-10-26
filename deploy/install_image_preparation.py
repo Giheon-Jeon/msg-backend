@@ -2,7 +2,7 @@
 """Explicitly install the bounded preparation timer after opting in Backend/Runtime."""
 import argparse
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import stat
 import subprocess
 import tempfile
@@ -11,8 +11,57 @@ from install_release_poller import COMPOSE
 
 UNITS = ("msg-image-preparation.service", "msg-image-preparation.timer")
 UNIT_DIR = Path("/etc/systemd/system")
-OTHER_UNIT_DIRS = (Path("/run/systemd/system"), Path("/usr/lib/systemd/system"), Path("/lib/systemd/system"))
 OWNER = 0
+
+
+def _parse_unit_paths(output, *, lines):
+    values = output.splitlines() if lines else output.split()
+    if not values or len(values) > 256:
+        raise RuntimeError("Cannot establish systemd unit load paths")
+    paths = []
+    for value in values:
+        path = PurePosixPath(value)
+        if (
+            not path.is_absolute()
+            or ".." in path.parts
+            or "\\" in value
+            or any(character.isspace() or ord(character) < 32 for character in value)
+            or len(value) > 4096
+        ):
+            raise RuntimeError("Unsupported systemd unit load path")
+        paths.append(Path(value))
+    return tuple(paths)
+
+
+def _unit_directories():
+    # unit-paths reports compiled defaults, not the running manager's custom paths.
+    # Check both so empty/generator directories and custom paths cannot be missed.
+    environment = dict(os.environ)
+    environment.pop("SYSTEMD_UNIT_PATH", None)
+    compiled = subprocess.run(
+        ["/usr/bin/systemd-analyze", "--system", "unit-paths"],
+        check=True, capture_output=True, text=True, timeout=10, env=environment,
+    )
+    manager = subprocess.run(
+        ["/usr/bin/systemctl", "--system", "show", "--property=UnitPath", "--value"],
+        check=True, capture_output=True, text=True, timeout=10,
+    )
+    compiled_paths = _parse_unit_paths(compiled.stdout, lines=True)
+    manager_paths = _parse_unit_paths(manager.stdout, lines=False)
+    if UNIT_DIR not in manager_paths:
+        raise RuntimeError("The system manager does not load the installation directory")
+    return tuple(dict.fromkeys((*compiled_paths, *manager_paths)))
+
+
+def _dropin_directories(name):
+    stem, suffix = name.rsplit(".", 1)
+    # Fixed plain units have exact, dash-prefix, and type-wide drop-ins.
+    # They are not template instances and cannot inherit an unrelated @ template.
+    return (
+        name + ".d",
+        *(stem[:index + 1] + "." + suffix + ".d" for index, character in enumerate(stem) if character == "-"),
+        suffix + ".d",
+    )
 
 
 def _existing(path, expected):
@@ -32,12 +81,14 @@ def _existing(path, expected):
 
 
 def _validate_units(files):
+    directories = _unit_directories()
     for name, data in files.items():
-        for directory in (UNIT_DIR, *OTHER_UNIT_DIRS):
+        for directory in directories:
             _existing(directory / name, data)
-            overrides = directory / (name + ".d")
-            if overrides.is_symlink() or overrides.exists():
-                raise RuntimeError("Unit overrides require operator review: " + name)
+            for dropin in _dropin_directories(name):
+                overrides = directory / dropin
+                if overrides.is_symlink() or overrides.exists():
+                    raise RuntimeError("Unit overrides require operator review: " + name)
 
 
 def install(*, check=False):

@@ -102,6 +102,15 @@ journalctl -u msg-image-preparation.service
 활성화 설정이 꺼졌거나 오래된 Backend 이미지면 설치하지 않는다. unit은 root 소유의
 일반 파일, 쓰기 제한, 정확한 내용이어야 한다. symlink/hardlink, 다른 내용, systemd
 override/drop-in은 덮어쓰지 않고 중단한다. 동일 설치는 파일을 다시 쓰지 않는다.
+검색 경로는 `systemd-analyze --system unit-paths`의 기본 목록과 실행 중인 system
+manager의 `UnitPath`를 함께 조회한다. 조회 실패, 모호한 경로, 설치 대상 경로를
+사용하지 않는 manager 설정에서는 설치를 중단한다. `/usr/local/lib`와 generator,
+attached, control 및 manager 전용 경로도 검사한다. 정확한 이름의 drop-in 외에
+`msg-image-.service.d`, `msg-.service.d`, `service.d`처럼 적용되는 접두어·타입별
+drop-in도 운영자 검토 대상으로 중단한다. timer도 같은 규칙을 적용한다.
+고정 plain unit이므로 무관한 `@` template의 drop-in은 적용되지 않는다.
+이 조회는 읽기 전용이며 unit 작성 전, 원자적 작성 후, daemon reload 후에 다시
+검사한다. 검사와 활성화 사이에 다른 root 운영자가 구성을 변경하지 않도록 해야 한다.
 지원하지 않는 Runtime에 연결해도 설치기가 실제 API 지원을 보증하지는 않는다.
 Runtime rollout 검증이 끝난 뒤에만 명시적으로 설치한다.
 
