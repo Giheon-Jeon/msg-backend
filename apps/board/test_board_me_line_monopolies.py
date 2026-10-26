@@ -1,11 +1,15 @@
+from datetime import timedelta
 from decimal import Decimal
+import json
 
 from django.core.cache import cache
 from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Team, User
+from apps.board.models import TeamBoardState
 from apps.board.services import get_or_create_board_state
 from apps.common.jwt import issue_access_token
 from apps.ranking.models import LineMonopoly
@@ -70,3 +74,30 @@ class BoardMeLineMonopolyTests(TestCase):
             999999999999999999,
         )
         self.assertIn(b'"earned_score":999999999999999999,', res.content)
+
+    def assert_large_paid_integers(self, *, recharge_due):
+        monopoly = LineMonopoly.objects.create(
+            team=self.team, line_number=1, earned_score=0
+        )
+        for score in (9007199254740993, 999999999999999999):
+            with self.subTest(score=score, recharge_due=recharge_due):
+                monopoly.earned_score = Decimal(score)
+                monopoly.save(update_fields=["earned_score"])
+                if recharge_due:
+                    TeamBoardState.objects.filter(team=self.team).update(
+                        dice_rolls_left=1,
+                        next_dice_reset_at=timezone.now() - timedelta(seconds=1),
+                    )
+                response = self.client.get("/api/v1/board/me")
+                self.assertEqual(response.status_code, 200)
+                row = json.loads(response.content)["data"]["line_monopolies"][0]
+                self.assertEqual(row["earned_score"], score)
+                self.assertIsInstance(row["earned_score"], int)
+                monopoly.refresh_from_db()
+                self.assertEqual(monopoly.earned_score, Decimal(score))
+
+    def test_large_paid_integer_is_preserved_in_stable_read(self):
+        self.assert_large_paid_integers(recharge_due=False)
+
+    def test_large_paid_integer_is_preserved_after_due_recharge(self):
+        self.assert_large_paid_integers(recharge_due=True)
