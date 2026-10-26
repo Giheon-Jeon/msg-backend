@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -8,8 +9,8 @@ from apps.adminpanel.models import AdminEvent
 from apps.challenge.models import Challenge
 from apps.common.permissions import IsAdmin
 from apps.common.response import fail, ok
-from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig
-from apps.instances.image_preparations import enqueue_on_approval
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ImagePreparationRequest
+from apps.instances.image_preparations import enqueue_on_approval, queue_preparation, serialize_preparation
 from apps.instances.releases import (
     ReleaseValidationError,
     check_slug_consistency,
@@ -176,6 +177,35 @@ class ReleaseActivateView(APIView):
                 challenge=challenge
             )
 
+            pending = ImagePreparationRequest.objects.filter(
+                release__challenge=challenge, activation_status="PENDING"
+            )
+            if settings.IMAGE_PREPARATION_ACTIVATE_WHEN_READY and config.current_release_id != release.pk:
+                row = pending.filter(release=release, activation_generation=config.activation_generation).first()
+                if row is None:
+                    # Approval, intent and immutable preparation outbox commit together.
+                    row = queue_preparation(release, request.user.login_id)
+                    pending.update(activation_status="SUPERSEDED")
+                    config.activation_generation += 1
+                    config.save(update_fields=["activation_generation", "updated_at"])
+                    row.activation_status = "PENDING"
+                    row.activation_generation = config.activation_generation
+                    row.activation_previous_release_id = config.current_release_id
+                    row.activation_reason = reason or ""
+                    row.save()
+                return ok({
+                    "challenge_id": str(challenge.pk),
+                    "release_id": str(release.pk),
+                    "current_release_id": str(config.current_release_id) if config.current_release_id else None,
+                    "activation_status": "PENDING",
+                    "preparation": serialize_preparation(row),
+                }, status=202, message="이미지 준비 후 현재 릴리스를 전환합니다.")
+
+            # Every explicit switch, including selecting current, cancels older intents.
+            pending.update(activation_status="SUPERSEDED")
+            config.activation_generation += 1
+            config.save(update_fields=["activation_generation", "updated_at"])
+
             previous_release_id = config.current_release_id
             if previous_release_id == release.release_id:
                 previous_release_id = None
@@ -187,7 +217,8 @@ class ReleaseActivateView(APIView):
                     challenge, previous, release, reason, request.user.login_id
                 )
 
-            enqueue_on_approval(release, request.user.login_id)
+            if not settings.IMAGE_PREPARATION_ACTIVATE_WHEN_READY:
+                enqueue_on_approval(release, request.user.login_id)
 
         return ok(
             {

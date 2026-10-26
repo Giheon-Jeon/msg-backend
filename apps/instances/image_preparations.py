@@ -17,7 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.common.exceptions import APIError
-from apps.instances.models import ImagePreparationRequest, RuntimeType
+from apps.instances.models import ChallengeRuntimeConfig, ImagePreparationRequest, RuntimeType
 from apps.instances.releases import (
     ReleaseValidationError,
     _validate_containers,
@@ -44,6 +44,13 @@ ERROR_CODES = {
     "TIMEOUT",
     "REGISTRY_UNAVAILABLE",
     "NODE_UNAVAILABLE",
+    "NETWORK_TIMEOUT",
+    "RATE_LIMITED",
+    "REGISTRY_UNAUTHORIZED",
+    "NODE_IDENTITY_MISMATCH",
+    "AGENT_UNAVAILABLE",
+    "CONTENT_INCOMPLETE",
+    "POLICY_REJECTED",
 }
 
 
@@ -92,6 +99,8 @@ def configuration():
         poll = int(settings.IMAGE_PREPARATION_POLL_SECONDS)
         attempts = int(settings.IMAGE_PREPARATION_MAX_ATTEMPTS)
         _require(1 <= timeout <= 30 and 1 <= poll <= 300 and 1 <= attempts <= 10)
+        max_age = int(settings.IMAGE_PREPARATION_READINESS_MAX_AGE_SECONDS)
+        _require(1 <= max_age <= 300)
     except (ValueError, TypeError, AttributeError):
         raise PreparationError("IMAGE_PREPARATION_CONFIG_INVALID", 503) from None
     return {
@@ -101,6 +110,7 @@ def configuration():
         "timeout": timeout,
         "poll": poll,
         "attempts": attempts,
+        "max_age": max_age,
     }
 
 
@@ -116,8 +126,7 @@ def image_set_id(spec):
     )
 
 
-def queue_preparation(release, actor, *, automatic=False):
-    config = configuration()
+def _release_spec(release, config):
     if release.approved_at is None:
         raise PreparationError("RELEASE_NOT_APPROVED", 409)
     try:
@@ -139,9 +148,10 @@ def queue_preparation(release, actor, *, automatic=False):
         or release.architecture not in {"AMD64", "ARM64"}
         or release.isolation_profile not in {"WEB", "PWN"}
         or not is_deployable(release)
+        or not 1 <= len({item["image_ref"] for item in containers}) <= 32
     ):
         raise PreparationError("IMAGE_PREPARATION_UNSUPPORTED_RELEASE", 400)
-    spec = {
+    return {
         "release_id": str(release.pk),
         "architecture": release.architecture,
         "isolation_profile": release.isolation_profile,
@@ -155,6 +165,11 @@ def queue_preparation(release, actor, *, automatic=False):
         ],
         "target_ids": config["targets"],
     }
+
+
+def queue_preparation(release, actor, *, automatic=False):
+    config = configuration()
+    spec = _release_spec(release, config)
     request_id = uuid.uuid4()
     values = dict(
         request_id=request_id,
@@ -220,6 +235,18 @@ def queue_retry(parent, actor, node_uids=None):
     payload = {"request_id": str(request_id)}
     if node_uids is not None:
         payload["node_uids"] = sorted(node_uids)
+    intent = {}
+    config_row = ChallengeRuntimeConfig.objects.filter(challenge_id=parent.release.challenge_id).first()
+    if parent.activation_status == "FAILED" and config_row and (
+        config_row.activation_generation == parent.activation_generation
+        and config_row.current_release_id == parent.activation_previous_release_id
+    ):
+        intent = {
+            "activation_status": "PENDING",
+            "activation_generation": parent.activation_generation,
+            "activation_previous_release_id": parent.activation_previous_release_id,
+            "activation_reason": parent.activation_reason,
+        }
     return ImagePreparationRequest.objects.create(
         request_id=request_id,
         release=parent.release,
@@ -229,6 +256,7 @@ def queue_retry(parent, actor, node_uids=None):
         payload=payload,
         expected_image_set_id=parent.expected_image_set_id,
         created_by=actor,
+        **intent,
     )
 
 
@@ -271,13 +299,14 @@ def _call_runtime(config, path, payload=None):
     with build_opener(ProxyHandler({}), _NoRedirect()).open(
         request, timeout=config["timeout"]
     ) as response:
-        _require(response.status == (202 if payload is not None else 200))
+        expected_status = 200 if path == "/v1/image-readiness/query" else (202 if payload is not None else 200)
+        _require(response.status == expected_status)
         raw = response.read(MAX_RESPONSE_BYTES + 1)
         _require(len(raw) <= MAX_RESPONSE_BYTES)
         return json.loads(raw)
 
 
-def _timestamp(value, *, required=False):
+def _timestamp(value, *, required=False, future=False):
     if value is None:
         _require(not required)
         return None
@@ -286,7 +315,7 @@ def _timestamp(value, *, required=False):
     _require(
         parsed is not None
         and timezone.is_aware(parsed)
-        and parsed <= timezone.now() + timedelta(seconds=60)
+        and (future or parsed <= timezone.now() + timedelta(seconds=60))
     )
     return parsed.isoformat()
 
@@ -433,6 +462,104 @@ def _validate_result(row, data, detail):
     )
 
 
+def _activation_config_error(row, config):
+    if not settings.IMAGE_PREPARATION_ACTIVATE_WHEN_READY:
+        return "IMAGE_PREPARATION_ACTIVATION_DISABLED"
+    if row.runtime_origin != config["origin"]:
+        return "IMAGE_PREPARATION_ORIGIN_CHANGED"
+    if row.spec["target_ids"] != config["targets"]:
+        return "IMAGE_PREPARATION_TARGET_SCOPE_CHANGED"
+    return ""
+
+
+def _validate_readiness(row, data, config):
+    """Historical SUCCEEDED is never evidence for this separate current-state gate."""
+    _require(isinstance(data, dict))
+    _require(data.get("image_set_id") == row.expected_image_set_id)
+    _require(data.get("architecture") == row.spec["architecture"])
+    targets = data.get("targets")
+    _require(isinstance(targets, list) and len(targets) <= 50)
+    seen, ready = set(), True
+    now = timezone.now()
+    for target in targets:
+        _require(isinstance(target, dict))
+        identity = target.get("target_id")
+        _require(identity in row.spec["target_ids"] and identity not in seen)
+        seen.add(identity)
+        count, eligible = target.get("ready_node_count"), target.get("eligible_node_count")
+        _require(type(target.get("ready")) is bool)
+        _require(type(count) is int and type(eligible) is int and 0 <= count <= eligible)
+        observed = _timestamp(target.get("observed_at"))
+        expires = _timestamp(target.get("valid_until"), future=True)
+        if observed is None or expires is None:
+            ready = False
+            continue
+        observed, expires = parse_datetime(observed), parse_datetime(expires)
+        ready = ready and (
+            target["ready"] and count == eligible and eligible > 0
+            and now - timedelta(seconds=config["max_age"]) <= observed <= now
+            and observed < expires and now < expires
+        )
+    return ready and seen == set(row.spec["target_ids"])
+
+
+def _complete_activation(row, claim, data, config, error, permanent):
+    from apps.challenge.models import Challenge
+    from apps.instances.admin_views import _record_release_switch
+
+    with transaction.atomic():
+        # Same lock order as the admin activation endpoint.
+        challenge = Challenge.objects.select_for_update().get(pk=row.release.challenge_id)
+        runtime = ChallengeRuntimeConfig.objects.select_for_update().get(challenge=challenge)
+        current = ImagePreparationRequest.objects.select_for_update().select_related("release").get(pk=row.pk)
+        if current.next_attempt_at != claim or current.delivery_status != "SENDING":
+            return False
+        current.last_checked_at = timezone.now()
+        current.delivery_status = "ACCEPTED"
+        if current.activation_status != "PENDING" or (
+            runtime.activation_generation != current.activation_generation
+            or runtime.current_release_id != current.activation_previous_release_id
+        ):
+            current.activation_status = "SUPERSEDED"
+            current.next_attempt_at = None
+            current.save()
+            return True
+        try:
+            live_config = configuration()
+            config_error = _activation_config_error(current, live_config)
+        except PreparationError as exc:
+            config_error = exc.code
+        if config_error:
+            error, permanent = config_error, True
+        if not error and not _validate_readiness(current, data, live_config):
+            error = "IMAGE_READINESS_NOT_READY"
+        if not error:
+            try:
+                if _release_spec(current.release, live_config) != current.spec or current.release.repository_env.get("missing"):
+                    raise PreparationError("IMAGE_PREPARATION_RELEASE_CHANGED")
+            except PreparationError:
+                error, permanent = "IMAGE_PREPARATION_RELEASE_CHANGED", True
+        if not error:
+            previous = runtime.current_release
+            runtime.current_release = current.release
+            runtime.activation_generation += 1
+            runtime.save(update_fields=["current_release", "activation_generation", "updated_at"])
+            _record_release_switch(challenge, previous, current.release, current.activation_reason, current.created_by)
+            current.activation_status = "ACTIVATED"
+            current.last_error_code = ""
+            current.next_attempt_at = None
+        else:
+            current.last_error_code = error
+            current.consecutive_failures += 1
+            current.next_attempt_at = None if permanent or current.consecutive_failures >= config["attempts"] else (
+                timezone.now() + timedelta(seconds=config["poll"] * 2 ** (current.consecutive_failures - 1))
+            )
+            if current.next_attempt_at is None:
+                current.activation_status = "FAILED"
+        current.save()
+    return True
+
+
 def process_preparation(request_id):
     """One bounded delivery/poll; never perform HTTP inside a database transaction."""
     if connection.in_atomic_block:
@@ -448,11 +575,15 @@ def process_preparation(request_id):
         if row.next_attempt_at is None or row.next_attempt_at > now:
             return False
         configuration_error = ""
-        if row.runtime_origin != config["origin"]:
+        if row.activation_status == "PENDING":
+            configuration_error = _activation_config_error(row, config)
+        elif row.runtime_origin != config["origin"]:
             configuration_error = "IMAGE_PREPARATION_ORIGIN_CHANGED"
         elif not set(row.spec["target_ids"]) <= set(config["targets"]):
             configuration_error = "IMAGE_PREPARATION_TARGET_SCOPE_CHANGED"
         if configuration_error:
+            if row.activation_status == "PENDING":
+                row.activation_status = "FAILED"
             row.last_error_code = configuration_error
             row.delivery_status = "ACCEPTED" if row.operation_id else "UNKNOWN"
             row.next_attempt_at = None
@@ -462,10 +593,12 @@ def process_preparation(request_id):
                     "last_error_code",
                     "next_attempt_at",
                     "updated_at",
+                    "activation_status",
                 ]
             )
             return False
-        if row.operation_status in TERMINAL and row.progress:
+        readiness_query = row.activation_status == "PENDING" and row.operation_status == "SUCCEEDED" and bool(row.progress)
+        if row.operation_status in TERMINAL and row.progress and not readiness_query:
             row.next_attempt_at = None
             row.save(update_fields=["next_attempt_at", "updated_at"])
             return False
@@ -488,16 +621,26 @@ def process_preparation(request_id):
         path += "/" + quote(row.operation_id, safe="")
     elif row.parent_id:
         path += "/" + quote(row.parent.operation_id, safe="") + "/retry"
+    payload = None if detail else row.payload
+    if readiness_query:
+        path = "/v1/image-readiness/query"
+        payload = {"architecture": row.spec["architecture"],
+                   "images": sorted({item["image"] for item in row.spec["containers"]}),
+                   "target_ids": row.spec["target_ids"]}
     error, permanent, parsed = "", False, None
     try:
-        data = _call_runtime(config, path, None if detail else row.payload)
-        parsed = _validate_result(row, data, detail)
+        data = _call_runtime(config, path, payload)
+        if readiness_query:
+            if not _validate_readiness(row, data, config):
+                error = "IMAGE_READINESS_NOT_READY"
+        else:
+            parsed = _validate_result(row, data, detail)
     except HTTPError as exc:
         error = {
             400: "RUNTIME_INVALID_REQUEST",
             401: "RUNTIME_UNAUTHORIZED",
             403: "RUNTIME_FORBIDDEN",
-            404: "RUNTIME_OPERATION_NOT_FOUND" if detail else "RUNTIME_API_UNAVAILABLE",
+            404: "RUNTIME_OPERATION_NOT_FOUND" if detail and not readiness_query else "RUNTIME_API_UNAVAILABLE",
             409: "RUNTIME_REQUEST_CONFLICT",
             422: "RUNTIME_POLICY_REJECTED",
         }.get(exc.code, "RUNTIME_HTTP_ERROR")
@@ -507,6 +650,8 @@ def process_preparation(request_id):
         error = "RUNTIME_UNAVAILABLE"
     except (ValueError, TypeError, KeyError, OverflowError):
         error = "RUNTIME_INVALID_RESPONSE"
+    if readiness_query:
+        return _complete_activation(row, claim, data if not error else None, config, error, permanent)
     with transaction.atomic():
         current = ImagePreparationRequest.objects.select_for_update().get(pk=request_id)
         if current.next_attempt_at != claim or current.delivery_status != "SENDING":
@@ -522,7 +667,7 @@ def process_preparation(request_id):
             current.consecutive_failures = 0
             current.next_attempt_at = (
                 None
-                if detail and current.operation_status in TERMINAL
+                if detail and current.operation_status in TERMINAL and current.activation_status != "PENDING"
                 else timezone.now() + timedelta(seconds=config["poll"])
             )
         else:
@@ -545,6 +690,13 @@ def process_preparation(request_id):
                 )
             )
         current.save()
+        if current.activation_status == "PENDING" and (
+            current.operation_status in {"FAILED", "PARTIAL"} and current.progress
+            or current.next_attempt_at is None
+        ):
+            current.activation_status = "FAILED"
+            current.next_attempt_at = None
+            current.save(update_fields=["activation_status", "next_attempt_at", "updated_at"])
     return True
 
 
@@ -574,4 +726,5 @@ def serialize_preparation(row):
         "updated_at": row.updated_at.isoformat(),
         "created_by": row.created_by,
         "readiness_semantics": "HISTORICAL_OPERATION_ONLY",
+        "activation_status": row.activation_status or None,
     }
