@@ -9,6 +9,7 @@ from apps.challenge.models import Challenge
 from apps.common.permissions import IsAdmin
 from apps.common.response import fail, ok
 from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig
+from apps.instances.image_preparations import enqueue_on_approval
 from apps.instances.releases import (
     ReleaseValidationError,
     check_slug_consistency,
@@ -185,6 +186,8 @@ class ReleaseActivateView(APIView):
                 _record_release_switch(
                     challenge, previous, release, reason, request.user.login_id
                 )
+
+            enqueue_on_approval(release, request.user.login_id)
 
         return ok(
             {
