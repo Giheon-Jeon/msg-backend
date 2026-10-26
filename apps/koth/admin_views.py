@@ -14,6 +14,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.decorators import method_decorator
@@ -181,7 +182,26 @@ class ChallengesView(APIView):
 
     def get(self, request):
         rows = [challenge_data(c) for c in KothChallenge.objects.select_related("club")]
-        return ok({"challenges": rows, "total_count": len(rows), "scoring": {"period_minutes": 15, "points": list(services.PERIOD_POINTS.values())}})
+        division_counts = dict(
+            Team.objects.filter(is_banned=False)
+            .values_list("koth_division")
+            .annotate(total=Count("team_id"))
+        )
+        points_by_division = {
+            division: list(services.rank_points(division_counts.get(division, 0)))
+            for division in Team.KothDivision.values
+        }
+        return ok(
+            {
+                "challenges": rows,
+                "total_count": len(rows),
+                "scoring": {
+                    "period_minutes": 15,
+                    "first_place_points": services.FIRST_PLACE_POINTS,
+                    "points_by_division": points_by_division,
+                },
+            }
+        )
 
     @environment_errors
     def post(self, request):

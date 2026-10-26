@@ -509,6 +509,7 @@ class AdminTests(TestCase):
                 "is_leader",
                 "team_id",
                 "team_name",
+                "koth_division",
                 "created_at",
             },
         )
@@ -1057,6 +1058,28 @@ class AdminTests(TestCase):
         team = Team.objects.get(team_name="새로운팀")
         self.assertEqual(str(team.team_id), d["team_id"])
         self.assertEqual(team.mileage, 0)
+
+    def test_account_create_can_set_koth_division_for_new_team(self):
+        self.auth("root")
+        res = self.client.post(
+            "/api/v1/admin/accounts",
+            {
+                "login_id": "internal-team",
+                "password": "pw12345678",
+                "nickname": "내부팀장",
+                "team_name": "내부팀",
+                "koth_division": "INTERNAL",
+                "is_leader": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["koth_division"], "INTERNAL")
+        self.assertEqual(
+            Team.objects.get(team_name="내부팀").koth_division,
+            Team.KothDivision.INTERNAL,
+        )
 
     def test_account_create_duplicate_team_name(self):
         self.auth("root")
@@ -4441,6 +4464,25 @@ class AdminTeamManageTests(TestCase):
         [event] = self.events("TEAM_UPDATED")
         self.assertIn("감자는외로워 → 감자전", event.message)
         self.assertEqual(event.team_id, self.team.team_id)
+
+    def test_change_koth_division(self):
+        res = self.patch(
+            {"koth_division": "INTERNAL", "reason": "교내 참가팀 확인"}
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["koth_division"], "INTERNAL")
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.koth_division, Team.KothDivision.INTERNAL)
+        [event] = self.events("TEAM_UPDATED")
+        self.assertIn("KOTH 구분 EXTERNAL → INTERNAL", event.message)
+
+    def test_rejects_invalid_koth_division(self):
+        res = self.patch({"koth_division": "UNKNOWN", "reason": "x"})
+
+        self.assertEqual(res.status_code, 400)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.koth_division, Team.KothDivision.EXTERNAL)
 
     def test_rename_to_taken_name_is_409(self):
         res = self.patch({"team_name": "고구마", "reason": "x"})

@@ -1617,7 +1617,7 @@
                   ]
                 },
                 "awarded_score": {
-                  "type": "number"
+                  "type": "integer"
                 }
               },
               "required": []
@@ -2003,10 +2003,25 @@
               "period_minutes": {
                 "type": "integer"
               },
-              "points": {
-                "type": "array",
-                "items": {
-                  "type": "integer"
+              "first_place_points": {
+                "type": "integer"
+              },
+              "points_by_division": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "INTERNAL": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "EXTERNAL": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             },

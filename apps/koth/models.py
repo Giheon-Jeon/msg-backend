@@ -244,7 +244,7 @@ class KothSolve(models.Model):
         db_column="koth_challenge_id",
         related_name="solves",
     )
-    earned_score = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    earned_score = models.PositiveBigIntegerField(default=0)
     solved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

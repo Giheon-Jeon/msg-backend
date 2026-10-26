@@ -6,16 +6,22 @@ from django.test import TransactionTestCase
 
 
 class PositiveScoreSolvedAtMigrationTests(TransactionTestCase):
-    migrate_from = ("koth", "0003_one_challenge_per_club")
-    migrate_to = ("koth", "0004_positive_score_requires_solved_at")
+    migrate_from = [
+        ("accounts", "0003_team_koth_division"),
+        ("koth", "0003_one_challenge_per_club"),
+    ]
+    migrate_to = [
+        ("accounts", "0003_team_koth_division"),
+        ("koth", "0004_positive_score_requires_solved_at"),
+    ]
 
     def setUp(self):
         super().setUp()
         executor = MigrationExecutor(connection)
         latest_migrations = executor.loader.graph.leaf_nodes()
         self.addCleanup(self._restore_migrations, latest_migrations)
-        executor.migrate([self.migrate_from])
-        old_apps = executor.loader.project_state([self.migrate_from]).apps
+        executor.migrate(self.migrate_from)
+        old_apps = executor.loader.project_state(self.migrate_from).apps
 
         Team = old_apps.get_model("accounts", "Team")
         KothClub = old_apps.get_model("koth", "KothClub")
@@ -39,8 +45,8 @@ class PositiveScoreSolvedAtMigrationTests(TransactionTestCase):
         )
 
         executor = MigrationExecutor(connection)
-        executor.migrate([self.migrate_to])
-        self.apps = executor.loader.project_state([self.migrate_to]).apps
+        executor.migrate(self.migrate_to)
+        self.apps = executor.loader.project_state(self.migrate_to).apps
 
     def _restore_migrations(self, targets):
         MigrationExecutor(connection).migrate(targets)
