@@ -4,6 +4,14 @@ from rest_framework.validators import UniqueValidator
 from apps.challenge.models import Challenge
 
 
+class FlagField(serializers.CharField):
+    # 기본 CharField 는 숫자 123 을 "123" 으로 받아 준다. 제출 API 처럼 문자열만 받는다.
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
 class ChallengeCreateSerializer(serializers.Serializer):
     challenge_slug = serializers.RegexField(
         regex=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -24,7 +32,7 @@ class ChallengeCreateSerializer(serializers.Serializer):
     description = serializers.CharField(
         required=False, allow_blank=True, allow_null=True
     )
-    flag = serializers.CharField(trim_whitespace=False, write_only=True)
+    flag = FlagField(max_length=512, trim_whitespace=False, write_only=True)
     initial_score = serializers.IntegerField(
         min_value=0,
         max_value=9_999_999_999,
@@ -65,7 +73,8 @@ class ChallengeUpdateSerializer(serializers.Serializer):
         allow_blank=True,
         allow_null=True,
     )
-    flag = serializers.CharField(
+    flag = FlagField(
+        max_length=512,
         trim_whitespace=False,
         write_only=True,
         required=False,

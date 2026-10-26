@@ -2,7 +2,7 @@ import datetime
 import secrets
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Sum
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -82,9 +82,20 @@ def team_me(request):
 def mileage_history(request):
     team = _get_team(request)
 
-    rows = MileageHistory.objects.filter(team=team).order_by(
-        "-created_at", "-history_id"
-    )
+    # 인증 단계에서 읽은 잔액은 그사이 지급 · 결제가 끼면 내역보다 오래된 값이다.
+    # 한 스냅샷에서 함께 읽어 내역 합계가 잔액과 맞게 한다.
+    # 바깥 트랜잭션 안(테스트)에서는 격리 수준을 바꿀 수 없어 그대로 읽는다.
+    snapshot = not connection.in_atomic_block
+    with transaction.atomic():
+        if snapshot:
+            with connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        mileage = Team.objects.values_list("mileage", flat=True).get(pk=team.pk)
+        rows = list(
+            MileageHistory.objects.filter(team=team).order_by(
+                "-created_at", "-history_id"
+            )
+        )
     history = [
         {
             "history_id": str(row.history_id),
@@ -100,7 +111,7 @@ def mileage_history(request):
     ]
 
     return ok(
-        {"mileage": team.mileage, "history": history, "total_count": len(history)}
+        {"mileage": mileage, "history": history, "total_count": len(history)}
     )
 
 

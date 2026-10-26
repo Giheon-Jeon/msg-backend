@@ -25,6 +25,8 @@ SETTING_SPECS = {
     "board.dice_rolls_per_reset": (1, 20, 3),
     "board.dice_reset_interval_minutes": (1, 1440, 15),
     "board.solve_deadline_minutes": (1, 180, 15),
+    "board.line_bonus_percent": (0, 100, 30),
+    "board.line_category_bonus_percent": (0, 100, 45),
     "flag.max_attempts": (1, 10, 3),
     "flag.lock_seconds": (1, 3600, 30),
 }
@@ -67,6 +69,10 @@ class AdminEvent(models.Model):
         LINE_MONOPOLIZED = "LINE_MONOPOLIZED"
         LINE_MONOPOLY_SCORE_CHANGED = "LINE_MONOPOLY_SCORE_CHANGED"
         CHALLENGE_RELEASE_ACTIVATED = "CHALLENGE_RELEASE_ACTIVATED"
+        SIGNATURE_CREATED = "SIGNATURE_CREATED"
+        SIGNATURE_UPDATED = "SIGNATURE_UPDATED"
+        SIGNATURE_DELETED = "SIGNATURE_DELETED"
+        SUBMISSION_DELETED = "SUBMISSION_DELETED"
 
     class Severity(models.TextChoices):
         INFO = "INFO"
