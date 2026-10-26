@@ -9,6 +9,10 @@
 스케줄러의 Windows 준비 확인·배정 API와 실제 Azure VM 실행도 연결되지 않았다
 이 변경만으로 Windows 실행이 가능해지는 것은 아니다 두 실행 플래그의 기본값은 False로 유지한다
 
+체커 호출 주체는 백엔드다 스케줄러는 VM 준비 확인·배정·예약 반납을 맡는다
+백엔드는 유효한 배정을 받은 뒤 런타임의 체커를 직접 호출하고 실행 결과도 직접 받는다
+스케줄러가 EXE 실행 요청이나 실행 로그를 중계하는 구조로 연결하지 않는다
+
 검증한 범위는 격리 PostgreSQL·Redis의 접수·조회·설정과 브라우저 연결이다
 테스트용 결과 callback은 실제 EXE 실행 증거로 사용하지 않는다
 출제자 드라이버, 참가자 파일과 풀이 코드는 변경하지 않는다
@@ -80,9 +84,35 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 
 ## Scheduler 배정·반납 계약 보완
 
-- 배정 재시도는 저장된 submission_id·팀·release·파일 해시를 그대로 사용한다 Scheduler는 같은 ID의 다른 본문을 비교하지 않는다
+- 배정 재시도는 저장된 submission_id·팀·release·파일 해시를 그대로 사용한다 Scheduler도 이 식별정보를 고정하고 같은 ID의 다른 본문은 거절해야 한다
 - 409 WINDOWS_ASSIGNMENT_ENDED는 자동 재배정하지 않는다 START_UNKNOWN으로 옮겨 FIFO에서 제외하고 예약·파일을 보존한다 실제 이력 확인 전에는 해당 팀의 새 실행을 막는다
+- HTTP 200 응답도 status가 COMPLETED·EXPIRED이거나 expires_at이 지났으면 종료된 배정으로 처리한다 알 수 없는 status는 배정으로 저장하지 않는다 기존 초안 호환을 위해 status 생략은 허용하되 제공자는 실제 임대 상태를 함께 반환해야 한다
 - VM 부족·502·응답 유실은 같은 submission_id로 재시도한다 새 제출을 자동 생성하지 않는다
 - 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 재시도도 같은 lease_id를 쓴다
 - 임대 기간은 기본 2시간으로 가정하지 않고 expires_at을 따른다 연장 API는 없다 새 실행은 설정된 실행 제한 시간에 dispatch·결과 수집·반납 여유 30초를 더한 시간이 남아 있어야 한다 실제 연동 전 이 여유의 적정성을 확인한다
 - 임대가 끝나도 기존 실행의 결과를 추측하지 않는다 접수 여부가 불명확한 체커 작업은 같은 ID로 조회만 하며 자동 재실행·반납하지 않는다
+
+스케줄러 제공 API와 맞출 필드·응답은 windows-assignments.openapi.json에 별도 초안으로 남긴다 이 파일이 실제 제공 구현이나 팀 간 합의를 대신하지 않는다
+
+## 실제 제공 구현과 남은 연결
+
+2026년 10월 26일 확인한 저장소 기준이다 아래 경로는 운영 연결 완료를 뜻하지 않는다
+
+| 구간 | 확인한 구현 | 남은 작업 |
+| --- | --- | --- |
+| 백엔드 → 스케줄러 | 이 PR의 /api/windows-assignments 호출 | 스케줄러 dev에는 이 경로가 없다 배정·준비 확인·반납 API 구현 필요 |
+| 스케줄러 → 브로커 | 브로커의 /v1/windows-worker-leases와 /{lease_id}/complete | submission_id를 Idempotency-Key로 전달하고 팀·release·파일 해시는 스케줄러가 고정해야 한다 |
+| 브로커 → Windows | 현재 Windows 풀은 GCP zonal MIG 기반 | Azure VM용 등록·배정·복구 경로를 추가해야 한다 일반 Azure VM 어댑터만으로 연결된 것으로 보지 않는다 |
+| 준비 확인 | 브로커 READY는 MIG의 RUNNING·NONE·HEALTHY와 IP로 판정 | 런타임의 게스트·드라이버 점검 결과를 별도로 받아야 한다 READY를 그대로 vm_readiness로 복사하지 않는다 |
+| 백엔드 → 런타임 | /v1/checker-submissions 접수·조회 계약 | 런타임 dev에는 Windows EXE 체커가 없다 실제 체커 구현·HTTPS 배포·주소 등록 필요 |
+| 반납·초기화 | 브로커 complete는 작업을 RECREATING으로 바꾸고 재생성을 예약 | COMPLETED·EXPIRED 응답은 게스트 초기화 완료 증거가 아니다 체커의 정리 확인과 브로커의 재사용 준비 확인을 구분한다 |
+
+대조한 커밋
+
+- 스케줄러: https://github.com/MSG-CTF/instance-scheduler/tree/886d9e8b52a1099fe8cc0aa138e79bfe6a921ad1
+- 브로커: https://github.com/MSG-CTF/resource-broker/tree/a785c9ad08b499f7abda693163aeb72133e9a94e
+- 런타임: https://github.com/MSG-CTF/secure-provisioner/tree/a73838ebcf46b23e699ebe0d46f8378a5731f317
+- 호출 주체 근거: https://app.notion.com/p/4030f19c72be81709d18c9af6356fb0f
+
+노션 초안의 총 3회 제한은 이후 사용자 결정으로 폐기했다 이 PR은 총 횟수 제한 없이 팀별 요청 간격을 적용한다
+실제 Azure 배정·게스트 준비 확인·체커 실행·초기화·반납을 검증하기 전에는 운영 접수를 켜지 않는다

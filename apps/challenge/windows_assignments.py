@@ -123,6 +123,11 @@ def request_windows_assignment(submission):
             or uuid.UUID(result["submission_id"]) != submission.pk
         ):
             raise ValueError
+        # Older assignment responses omitted status. An explicit Broker status
+        # must never be ignored, including an idempotent replay of an ended lease.
+        lease_status = result.get("status", "LEASED")
+        if lease_status not in ("LEASED", "COMPLETED", "EXPIRED"):
+            raise ValueError
         lease_id, worker_id = (
             uuid.UUID(result["lease_id"]),
             uuid.UUID(result["worker_id"]),
@@ -137,13 +142,16 @@ def request_windows_assignment(submission):
             or any(char in address for char in "/@?#\\")
             or expires_at is None
             or timezone.is_naive(expires_at)
-            or expires_at <= timezone.now()
         ):
             raise ValueError
     except (KeyError, TypeError, AttributeError, ValueError):
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "Invalid or expired Windows assignment.", 503
         ) from None
+    if lease_status in ("COMPLETED", "EXPIRED") or expires_at <= timezone.now():
+        raise SchedulerError(
+            "WINDOWS_ASSIGNMENT_ENDED", "Windows assignment has already ended.", 409
+        )
     fields = {
         "lease_id": lease_id,
         "worker_id": worker_id,
