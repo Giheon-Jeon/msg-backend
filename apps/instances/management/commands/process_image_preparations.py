@@ -15,8 +15,16 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--limit", type=int, default=20)
+        parser.add_argument("--check-config", action="store_true", help="Validate opt-in configuration only; no network or work is performed.")
 
     def handle(self, *args, **options):
+        if options["check_config"]:
+            try:
+                configuration()
+            except PreparationError as exc:
+                raise CommandError(exc.code) from None
+            self.stdout.write("Image preparation configuration valid.")
+            return
         if not 1 <= options["limit"] <= 100:
             raise CommandError("limit must be between 1 and 100")
         if not settings.IMAGE_PREPARATION_ENABLED:

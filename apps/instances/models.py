@@ -243,6 +243,12 @@ class ImagePreparationRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # This intent is separate from the historical Runtime operation outcome.
+    activation_status = models.CharField(max_length=12, blank=True, default="")
+    activation_generation = models.PositiveBigIntegerField(default=0)
+    activation_previous_release_id = models.UUIDField(null=True, blank=True)
+    activation_reason = models.CharField(max_length=500, blank=True, default="")
+
     class Meta:
         db_table = "image_preparation_requests"
         indexes = [models.Index(fields=["next_attempt_at", "request_id"], name="image_prep_due_idx")]
@@ -398,6 +404,7 @@ class ChallengeRuntimeConfig(models.Model):
         null=True,
         blank=True,
     )
+    activation_generation = models.PositiveBigIntegerField(default=0)
     ttl_minutes = models.IntegerField(default=120)
     hard_timeout_minutes = models.IntegerField(default=180)
     created_at = models.DateTimeField(auto_now_add=True)

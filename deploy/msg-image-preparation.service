@@ -1,0 +1,10 @@
+[Unit]
+Description=MSG image preparation and staged release activation worker
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/msg-dev
+ExecStart=/usr/bin/docker compose --project-name msg-dev --file /opt/msg-dev/compose.yml --env-file /opt/msg-dev/.env exec -T backend python manage.py process_image_preparations --limit 20
+TimeoutStartSec=12min
