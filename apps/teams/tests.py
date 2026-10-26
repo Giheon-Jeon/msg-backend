@@ -1,4 +1,5 @@
 import datetime
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -40,6 +41,31 @@ class MyPageTests(TestCase):
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {res.data['data']['access_token']}"
         )
+
+    def test_mileage_history_balance_matches_rows_read_together(self):
+        """인증 뒤 지급이 끼어도 잔액과 내역이 같은 시점을 가리킨다 (QA TC-271)."""
+        from django.db.models import F
+        from apps.teams import views
+        from apps.teams.models import MileageHistory, MileageType
+
+        MileageHistory.objects.create(
+            team=self.team, type=MileageType.ADMIN_GRANT, amount=120
+        )
+        get_team = views._get_team
+
+        def grant_after_auth(request):
+            team = get_team(request)
+            MileageHistory.objects.create(
+                team=self.team, type=MileageType.ADMIN_GRANT, amount=1
+            )
+            Team.objects.filter(pk=self.team.pk).update(mileage=F("mileage") + 1)
+            return team
+
+        with patch.object(views, "_get_team", grant_after_auth):
+            data = self.client.get("/api/v1/teams/me/mileage_history").data["data"]
+
+        self.assertEqual(data["mileage"], 121)
+        self.assertEqual(sum(row["amount"] for row in data["history"]), 121)
 
     def test_team_me_returns_own_team_only(self):
         res = self.client.get("/api/v1/teams/me")

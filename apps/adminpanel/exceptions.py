@@ -97,3 +97,9 @@ class ChallengeInUse(APIError):
     status_code = status.HTTP_409_CONFLICT
     code = "CHALLENGE_IN_USE"
     message = "공개 중이거나 사용 기록이 있는 문제는 삭제할 수 없습니다"
+
+
+class SubmissionNotFound(APIError):
+    status_code = status.HTTP_404_NOT_FOUND
+    code = "SUBMISSION_NOT_FOUND"
+    message = "존재하지 않는 제출 기록입니다"
