@@ -20,7 +20,7 @@ bundles, activate releases, download images to nodes, or replace running instanc
 
 1. `POST /api/v1/admin/publication_requests` with an `Idempotency-Key`,
    `challenge_slug`, lowercase 40-character `requested_sha`, and optional boolean
-   `runtime_smoke`. This only records the intent. Legacy records may have no SHA;
+   `runtime_smoke` (only omitted or literal `false` is supported). This only records the intent. Legacy records may have no SHA;
    they cannot be dispatched without creating a new explicit request.
 2. `POST /api/v1/admin/publication_requests/{request_id}/dispatch` with `{}`.
    The service verifies main's SHA, commits a dispatch marker, then sends the
@@ -30,8 +30,16 @@ bundles, activate releases, download images to nodes, or replace running instanc
 
 The workflow is `challenge-validation.yml`, repository is `MSG-CTF/2026_MSG_CTF`,
 and ref is `main`. Inputs include the persisted request UUID, problem slug,
-`expected_source_sha`, empty `source_ref`, `publish_images=true`, and the recorded
-smoke option. Neither the destination nor credentials come from browser input.
+`expected_source_sha`, empty `source_ref`, `publish_images=true`, and
+`runtime_smoke=false`. Neither the destination nor credentials come from browser input.
+
+The caller supports publication without runtime smoke only. New records reject
+`runtime_smoke=true` with HTTP 400 before storing an intent or idempotency receipt.
+Dispatch also rejects previously stored true records before GitHub preflight or
+POST, including replay/alias paths. It never silently converts a true intent into
+a false one. Omitted/false input remains supported. Historical true records stay
+visible, and their read-only sync and existing successful-bundle import remain
+available. Runtime testing belongs to a separate workflow, not this dispatch.
 
 ## States and Retry Rules
 

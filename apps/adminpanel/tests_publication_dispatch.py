@@ -117,6 +117,7 @@ class PublicationDispatchTests(PublicationRequestFixtures, TransactionTestCase):
         return row
 
     def test_dispatch_is_explicit_and_receipt_precedes_one_fixed_request(self):
+        self.body.pop("runtime_smoke")
         row = self.recorded()
         self.assertEqual(self.calls, [])
         first, replay = self.action(row), self.action(row)
@@ -418,20 +419,77 @@ class PublicationDispatchTests(PublicationRequestFixtures, TransactionTestCase):
         self.assertEqual(row.dispatch_status, "NOT_DISPATCHED")
         self.assertEqual(self.action(row).data["data"]["dispatch_status"], "DISPATCHED")
 
-    def test_different_smoke_options_dispatch_separately_and_new_request_after_failure_is_explicit(
-        self,
-    ):
+    def test_new_request_after_failure_requires_explicit_intent(self):
         first = self.dispatched()
-        second = self.recorded(key="smoke")
-        PublicationRequest.objects.filter(pk=second.pk).update(runtime_smoke=True)
-        self.action(second)
-        self.assertEqual(len(self.posts), 2)
         self.runs[first.run_id].update(status="completed", conclusion="failure")
         self.action(first, "sync")
         self.action(first)
-        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(len(self.posts), 1)
         self.dispatched()
-        self.assertEqual(len(self.posts), 3)
+        self.assertEqual(len(self.posts), 2)
+
+    def test_stored_smoke_true_is_rejected_before_any_github_call_in_every_state(self):
+        row = self.recorded()
+        for state in PublicationRequest.DispatchStatus.values:
+            PublicationRequest.objects.filter(pk=row.pk).update(
+                runtime_smoke=True, dispatch_status=state
+            )
+            with self.subTest(state=state), override_settings(
+                PUBLICATION_DISPATCH_GITHUB_TOKEN=""
+            ):
+                response = self.action(row)
+            self.assertEqual(response.status_code, 400, response.data)
+            self.assertEqual(
+                response.data["code"], "PUBLICATION_RUNTIME_SMOKE_UNSUPPORTED"
+            )
+            row.refresh_from_db()
+            self.assertTrue(row.runtime_smoke)
+            self.assertEqual(row.dispatch_status, state)
+            self.assertIsNone(row.dispatch_started_at)
+            self.assertIsNone(row.run_id)
+            self.assertEqual(row.last_error_code, "")
+            detail = self.client.get(f"{BASE}/{row.pk}")
+            self.assertEqual(detail.status_code, 200)
+            self.assertTrue(detail.data["data"]["runtime_smoke"])
+        self.github_mock.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.posts, [])
+
+    def test_historical_smoke_true_run_can_still_be_synced_without_redispatch(self):
+        row = self.dispatched()
+        PublicationRequest.objects.filter(pk=row.pk).update(runtime_smoke=True)
+        self.calls.clear()
+        self.github_mock.reset_mock()
+        response = self.action(row)
+        self.assertEqual(response.status_code, 400)
+        self.github_mock.assert_not_called()
+        response = self.action(row, "sync")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["data"]["runtime_smoke"])
+        self.assertTrue(response.data["data"]["run_sha_verified"])
+        self.assertEqual(len(self.calls), 1)
+        self.assertIsNone(self.calls[0][1])
+        self.assertEqual(len(self.posts), 1)
+
+    def test_smoke_flag_changed_during_preflight_cannot_reach_dispatch_post(self):
+        row = self.recorded()
+
+        def changed(path, body=None):
+            response = self.github(path, body)
+            if path.endswith("/git/ref/heads/main"):
+                PublicationRequest.objects.filter(pk=row.pk).update(runtime_smoke=True)
+            return response
+
+        with patch(
+            "apps.instances.publication_dispatch.github_json", side_effect=changed
+        ):
+            response = self.action(row)
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(response.data["code"], "PUBLICATION_RUNTIME_SMOKE_UNSUPPORTED")
+        row.refresh_from_db()
+        self.assertEqual(row.dispatch_status, "NOT_DISPATCHED")
+        self.assertIsNone(row.dispatch_started_at)
+        self.assertEqual(self.posts, [])
 
     def test_ack_database_failure_keeps_durable_unknown_and_recovers(self):
         row = self.recorded()

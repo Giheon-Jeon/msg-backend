@@ -42,6 +42,10 @@ class PublicationRequestBody(StrictSerializer):
     def validate_runtime_smoke(self, value):
         if type(self.initial_data.get("runtime_smoke", False)) is not bool:
             raise serializers.ValidationError("runtime_smoke must be a boolean.")
+        if value:
+            raise serializers.ValidationError(
+                "runtime_smoke=true is unsupported; use the separate runtime workflow."
+            )
         return value
 
     def validate_challenge_slug(self, value):

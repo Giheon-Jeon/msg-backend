@@ -156,7 +156,7 @@ class PublicationRequestTests(PublicationRequestFixtures, TestCase):
     def test_same_key_replays_and_different_body_conflicts(self):
         first, second = self.record(), self.record()
         self.assertEqual(first.data, second.data)
-        for changes in ({"requested_sha": "b" * 40}, {"runtime_smoke": True}):
+        for changes in ({"requested_sha": "b" * 40}, {"requested_sha": None}):
             response = self.record({**self.body, **changes})
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.data["code"], "IDEMPOTENCY_KEY_CONFLICT")
@@ -173,6 +173,21 @@ class PublicationRequestTests(PublicationRequestFixtures, TestCase):
         )
         self.assertEqual(first.data, replay.data)
         self.assertIsNone(first.data["data"]["requested_sha"])
+
+    def test_runtime_smoke_true_is_rejected_without_recording_or_consuming_key(self):
+        with patch("apps.instances.publication_dispatch.github_json") as github:
+            response = self.record({**self.body, "runtime_smoke": True})
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(PublicationRequest.objects.exists())
+        self.assertFalse(IdempotencyRecord.objects.exists())
+        github.assert_not_called()
+        for network in self.network:
+            network.assert_not_called()
+        response = self.record()
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["data"]["runtime_smoke"])
+        self.assertEqual(PublicationRequest.objects.count(), 1)
+        self.assertEqual(IdempotencyRecord.objects.count(), 1)
 
     def test_distinct_keys_or_administrators_can_record_separate_intents(self):
         self.recorded()

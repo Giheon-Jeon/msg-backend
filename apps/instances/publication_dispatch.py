@@ -224,6 +224,15 @@ def _reuse_existing(row):
     return existing is not None
 
 
+def _require_no_runtime_smoke(row):
+    if row.runtime_smoke is not False:
+        raise PublicationDispatchError(
+            "PUBLICATION_RUNTIME_SMOKE_UNSUPPORTED",
+            "runtime_smoke=true is unsupported; use the separate runtime workflow.",
+            400,
+        )
+
+
 def dispatch_publication(request_id):
     if not settings.PUBLICATION_DISPATCH_ENABLED:
         raise PublicationDispatchError(
@@ -237,6 +246,7 @@ def dispatch_publication(request_id):
             409,
         )
     row = _record(request_id)
+    _require_no_runtime_smoke(row)
     if row.reused_request_id or row.dispatch_status != "NOT_DISPATCHED":
         return row
     validate_publication_request(row)
@@ -253,6 +263,7 @@ def dispatch_publication(request_id):
                 404,
             )
         row = PublicationRequest.objects.select_for_update().get(pk=request_id)
+        _require_no_runtime_smoke(row)
         if (
             row.reused_request_id
             or row.dispatch_status != "NOT_DISPATCHED"
@@ -290,10 +301,11 @@ def dispatch_publication(request_id):
                 404,
             )
         row = PublicationRequest.objects.select_for_update().get(pk=request_id)
+        _require_no_runtime_smoke(row)
         if row.reused_request_id or row.dispatch_status != "NOT_DISPATCHED":
             return row
         validate_publication_request(row)
-        # The source SHA pins the caller's approved tool refs. Keep smoke options separate.
+        # The source SHA pins the caller's approved tool refs.
         if _reuse_existing(row):
             return row
         row.dispatch_status = "DISPATCH_UNKNOWN"
@@ -320,7 +332,7 @@ def dispatch_publication(request_id):
                     "request_id": str(row.pk),
                     "source_ref": "",
                     "publish_images": True,
-                    "runtime_smoke": row.runtime_smoke,
+                    "runtime_smoke": False,
                 },
             },
         )
