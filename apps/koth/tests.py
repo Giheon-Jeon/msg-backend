@@ -839,6 +839,54 @@ class KothScorePollingTests(TestCase):
         )
 
     @patch("apps.koth.services._request_scores")
+    def test_division_change_after_validation_uses_one_current_snapshot(
+        self, request_scores
+    ):
+        from . import services
+
+        self.first.koth_division = Team.KothDivision.INTERNAL
+        self.first.save(update_fields=["koth_division"])
+        request_scores.return_value = {
+            "code": "SUCCESS",
+            "message": "성공",
+            "data": {
+                "koth_challenge_id": str(self.challenge.pk),
+                "period_id": "2026-07-31T10:15:00Z",
+                "results": [
+                    {
+                        "team_id": str(self.first.pk),
+                        "period_rank": 1,
+                        "metric_score": 100,
+                    }
+                ],
+            },
+        }
+        validate = services._validated_results
+
+        def validate_then_move_team(*args, **kwargs):
+            results = validate(*args, **kwargs)
+            Team.objects.filter(pk=self.first.pk).update(
+                koth_division=Team.KothDivision.EXTERNAL
+            )
+            return results
+
+        with patch(
+            "apps.koth.services._validated_results",
+            side_effect=validate_then_move_team,
+        ):
+            self.assertTrue(poll_challenge_period(self.challenge, self.period))
+
+        self.assertEqual(KothSolve.objects.get(team=self.first).earned_score, 40)
+        snapshot = KothScorePeriod.objects.get().award_snapshot
+        self.assertEqual(
+            snapshot["team_divisions"][str(self.first.pk)],
+            Team.KothDivision.EXTERNAL,
+        )
+        self.assertEqual(snapshot["team_count_by_division"]["INTERNAL"], 0)
+        self.assertEqual(snapshot["team_count_by_division"]["EXTERNAL"], 3)
+        self.assertEqual(snapshot["awarded_scores"][str(self.first.pk)], 40)
+
+    @patch("apps.koth.services._request_scores")
     def test_empty_period_is_applied_without_a_solve(self, request_scores):
         request_scores.return_value = {
             "code": "SUCCESS",

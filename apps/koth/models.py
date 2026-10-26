@@ -284,6 +284,7 @@ class KothScorePeriod(models.Model):
     )
     attempts = models.PositiveSmallIntegerField(default=0)
     response_payload = models.JSONField(null=True, blank=True)
+    award_snapshot = models.JSONField(default=dict, blank=True)
     last_error = models.TextField(blank=True)
     applied_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

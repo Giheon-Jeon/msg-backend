@@ -155,7 +155,6 @@ def _validated_results(challenge, period, payload):
     results = [
         (teams[team_id], rank, metric)
         for team_id, rank, metric in parsed
-        if not teams[team_id].is_banned
     ]
     return results
 
@@ -228,13 +227,14 @@ def rank_points(team_count, first_place_points=FIRST_PLACE_POINTS):
     return tuple(points)
 
 
-def _awards(results):
-    group_counts = {
-        row["koth_division"]: row["total"]
-        for row in Team.objects.filter(is_banned=False)
-        .values("koth_division")
-        .annotate(total=Count("team_id"))
-    }
+def _awards(results, group_counts=None):
+    if group_counts is None:
+        group_counts = {
+            row["koth_division"]: row["total"]
+            for row in Team.objects.filter(is_banned=False)
+            .values("koth_division")
+            .annotate(total=Count("team_id"))
+        }
     divisions = defaultdict(list)
     for result in results:
         team, rank = result[:2]
@@ -265,6 +265,45 @@ def _awards(results):
             awards.extend((team, amount) for team in teams if amount > 0)
             division_rank += len(teams)
     return awards
+
+
+def _locked_awards_and_snapshot(results):
+    """Calculate awards from one locked, internally consistent team snapshot."""
+    team_rows = list(Team.objects.select_for_update().order_by("team_id"))
+    teams_by_id = {team.pk: team for team in team_rows}
+    group_counts = {division: 0 for division in Team.KothDivision.values}
+    for team in team_rows:
+        if not team.is_banned:
+            group_counts[team.koth_division] += 1
+
+    current_results = []
+    team_divisions = {}
+    awarded_scores = {str(team.pk): 0 for team, _, _ in results}
+    for stale_team, rank, metric in results:
+        team = teams_by_id.get(stale_team.pk)
+        if team is None:
+            continue
+        team_divisions[str(team.pk)] = team.koth_division
+        if not team.is_banned:
+            current_results.append((team, rank, metric))
+
+    awards = _awards(current_results, group_counts=group_counts)
+    for team, amount in awards:
+        awarded_scores[str(team.pk)] = amount
+
+    snapshot = {
+        "version": 1,
+        "algorithm": "inverse_root_v1",
+        "first_place_points": FIRST_PLACE_POINTS,
+        "team_count_by_division": group_counts,
+        "points_by_division": {
+            division: list(rank_points(team_count))
+            for division, team_count in group_counts.items()
+        },
+        "team_divisions": team_divisions,
+        "awarded_scores": awarded_scores,
+    }
+    return awards, snapshot
 
 
 def poll_challenge_period(challenge, period):
@@ -304,7 +343,8 @@ def poll_challenge_period(challenge, period):
         record = KothScorePeriod.objects.select_for_update().get(pk=record.pk)
         if record.status == KothScorePeriodStatus.APPLIED:
             return False
-        for team, amount in _awards(results):
+        awards, award_snapshot = _locked_awards_and_snapshot(results)
+        for team, amount in awards:
             solve, _ = KothSolve.objects.select_for_update().get_or_create(
                 team=team, challenge=challenge, defaults={"earned_score": 0}
             )
@@ -315,12 +355,14 @@ def poll_challenge_period(challenge, period):
             solve.save(update_fields=["earned_score", "solved_at", "updated_at"])
         record.status = KothScorePeriodStatus.APPLIED
         record.response_payload = payload
+        record.award_snapshot = award_snapshot
         record.last_error = ""
         record.applied_at = timezone.now()
         record.save(
             update_fields=[
                 "status",
                 "response_payload",
+                "award_snapshot",
                 "last_error",
                 "applied_at",
                 "updated_at",

@@ -305,6 +305,49 @@ class PublicationTests(TestCase):
         response = self.client.post(self.path + "/periods/" + row.period_id.isoformat().replace("+00:00", "Z") + "/retry")
         self.assertEqual(response.status_code, 409, response.data)
 
+    def test_applied_period_keeps_awards_after_team_division_changes(self):
+        from . import services
+
+        internal = Team.objects.create(
+            team_name="period-internal",
+            koth_division=Team.KothDivision.INTERNAL,
+        )
+        external = Team.objects.create(team_name="period-external")
+        period = services.current_period() - timezone.timedelta(minutes=30)
+        payload = {
+            "code": "SUCCESS",
+            "message": "성공",
+            "data": {
+                "koth_challenge_id": str(self.challenge.pk),
+                "period_id": services.format_utc(period),
+                "results": [
+                    {
+                        "team_id": str(internal.pk),
+                        "period_rank": 1,
+                        "metric_score": 100,
+                    },
+                    {
+                        "team_id": str(external.pk),
+                        "period_rank": 2,
+                        "metric_score": 90,
+                    },
+                ],
+            },
+        }
+        with patch("apps.koth.services._request_scores", return_value=payload):
+            self.assertTrue(services.poll_challenge_period(self.challenge, period))
+
+        Team.objects.filter(pk=internal.pk).update(
+            koth_division=Team.KothDivision.EXTERNAL
+        )
+        response = self.client.get(self.path + "/periods")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = response.data["data"]["periods"][0]["results"]
+        awards = {row["team_id"]: row["awarded_score"] for row in rows}
+        self.assertEqual(awards[str(internal.pk)], 40)
+        self.assertEqual(awards[str(external.pk)], 40)
+
     def test_import_api_previews_then_registers_without_auto_activation(self):
         with patch("apps.koth.publications.prepare", return_value=self.plan):
             url = self.path + "/publications/import"
