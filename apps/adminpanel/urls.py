@@ -34,6 +34,7 @@ urlpatterns = [
     path("admin/challenges/<uuid:challenge_id>/preview", challenge_preview.challenge_preview),
     path("admin/challenges/<uuid:challenge_id>/solves", challenge_solves.challenge_solves),
     path("admin/challenges/<uuid:challenge_id>/submissions", submission_history.challenge_submissions),
+    path("admin/challenges/<uuid:challenge_id>/submissions/<uuid:submission_id>", views.challenge_submission_delete),
     path("admin/signatures/<uuid:signature_id>/submissions", submission_history.signature_submissions),
     path("admin/challenges/<uuid:challenge_id>/flag", challenge_settings.challenge_flag),
     path("admin/challenges/<uuid:challenge_id>/flag/reveal", challenge_settings.challenge_flag_reveal),

@@ -398,6 +398,7 @@ def verify_team_token(request):
             "valid": valid,
             "team_id": str(token.team_id) if valid else None,
             "team_name": token.team.team_name if valid else None,
+            "koth_division": token.team.koth_division if valid else None,
             "koth_challenge_id": str(challenge.koth_challenge_id),
         }
     )
@@ -408,7 +409,11 @@ def verify_team_token(request):
 def internal_teams(request):
     _internal_challenge(request)
     teams = [
-        {"team_id": str(team.team_id), "team_name": team.team_name}
+        {
+            "team_id": str(team.team_id),
+            "team_name": team.team_name,
+            "koth_division": team.koth_division,
+        }
         for team in Team.objects.filter(is_banned=False).order_by("team_name")
     ]
     return ok({"teams": teams, "total_count": len(teams)})

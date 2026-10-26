@@ -298,6 +298,7 @@ KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
 KOTH_IMAGE_EXPORT_SIGNING_KEY = os.getenv("KOTH_IMAGE_EXPORT_SIGNING_KEY", "")
 KOTH_IMAGE_EXPORT_URL = os.getenv("KOTH_IMAGE_EXPORT_URL", "")
 KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
+KOTH_ADMIN_PREVIEW_ORIGINS = [value.strip() for value in os.getenv("KOTH_ADMIN_PREVIEW_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
@@ -314,6 +315,10 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
+    # X-Forwarded-For 는 클라이언트가 임의로 넣을 수 있어 요청 제한에 쓰지 않는다.
+    # 실제 접속 주소(REMOTE_ADDR)와 login_id 조합으로 센다. 오프라인 대회라 접속 IP 가 모두 같아
+    # 손해가 없다. 온라인 대회로 바꾸면 모두가 프록시 IP 하나로 묶이므로 다시 본다.
+    "NUM_PROXIES": 0,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
@@ -346,6 +351,10 @@ if (
     )
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
+
+# Contract scaffolding only; leave disabled until the checker integration is verified.
+EXE_SUBMISSIONS_ENABLED = os.getenv("EXE_SUBMISSIONS_ENABLED", "False").lower() == "true"
+EXE_SUBMISSION_STORAGE_ROOT = os.getenv("EXE_SUBMISSION_STORAGE_ROOT", "")
 
 # 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
 RUNTIME_SECRET_ENCRYPTION_KEYS = [

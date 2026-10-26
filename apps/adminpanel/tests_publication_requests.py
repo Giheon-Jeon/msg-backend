@@ -47,7 +47,7 @@ class PublicationRequestFixtures:
         for target in (
             "apps.instances.poller.github_request",
             "apps.instances.services.urlopen",
-            "apps.adminpanel.resource_broker.urlopen",
+            "apps.adminpanel.resource_broker._opener.open",
         ):
             blocked = patch(
                 target, side_effect=AssertionError("External calls are forbidden")

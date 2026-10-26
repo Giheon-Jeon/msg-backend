@@ -4,7 +4,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -90,6 +90,22 @@ class QaValidationTests(TestCase):
                     self.assertEqual(res.status_code, 400)
                     self.assertEqual(res.data["code"], "INVALID_REQUEST")
 
+    # TC-131 · 134
+    def test_challenge_flag_must_be_string_within_512(self):
+        detail = f"/api/v1/admin/challenges/{self.challenge.challenge_id}"
+        base = {"title": "새 문제", "category": "WEB", "difficulty": "EASY"}
+        for flag in (123, ["a"], "", "a" * 513):
+            with self.subTest(flag=flag):
+                res = self.raw("post", "/api/v1/admin/challenges", {**base, "flag": flag})
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+                res = self.raw("patch", detail, {"flag": flag})
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+
+        res = self.raw("patch", detail, {"flag": "a" * 512})
+        self.assertEqual(res.status_code, 200)
+
     # TC-71 · 74
     def test_mileage_beyond_integer_range_is_400(self):
         url = f"/api/v1/admin/teams/{self.team.team_id}/mileage"
@@ -154,6 +170,21 @@ class QaValidationTests(TestCase):
                 )
                 self.assertEqual(res.status_code, 400)
         self.assertFalse(User.objects.filter(login_id="newuser01").exists())
+
+    # TC-612
+    def test_account_rejects_password_like_login_id_or_nickname(self):
+        for login_id, nickname, password in (
+            ("seoyoon2026", "새", "seoyoon2026"),
+            ("newuser02", "potatohacker", "potatohacker1"),
+        ):
+            with self.subTest(password=password):
+                res = self.client.post(
+                    "/api/v1/admin/accounts",
+                    {"login_id": login_id, "password": password, "nickname": nickname},
+                    format="json",
+                )
+                self.assertEqual(res.status_code, 400)
+                self.assertFalse(User.objects.filter(login_id=login_id).exists())
 
     # TC-188 · 193
     def test_admin_account_cannot_join_team(self):
@@ -245,3 +276,42 @@ class QaValidationTests(TestCase):
 
         detail = self.client.get(f"/api/v1/admin/teams/{self.team.team_id}")
         self.assertEqual(detail.data["data"]["team_score"], 450.5)
+
+
+class DashboardSnapshotTests(TransactionTestCase):
+    """TC-101 대시보드 집계는 한 시점에서 읽는다. 실제 트랜잭션이 필요해 TransactionTestCase 로 둔다."""
+
+    def test_rows_committed_mid_request_are_not_mixed_in(self):
+        import threading
+
+        from django.db import connection
+
+        from apps.common.jwt import issue_access_token
+
+        admin = User.objects.create_user(
+            login_id="root", password="pw1234", nickname="운영자", role=Role.ADMIN
+        )
+        aggregate = Team.objects.aggregate
+
+        def aggregate_then_commit_elsewhere(*args, **kwargs):
+            result = aggregate(*args, **kwargs)
+
+            def add_challenge():
+                Challenge.objects.create(
+                    title="중간에 추가", category="WEB", difficulty="EASY", score=1, flag_hash="x"
+                )
+                connection.close()
+
+            worker = threading.Thread(target=add_challenge)
+            worker.start()
+            worker.join()
+            return result
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {issue_access_token(admin)}")
+        with patch.object(Team.objects, "aggregate", aggregate_then_commit_elsewhere):
+            res = client.get("/api/v1/admin/dashboard")
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["challenges"]["total"], 0)
+        self.assertEqual(Challenge.objects.count(), 1)

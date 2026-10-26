@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 db.sqlite3
 media/
+.private-exe-submissions/
 .env
 .env.*
 !.env.example
