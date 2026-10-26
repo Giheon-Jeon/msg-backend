@@ -352,6 +352,19 @@ if (
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
 
+# Contract scaffolding only; leave disabled until the checker integration is verified.
+EXE_SUBMISSIONS_ENABLED = os.getenv("EXE_SUBMISSIONS_ENABLED", "False").lower() == "true"
+EXE_SUBMISSION_STORAGE_ROOT = os.getenv("EXE_SUBMISSION_STORAGE_ROOT", "")
+
+# Proposed Runtime #70 APIs; never enable before provider deployment and approval.
+IMAGE_PREPARATION_ENABLED = os.getenv("IMAGE_PREPARATION_ENABLED", "False").lower() == "true"
+IMAGE_PREPARATION_RUNTIME_URL = os.getenv("IMAGE_PREPARATION_RUNTIME_URL", "")
+IMAGE_PREPARATION_API_TOKEN = os.getenv("IMAGE_PREPARATION_API_TOKEN", "")
+IMAGE_PREPARATION_TARGET_IDS = os.getenv("IMAGE_PREPARATION_TARGET_IDS", "")
+IMAGE_PREPARATION_TIMEOUT_SECONDS = os.getenv("IMAGE_PREPARATION_TIMEOUT_SECONDS", "5")
+IMAGE_PREPARATION_POLL_SECONDS = os.getenv("IMAGE_PREPARATION_POLL_SECONDS", "15")
+IMAGE_PREPARATION_MAX_ATTEMPTS = os.getenv("IMAGE_PREPARATION_MAX_ATTEMPTS", "3")
+
 # 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
 RUNTIME_SECRET_ENCRYPTION_KEYS = [
     key.strip() for key in os.getenv("RUNTIME_SECRET_ENCRYPTION_KEYS", "").split(",") if key.strip()
@@ -366,6 +379,12 @@ RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
 RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+# Recording alone does not enable workflow_dispatch or automatic import.
+PUBLICATION_REQUESTS_ENABLED = os.getenv("PUBLICATION_REQUESTS_ENABLED", "False").lower() == "true"
+# Separate opt-in and credential for workflow writes; never reuse the read-only Poller token.
+PUBLICATION_DISPATCH_ENABLED = os.getenv("PUBLICATION_DISPATCH_ENABLED", "False").lower() == "true"
+PUBLICATION_DISPATCH_GITHUB_TOKEN = os.getenv("PUBLICATION_DISPATCH_GITHUB_TOKEN", "")
 
 # Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
 REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")
