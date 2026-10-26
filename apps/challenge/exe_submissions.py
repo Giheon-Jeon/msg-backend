@@ -196,7 +196,7 @@ def accept_exe(user, challenge_id, key, uploaded_file):
     storage = None
     try:
         with transaction.atomic():
-            # Flag submission and team administration lock challenge, team, user.
+            # Match flag submission's challenge -> team and admin's team -> user.
             # Never hold a member/team lock while waiting for the challenge.
             try:
                 challenge = Challenge.objects.select_for_update().get(pk=challenge_id)

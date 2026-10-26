@@ -86,7 +86,9 @@ class ExeLockOrderTests(ExeFixtures, TransactionTestCase):
         self.assertEqual(FlagSubmission.objects.filter(result="CORRECT").count(), 1)
         self.assertEqual(MileageHistory.objects.filter(team=self.team).count(), 1)
         self.team.refresh_from_db()
+        self.challenge.refresh_from_db()
         self.assertEqual(self.team.mileage, 30)
+        self.assertEqual(self.team.team_score, self.challenge.current_score)
 
     def test_flag_first_serializes_exe_without_deadlock_or_payload(self):
         results = self.race("flag", self.flag, "exe", self.exe, Challenge, Challenge)
