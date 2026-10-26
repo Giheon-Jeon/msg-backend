@@ -13,6 +13,7 @@ from unittest import skipUnless
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 
+from cryptography.fernet import Fernet
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
 from django.db import (
@@ -90,6 +91,7 @@ class ExeFixtures:
         self.root = Path(directory.name)
         configured = override_settings(
             EXE_SUBMISSIONS_ENABLED=True,
+            RUNTIME_SECRET_ENCRYPTION_KEYS=[Fernet.generate_key().decode("ascii")],
             EXE_DISPATCH_ENABLED=True,
             EXE_CHECKER_SIGNING_KEY="fixture-signing-key-" * 3,
             EXE_CHECKERS={
