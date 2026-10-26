@@ -477,11 +477,22 @@ def _stop_team_instances(request, team):
     스케줄러가 지울 수 있는 상태는 RUNNING 뿐이라 생성·재시작 중인 것은 기록만 남긴다.
     """
     stopped = remaining = 0
-    targets = list(
-        Instance.objects.filter(
-            team=team, status__in=ACTIVE_INSTANCE_STATUSES
-        ).values_list("instance_id", "user_id")
-    )
+    with transaction.atomic():
+        # 인스턴스 생성은 사용자 잠금을 쥔 채 스케줄러 응답을 몇 초 기다린다. 그 사이 정지되면
+        # 행이 아직 없어 목록에서 빠지므로, 팀원과 소유자의 잠금을 먼저 잡아 생성이 끝난 뒤에 읽는다.
+        user_ids = set(User.objects.filter(team=team).values_list("pk", flat=True))
+        user_ids.update(
+            Instance.objects.filter(
+                team=team, status__in=ACTIVE_INSTANCE_STATUSES
+            ).values_list("user_id", flat=True)
+        )
+        for user_id in sorted(user_ids):
+            InstanceLock.objects.select_for_update().get_or_create(user_id=user_id)
+        targets = list(
+            Instance.objects.filter(
+                team=team, status__in=ACTIVE_INSTANCE_STATUSES
+            ).values_list("instance_id", "user_id")
+        )
     for instance_id, user_id in targets:
         with transaction.atomic():
             InstanceLock.objects.select_for_update().get_or_create(user_id=user_id)
