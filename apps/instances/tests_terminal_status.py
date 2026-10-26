@@ -23,7 +23,13 @@ class TerminalInstanceStatusTests(TestCase):
                       host="https://old.example", ports=[8080],
                       endpoints=instance_tests.ENDPOINTS, expires_at=timezone.now())
         values.update(overrides)
-        return Instance.objects.create(**values)
+        instance = Instance.objects.create(**values)
+        self.history_created_at = getattr(
+            self, "history_created_at", timezone.now() - timedelta(days=1)
+        ) + timedelta(seconds=1)
+        Instance.objects.filter(pk=instance.pk).update(created_at=self.history_created_at)
+        instance.created_at = self.history_created_at
+        return instance
 
     def request(self, challenge=None):
         return self.client.get("/api/v1/teams/me/instances", {"challenge_id": str(challenge or self.challenge.pk)})
@@ -69,10 +75,7 @@ class TerminalInstanceStatusTests(TestCase):
     @patch("apps.instances.views.call_scheduler_active", side_effect=SchedulerError("INSTANCE_NOT_FOUND", "absent", 404))
     @patch("apps.instances.views.call_scheduler_detail")
     def test_newer_stopping_instance_hides_an_older_failure(self, detail, active):
-        older = self.instance()
-        Instance.objects.filter(pk=older.pk).update(
-            created_at=timezone.now() - timedelta(seconds=1)
-        )
+        self.instance()
         stopping = self.instance(status=InstanceStatus.STOPPING, delete_reason=DeleteReason.USER_REQUESTED)
         detail.return_value = {"status": "STOPPING"}
         response = self.request()
