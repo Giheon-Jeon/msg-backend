@@ -1,6 +1,10 @@
+import threading
+import time
+
 from django.core.cache import cache
+from django.db import connection, transaction
 from django.db.models import Sum
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Role, Team, User
@@ -15,8 +19,9 @@ from apps.teams.models import MileageHistory, MileageType
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 
-@override_settings(CACHES=LOCMEM)
-class SubmissionDeleteTests(TestCase):
+class SubmissionDeleteSetup:
+    """회수팀이 1번 라인 문제 2개를, 다른팀이 그중 하나를 실제 제출 API 로 푼 상태."""
+
     def setUp(self):
         cache.clear()
         self.admin = User.objects.create_user(
@@ -101,6 +106,44 @@ class SubmissionDeleteTests(TestCase):
         return MileageHistory.objects.filter(team=team).aggregate(total=Sum("amount"))[
             "total"
         ]
+
+    def set_cell_status(self, cell_index, status):
+        return self.as_user(self.admin).patch(
+            f"/api/v1/admin/teams/{self.cheater.pk}/board/cells/{cell_index}",
+            {"status": status, "reason": "칸 정정"},
+            format="json",
+        )
+
+
+@override_settings(CACHES=LOCMEM)
+class SubmissionDeleteTests(SubmissionDeleteSetup, TestCase):
+    def test_cell_reset_before_revoke_leaves_no_line_bonus(self):
+        """칸 상태 수정으로 개방 기록이 지워져도 라인 보너스가 남지 않는다 (리뷰 P1)."""
+        res = self.set_cell_status(1, "UNVISITED")
+
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertFalse(LineMonopoly.objects.filter(team=self.cheater).exists())
+        cell_event = AdminEvent.objects.get(type=AdminEvent.EventType.CELL_STATUS_CHANGED)
+        self.assertIn("1번 라인 독점", cell_event.message)
+
+        res = self.delete(self.target, self.correct_submission(self.cheater, self.target))
+
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIsNone(res.data["data"]["revoked"]["line_monopoly"])
+        self.assertFalse(LineMonopoly.objects.filter(team=self.cheater).exists())
+
+    def test_cell_reopened_by_admin_drops_line_bonus(self):
+        res = self.set_cell_status(2, "OPENED")
+
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertFalse(LineMonopoly.objects.filter(team=self.cheater).exists())
+
+    def test_cell_cleared_again_keeps_line_bonus(self):
+        """완성 상태가 그대로면 독점을 건드리지 않는다."""
+        res = self.set_cell_status(2, "CLEARED")
+
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertTrue(LineMonopoly.objects.filter(team=self.cheater, line_number=1).exists())
 
     def test_correct_submission_revokes_score_mileage_and_line_monopoly(self):
         self.assertTrue(LineMonopoly.objects.filter(team=self.cheater, line_number=1).exists())
@@ -213,3 +256,33 @@ class SubmissionDeleteTests(TestCase):
         self.assertTrue(FlagSubmission.objects.filter(pk=submission.pk).exists())
         self.assertTrue(Solve.objects.filter(team=self.cheater, challenge=self.target).exists())
         self.assertFalse(AdminEvent.objects.filter(type=AdminEvent.EventType.SUBMISSION_DELETED).exists())
+
+
+@override_settings(CACHES=LOCMEM)
+class SubmissionDeleteRaceTests(SubmissionDeleteSetup, TransactionTestCase):
+    def test_revoked_amount_is_read_after_locking_monopoly(self):
+        """독점 점수 수정이 먼저 행을 잡고 바꾸면, 회수 응답과 기록은 바뀐 금액을 남긴다 (리뷰 P2)."""
+        holding = threading.Event()
+
+        def edit_monopoly():
+            with transaction.atomic():
+                monopoly = LineMonopoly.objects.select_for_update().get(
+                    team=self.cheater, line_number=1
+                )
+                holding.set()
+                time.sleep(0.5)
+                monopoly.earned_score = 777
+                monopoly.save(update_fields=["earned_score"])
+            connection.close()
+
+        worker = threading.Thread(target=edit_monopoly)
+        worker.start()
+        holding.wait(5)
+        res = self.delete(self.target, self.correct_submission(self.cheater, self.target))
+        worker.join()
+
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["data"]["revoked"]["line_monopoly"]["earned_score"], 777)
+        event = AdminEvent.objects.get(type=AdminEvent.EventType.SUBMISSION_DELETED)
+        self.assertIn("독점 777점", event.message)
+        self.assertFalse(LineMonopoly.objects.filter(team=self.cheater).exists())

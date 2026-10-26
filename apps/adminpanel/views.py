@@ -53,6 +53,7 @@ from apps.board.services import (
     apply_pending_dice_recharge,
     board_state_for_update,
     get_or_create_board_state,
+    is_line_monopoly_completed,
 )
 from apps.koth.models import KothSolve
 from apps.ranking.models import LineMonopoly
@@ -1950,24 +1951,38 @@ def _revoke_solve(team, challenge, solve, reason, actor):
         )
 
     line_monopoly = None
+    # 개방 기록이 없으면 칸 상태 수정으로 이미 칸이 지워진 것이고, 그때 독점도 정리됐다.
     if access is not None:
         if access.status == TeamChallengeAccess.Status.CLEARED:
             access.status = TeamChallengeAccess.Status.OPENED
             access.cleared_at = None
             access.save(update_fields=["status", "cleared_at"])
         # 칸이 다시 열리면 그 라인은 미완성이다. 다시 풀면 지급 로직이 그때 값으로 새로 준다.
-        line_number = access.source_cell.line_number
-        monopoly = LineMonopoly.objects.filter(
-            team=team, line_number=line_number
-        ).first()
-        if line_number is not None and monopoly is not None:
-            line_monopoly = {
-                "line_number": line_number,
-                "earned_score": monopoly.earned_score,
-            }
-            monopoly.delete()
+        line_monopoly = _drop_incomplete_line_monopoly(
+            team, access.source_cell.line_number
+        )
 
     return {"score": score, "mileage": mileage, "line_monopoly": line_monopoly}
+
+
+def _drop_incomplete_line_monopoly(team, line_number):
+    """라인이 더 이상 완성 상태가 아니면 독점을 지우고 {line_number, earned_score} 를 돌려준다.
+
+    독점은 라인의 문제 칸이 모두 CLEARED 일 때만 성립하므로, 칸을 되돌리는 조작은 모두 이 함수를 거친다.
+    금액은 행을 잠근 뒤 읽어 독점 점수 수정과 겹쳐도 실제로 지운 값과 기록이 같게 한다.
+    """
+    if line_number is None or is_line_monopoly_completed(team, line_number):
+        return None
+    monopoly = (
+        LineMonopoly.objects.select_for_update()
+        .filter(team=team, line_number=line_number)
+        .first()
+    )
+    if monopoly is None:
+        return None
+    earned_score = monopoly.earned_score
+    monopoly.delete()
+    return {"line_number": line_number, "earned_score": earned_score}
 
 
 def _parse_cell_index(raw):
@@ -2142,10 +2157,16 @@ def board_cell_status(request, team_id, cell_index):
                     state.save(update_fields=["active_challenge_access", "updated_at"])
             access.save(update_fields=["status", "cleared_at"])
 
+        dropped = _drop_incomplete_line_monopoly(team, cell.line_number)
+        dropped_text = (
+            f", {dropped['line_number']}번 라인 독점 {num(dropped['earned_score'])}점 취소"
+            if dropped
+            else ""
+        )
         apply_pending_dice_recharge(state)
         _record_event(
             AdminEvent.EventType.CELL_STATUS_CHANGED,
-            f"{cell.cell_index}번 칸 {previous_status} → {status}: {reason}",
+            f"{cell.cell_index}번 칸 {previous_status} → {status}{dropped_text}: {reason}",
             request.user.login_id,
             severity=AdminEvent.Severity.WARNING,
             team=team,
