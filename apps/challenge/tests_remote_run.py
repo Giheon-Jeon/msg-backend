@@ -16,6 +16,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Role
+from apps.accounts.models import Team, User
+from apps.board.models import Cell, TeamChallengeAccess
 from apps.challenge.checker_auth import checker_configuration, mint_job_token
 from apps.challenge.checker_dispatch import checker_request, dispatch_submission
 from apps.challenge.exe_submissions import ExeSubmissionError
@@ -38,6 +40,26 @@ PINS = {
 
 
 class RemoteRunTests(ExeFixtures, TestCase):
+    def test_old_request_key_after_team_reassignment_cannot_create_a_second_execution(
+        self,
+    ):
+        key = uuid.uuid4()
+        first = self.post_exe(key)
+        self.assertEqual(first.status_code, 202)
+        other = Team.objects.create(team_name="new-owner-team")
+        TeamChallengeAccess.objects.create(
+            team=other,
+            challenge=self.challenge,
+            source_cell=Cell.objects.get(cell_index=1),
+        )
+        User.objects.filter(pk=self.user.pk).update(team=other)
+        response = self.post_exe(key)
+        self.assertEqual(
+            (response.status_code, response.data["code"]), (409, "TEAM_CHANGED")
+        )
+        self.assertEqual(ExeSubmission.objects.count(), 1)
+        self.assertEqual(len(list(self.root.rglob("payload.exe"))), 1)
+
     @override_settings(EXE_SUBMISSIONS_ENABLED=False, EXE_DISPATCH_ENABLED=False)
     def test_registered_worker_command_stays_disabled_by_default(self):
         output = io.StringIO()

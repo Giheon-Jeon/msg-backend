@@ -190,6 +190,18 @@ def accept_exe(user, challenge_id, key, uploaded_file):
             challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
             team = submission_team(user)
             check_challenge_access(team, challenge)
+            if (
+                ExeSubmission.objects.filter(
+                    user_id=user.pk, challenge=challenge, idempotency_key=key
+                )
+                .exclude(team=team)
+                .exists()
+            ):
+                raise ExeSubmissionError(
+                    "TEAM_CHANGED",
+                    "팀 배정이 바뀌었습니다 현재 팀을 확인한 뒤 다시 요청해주세요",
+                    409,
+                )
             previous = ExeSubmission.objects.filter(
                 team=team, challenge=challenge, idempotency_key=key
             ).first()
