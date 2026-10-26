@@ -1,6 +1,9 @@
+from decimal import Decimal
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Role, User
@@ -30,7 +33,7 @@ class ResourceAccountBillingTests(TestCase):
             "apps.adminpanel.views.fetch_resource_targets",
             return_value=("2026-11-08T05:00:00Z", [_target()]),
         )
-        broker.start()
+        self.broker = broker.start()
         self.addCleanup(broker.stop)
 
     def patch_account(self, body, account_id=ACCOUNT_ID):
@@ -110,3 +113,79 @@ class ResourceAccountBillingTests(TestCase):
                 type=AdminEvent.EventType.RESOURCE_ACCOUNT_UPDATED
             ).exists()
         )
+
+    def test_oversized_finite_amounts_are_rejected_before_broker_or_writes(self):
+        saved = self.patch_account({"billing": BILLING, "reason": "기존 요금"})
+        self.assertEqual(saved.status_code, 200, saved.data)
+        previous = ResourceAccountBilling.objects.values().get(pk=ACCOUNT_ID)
+        previous_events = list(AdminEvent.objects.values())
+        self.broker.reset_mock()
+
+        for field in ("credit_total", "spent", "hourly_cost"):
+            for value in (1e308, 10**26):
+                with self.subTest(field=field, value=value):
+                    with CaptureQueriesContext(connection) as queries:
+                        response = self.patch_account(
+                            {
+                                "billing": {**BILLING, field: value},
+                                "reason": "범위 밖 입력",
+                            }
+                        )
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.assertEqual(response.data["code"], "INVALID_REQUEST")
+                    self.assertFalse(
+                        any(
+                            query["sql"].lstrip().upper().startswith(
+                                ("INSERT", "UPDATE", "DELETE")
+                            )
+                            for query in queries.captured_queries
+                        )
+                    )
+                    self.broker.assert_not_called()
+
+        self.assertEqual(
+            ResourceAccountBilling.objects.values().get(pk=ACCOUNT_ID), previous
+        )
+        self.assertEqual(list(AdminEvent.objects.values()), previous_events)
+
+    def test_original_amount_range_is_checked_before_rounding(self):
+        for field in ("credit_total", "spent", "hourly_cost"):
+            for value in (-0.001, 999999999999.991):
+                with self.subTest(field=field, value=value):
+                    response = self.patch_account(
+                        {
+                            "billing": {**BILLING, field: value},
+                            "reason": "반올림 전 범위 검사",
+                        }
+                    )
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.assertEqual(response.data["code"], "INVALID_REQUEST")
+
+        self.broker.assert_not_called()
+        self.assertFalse(ResourceAccountBilling.objects.exists())
+        self.assertFalse(AdminEvent.objects.exists())
+
+    def test_boundary_amounts_keep_two_decimal_half_up_rounding(self):
+        for value, expected in (
+            (0, Decimal("0.00")),
+            (0.004, Decimal("0.00")),
+            (0.005, Decimal("0.01")),
+            (1.235, Decimal("1.24")),
+            (999999999999.99, Decimal("999999999999.99")),
+        ):
+            with self.subTest(value=value):
+                response = self.patch_account(
+                    {
+                        "billing": {
+                            **BILLING,
+                            "credit_total": value,
+                            "spent": value,
+                            "hourly_cost": value,
+                        },
+                        "reason": "허용 범위와 반올림",
+                    }
+                )
+                self.assertEqual(response.status_code, 200, response.data)
+                row = ResourceAccountBilling.objects.get(pk=ACCOUNT_ID)
+                for field in ("credit_total", "spent", "hourly_cost"):
+                    self.assertEqual(getattr(row, field), expected)
