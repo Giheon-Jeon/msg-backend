@@ -40,6 +40,10 @@ findings below are handoff requests, not fixes included in this backend PR.
 
 ## Verification
 
+- Latest-main integration (`8eb5471e`): PostgreSQL regression suite 201 tests
+  passed; migration check reported no changes; real HTTP replay again passed
+  26 assertions over 66 requests. Deployment tests passed (21 run, 4 platform
+  skips) using Python UTF-8 mode on Windows.
 - PostgreSQL regression run: 185 tests passed. After public-access and key
   replacement additions, 14 focused/access checks passed (overlap exists).
 - Historical frontend prototype validation (now reverted): 204 tests and Vite
