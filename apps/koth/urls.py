@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import files, views
+from . import admin_preview, files, views
 from . import admin_views as admin
 from .environment_views import EnvironmentApplyView, EnvironmentPreviewView, EnvironmentVersionsView, EnvironmentView
 
@@ -13,6 +13,8 @@ urlpatterns = [
     path("admin/koth/challenges/<uuid:challenge_id>/periods", admin.PeriodsView.as_view()),
     path("admin/koth/challenges/<uuid:challenge_id>/periods/<str:period_id>/retry", admin.PeriodRetryView.as_view()),
     path("admin/koth/challenges/<uuid:challenge_id>/connection_test", admin.ConnectionTestView.as_view()),
+    path("admin/koth/challenges/<uuid:challenge_id>/preview_sessions", admin_preview.issue_preview),
+    path("koth/preview_sessions/authorize", admin_preview.authorize_preview),
     path("admin/koth/challenges/<uuid:challenge_id>/publications", admin.PublicationsView.as_view()),
     path("admin/koth/challenges/<uuid:challenge_id>/publications/import", admin.PublicationImportView.as_view()),
     path("admin/koth/published", admin.PublishedCatalogView.as_view()),
