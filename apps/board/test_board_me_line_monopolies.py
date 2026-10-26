@@ -56,3 +56,17 @@ class BoardMeLineMonopolyTests(TestCase):
                 {"line_number": 4, "earned_score": 135.5, "is_category_bonus": False},
             ],
         )
+
+    def test_large_integer_score_is_returned_exactly(self):
+        """관리자 API 가 허용하는 큰 정수 점수가 응답에서 자릿수를 잃지 않는다."""
+        LineMonopoly.objects.create(
+            team=self.team, line_number=1, earned_score=Decimal("999999999999999999")
+        )
+
+        res = self.client.get("/api/v1/board/me")
+
+        self.assertEqual(
+            res.data["data"]["line_monopolies"][0]["earned_score"],
+            999999999999999999,
+        )
+        self.assertIn(b'"earned_score":999999999999999999,', res.content)

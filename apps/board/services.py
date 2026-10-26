@@ -5,8 +5,8 @@ from datetime import timedelta
 
 from django.contrib.postgres.expressions import ArraySubquery
 from django.db import transaction
-from django.db.models import Count, Exists, F, OuterRef, Q, Subquery
-from django.db.models.functions import JSONObject
+from django.db.models import CharField, Count, Exists, F, OuterRef, Q, Subquery
+from django.db.models.functions import Cast, JSONObject
 from django.utils import timezone
 
 from apps.accounts.models import Team
@@ -153,13 +153,14 @@ def _board_state_read_queryset(
         )
     if include_line_monopolies:
         # 실제 지급된 값을 보여준다. 관리자 수정·정답 회수도 그대로 반영된다.
+        # JSON 숫자로 넘기면 읽을 때 float 가 되어 큰 정수의 자릿수가 사라지므로 문자열로 넘긴다.
         annotations["line_monopolies"] = ArraySubquery(
             LineMonopoly.objects.filter(team_id=OuterRef("team_id"))
             .order_by("line_number")
             .values(
                 json=JSONObject(
                     line_number="line_number",
-                    earned_score="earned_score",
+                    earned_score=Cast("earned_score", CharField()),
                     is_category_bonus="is_category_bonus",
                 )
             )

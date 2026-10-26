@@ -152,7 +152,7 @@ class BoardMeView(APIView):
                 "line_monopolies": [
                     {
                         "line_number": row["line_number"],
-                        "earned_score": num(Decimal(str(row["earned_score"]))),
+                        "earned_score": num(Decimal(row["earned_score"])),
                         "is_category_bonus": row["is_category_bonus"],
                     }
                     for row in state.line_monopolies
