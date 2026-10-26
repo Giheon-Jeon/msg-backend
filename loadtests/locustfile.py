@@ -63,6 +63,12 @@ READ_SCENARIOS = {
         None,
         True,
     ),
+    "healthz": ("GET", "/healthz", None, False),
+    "timer": ("GET", "/api/v1/timer", None, True),
+    "ranking": ("GET", "/api/v1/ranking", None, True),
+    "ranking_me": ("GET", "/api/v1/ranking/me", None, True),
+    "ranking_member": ("GET", "/api/v1/ranking/member", None, True),
+    "leaderboard": ("GET", "/api/v1/leaderboard", None, True),
 }
 
 WRITE_SCENARIOS = {
