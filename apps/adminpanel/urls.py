@@ -17,6 +17,16 @@ urlpatterns = [
     path("admin/published_challenges/import", published_challenges.publication_import),
     path("admin/publication_requests", publication_requests.publication_requests),
     path(
+        "admin/publication_requests/<uuid:request_id>/dispatch",
+        publication_requests.publication_request_action,
+        {"action": "dispatch"},
+    ),
+    path(
+        "admin/publication_requests/<uuid:request_id>/sync",
+        publication_requests.publication_request_action,
+        {"action": "sync"},
+    ),
+    path(
         "admin/publication_requests/<uuid:request_id>",
         publication_requests.publication_request_detail,
     ),

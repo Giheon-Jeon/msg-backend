@@ -37,6 +37,7 @@ class PublicationRequestFixtures:
         super().setUp()
         configured = override_settings(
             PUBLICATION_REQUESTS_ENABLED=True,
+            PUBLICATION_DISPATCH_ENABLED=False,
             SECURE_SSL_REDIRECT=False,
             REPOSITORY_ENV_EXCLUDED_SLUGS={"pwn-msgdriver"},
         )

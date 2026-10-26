@@ -378,6 +378,8 @@ class PublicationRequest(models.Model):
         NOT_DISPATCHED = "NOT_DISPATCHED"
         DISPATCH_UNKNOWN = "DISPATCH_UNKNOWN"
         DISPATCHED = "DISPATCHED"
+        DISPATCH_REJECTED = "DISPATCH_REJECTED"
+        DISPATCH_CONFLICT = "DISPATCH_CONFLICT"
 
     request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     challenge = models.ForeignKey(
@@ -402,6 +404,15 @@ class PublicationRequest(models.Model):
     run_attempt = models.PositiveIntegerField(null=True, blank=True)
     workflow_status = models.CharField(max_length=30, null=True, blank=True)
     workflow_conclusion = models.CharField(max_length=30, null=True, blank=True)
+    dispatch_started_at = models.DateTimeField(null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=60, blank=True, default="")
+    run_head_sha = models.CharField(max_length=40, null=True, blank=True)
+    run_number = models.PositiveIntegerField(null=True, blank=True)
+    reused_request = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="reused_by",
+    )
     requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
