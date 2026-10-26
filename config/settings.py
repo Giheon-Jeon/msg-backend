@@ -371,8 +371,11 @@ RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
 
-# Record-only scaffolding; this does not enable workflow_dispatch or automatic import.
+# Recording alone does not enable workflow_dispatch or automatic import.
 PUBLICATION_REQUESTS_ENABLED = os.getenv("PUBLICATION_REQUESTS_ENABLED", "False").lower() == "true"
+# Separate opt-in and credential for workflow writes; never reuse the read-only Poller token.
+PUBLICATION_DISPATCH_ENABLED = os.getenv("PUBLICATION_DISPATCH_ENABLED", "False").lower() == "true"
+PUBLICATION_DISPATCH_GITHUB_TOKEN = os.getenv("PUBLICATION_DISPATCH_GITHUB_TOKEN", "")
 
 # Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
 REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")

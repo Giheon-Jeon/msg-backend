@@ -12,6 +12,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_variables
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
+from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 
 from apps.challenge.models import Challenge
@@ -67,11 +68,17 @@ def published_challenges(request):
 @publication_errors
 @sensitive_variables()
 def publication_preview(request):
-    if (not isinstance(request.data, dict) or set(request.data) != {"artifact_id"}
+    if (not isinstance(request.data, dict) or "artifact_id" not in request.data
+            or set(request.data) - {"artifact_id", "publication_request_id"}
             or type(request.data.get("artifact_id")) is not int
             or not 1 <= request.data["artifact_id"] <= 2**53 - 1):
         raise InvalidRequest("목록에서 가져올 발행본을 선택해주세요")
-    prepared = publications.prepare_publication(request.data["artifact_id"])
+    request_id = None
+    if "publication_request_id" in request.data:
+        if not isinstance(request.data["publication_request_id"], str):
+            raise InvalidRequest("발행 요청 UUID를 확인해주세요")
+        request_id = serializers.UUIDField().run_validation(request.data["publication_request_id"])
+    prepared = publications.prepare_publication(request.data["artifact_id"], publication_request_id=request_id)
     return ok(publications.preview_publication(prepared, request.user))
 
 
@@ -83,7 +90,7 @@ def _prepare_import(request):
             raise signing.BadSignature()
     except signing.BadSignature:
         raise publications.PublishedImportError("PUBLICATION_PREVIEW_EXPIRED", "미리보기가 만료되었거나 변경됐습니다 발행본을 다시 선택해주세요", 409) from None
-    prepared = publications.prepare_publication(selected["artifact_id"])
+    prepared = publications.prepare_publication(selected["artifact_id"], publication_request_id=selected.get("publication_request_id"))
     if not constant_time_compare(selected["fingerprint"], prepared["fingerprint"]):
         raise publications.PublishedImportError("PUBLICATION_CHANGED", "발행 내용이 변경됐습니다 발행본을 다시 선택해주세요", 409)
     prepared["expected_challenge_state"] = selected.get("challenge_state")
