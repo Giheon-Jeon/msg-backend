@@ -8,6 +8,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import (
     Count,
     DecimalField,
+    F,
     OuterRef,
     Prefetch,
     Q,
@@ -30,7 +31,7 @@ from apps.common.response import fail, ok
 from apps.common.utils import num
 from apps.common.jwt import hash_token
 from apps.common.idempotency import run_idempotent
-from apps.challenge.models import Challenge, Solve
+from apps.challenge.models import Challenge, FlagSubmission, Solve
 from apps.challenge.services import (
     get_team_total_score,
     hash_flag,
@@ -84,6 +85,7 @@ from .exceptions import (
     TeamNameTaken,
     ContestAlreadyStarted,
     ChallengeInUse,
+    SubmissionNotFound,
 )
 
 from apps.instances.models import (
@@ -1802,6 +1804,170 @@ def _require_reason(body):
     if len(reason) > 500:
         raise InvalidRequest("reason 은 500자 이하여야 합니다")
     return reason
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAdmin])
+def challenge_submission_delete(request, challenge_id, submission_id):
+    """제출 기록 1건을 지운다. 정답 기록이면 그 풀이로 얻은 점수 · 마일리지 · 라인 독점을 함께 회수한다.
+
+    주사위와 말 위치는 그대로 두고, 칸만 OPENED 로 돌려 다시 풀 수 있게 한다.
+    제출 API 는 개방 기록만 있으면 받으므로 마감이 지났어도 다시 풀 수 있다(추가 주사위만 없음).
+    """
+    reason = _require_reason(_json_object(request))
+    team_id = (
+        FlagSubmission.objects.filter(pk=submission_id, challenge_id=challenge_id)
+        .values_list("team_id", flat=True)
+        .first()
+    )
+    if team_id is None:
+        raise SubmissionNotFound()
+
+    with transaction.atomic():
+        # 정답 제출과 같은 보드 상태 → 문제 → 팀 순서로 잠근다.
+        TeamBoardState.objects.select_for_update().filter(team_id=team_id).first()
+        challenge = Challenge.objects.select_for_update().filter(pk=challenge_id).first()
+        submission = (
+            FlagSubmission.objects.select_for_update()
+            .filter(pk=submission_id, challenge_id=challenge_id)
+            .first()
+        )
+        if challenge is None or submission is None:
+            raise SubmissionNotFound()
+
+        solve = None
+        if submission.result == FlagSubmission.SubmissionResult.CORRECT:
+            solve = Solve.objects.filter(team_id=team_id, challenge=challenge).first()
+        if solve is not None:
+            # 푼 팀 수가 줄면 다른 팀 점수도 바뀐다. 영향받는 팀을 한 번에 PK 순으로 잠근다.
+            list(
+                Team.objects.select_for_update(no_key=True)
+                .filter(
+                    pk__in=Solve.objects.filter(challenge=challenge).values("team_id")
+                )
+                .order_by("pk")
+            )
+        team = Team.objects.get(pk=team_id)
+        submitted_at = isoformat_z(submission.created_at)
+        submission.delete()
+
+        revoked = None
+        if solve is not None:
+            revoked = _revoke_solve(
+                team, challenge, solve, reason, request.user.login_id
+            )
+
+        if revoked is None:
+            _record_event(
+                AdminEvent.EventType.SUBMISSION_DELETED,
+                f"제출 기록 삭제: {challenge.title} {submission.result} "
+                f"(제출 {submitted_at}): {reason}",
+                request.user.login_id,
+                team=team,
+                challenge=challenge,
+            )
+        else:
+            monopoly = revoked["line_monopoly"]
+            monopoly_text = (
+                f", {monopoly['line_number']}번 라인 독점 {num(monopoly['earned_score'])}점"
+                if monopoly
+                else ""
+            )
+            _record_event(
+                AdminEvent.EventType.SUBMISSION_DELETED,
+                f"정답 회수: {challenge.title} 점수 {num(revoked['score'])} · "
+                f"마일리지 {revoked['mileage']}{monopoly_text} "
+                f"(제출 {submitted_at}): {reason}",
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
+                team=team,
+                challenge=challenge,
+            )
+
+    if revoked is not None:
+        monopoly = revoked["line_monopoly"]
+        revoked = {
+            "score": num(revoked["score"]),
+            "mileage": revoked["mileage"],
+            "line_monopoly": (
+                {
+                    "line_number": monopoly["line_number"],
+                    "earned_score": num(monopoly["earned_score"]),
+                }
+                if monopoly
+                else None
+            ),
+        }
+    return ok(
+        {
+            "submission_id": str(submission_id),
+            "challenge_id": str(challenge.challenge_id),
+            "team_id": str(team.team_id),
+            "result": submission.result,
+            "revoked": revoked,
+            "deleted_at": timezone.now().replace(microsecond=0),
+            "deleted_by": request.user.login_id,
+        },
+        message="제출 기록이 삭제되었습니다",
+    )
+
+
+def _revoke_solve(team, challenge, solve, reason, actor):
+    """호출부가 보드 상태 · 문제 · 영향받는 팀을 잠근 상태에서 풀이를 되돌린다."""
+    score = challenge.current_score
+    mileage = solve.earned_mileage
+    access = (
+        TeamChallengeAccess.objects.select_for_update(of=("self",))
+        .select_related("source_cell")
+        .filter(team=team, challenge=challenge)
+        .first()
+    )
+
+    solve.delete()
+    update_dynamic_score_and_team_scores(challenge, teams_already_locked=True)
+    # 위 재계산은 남은 풀이의 팀만 갱신하므로 회수당한 팀은 따로 맞춘다.
+    Team.objects.filter(pk=team.pk).update(
+        team_score=Coalesce(
+            Solve.objects.filter(team=team)
+            .order_by()
+            .values("team_id")
+            .annotate(total=Sum("challenge__current_score"))
+            .values("total"),
+            Value(Decimal("0")),
+            output_field=Team._meta.get_field("team_score"),
+        )
+    )
+
+    if mileage:
+        # 원장은 지우지 않고 차감 행을 쌓는다. 이미 썼다면 잔액이 음수가 될 수 있다.
+        Team.objects.filter(pk=team.pk).update(mileage=F("mileage") - mileage)
+        MileageHistory.objects.create(
+            team=team,
+            type=MileageType.ADMIN_DEDUCT,
+            amount=-mileage,
+            reason=f"정답 회수: {challenge.title}: {reason}",
+            processed_by=actor,
+        )
+
+    line_monopoly = None
+    if access is not None:
+        if access.status == TeamChallengeAccess.Status.CLEARED:
+            access.status = TeamChallengeAccess.Status.OPENED
+            access.cleared_at = None
+            access.save(update_fields=["status", "cleared_at"])
+        # 칸이 다시 열리면 그 라인은 미완성이다. 다시 풀면 지급 로직이 그때 값으로 새로 준다.
+        line_number = access.source_cell.line_number
+        monopoly = LineMonopoly.objects.filter(
+            team=team, line_number=line_number
+        ).first()
+        if line_number is not None and monopoly is not None:
+            line_monopoly = {
+                "line_number": line_number,
+                "earned_score": monopoly.earned_score,
+            }
+            monopoly.delete()
+
+    return {"score": score, "mileage": mileage, "line_monopoly": line_monopoly}
 
 
 def _parse_cell_index(raw):
