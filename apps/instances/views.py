@@ -403,7 +403,11 @@ class MyInstanceView(APIView):
                             terminal = call_scheduler_detail(
                                 pending, scheduler_auth_header(request),
                             )
-                            if terminal.get("status") in FINAL_INSTANCE_STATUSES:
+                            if terminal.get("status") in (
+                                *FINAL_INSTANCE_STATUSES,
+                                InstanceStatus.STOPPING,
+                                InstanceStatus.CLEANUP_PENDING,
+                            ):
                                 update_instance_from_scheduler(pending, terminal)
                         except SchedulerError as detail_error:
                             if detail_error.code != "INSTANCE_NOT_FOUND":
