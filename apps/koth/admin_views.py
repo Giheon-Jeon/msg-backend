@@ -495,7 +495,7 @@ class ConnectionTestView(APIView):
         if challenge.score_api_url and challenge.score_api_token_env:
             started = time.monotonic()
             try:
-                period = services.current_period()
+                period = services.current_period() - timedelta(minutes=15)
                 payload = services._request_scores(challenge, period)
                 services._validated_results(challenge, period, payload)
                 result["score_api"] = {"ok": True, "status": 200, "result_count": len((payload.get("data") or {}).get("results", [])), "latency_ms": round((time.monotonic() - started) * 1000)}
