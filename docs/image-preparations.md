@@ -109,6 +109,11 @@ attached, control 및 manager 전용 경로도 검사한다. 정확한 이름의
 `msg-image-.service.d`, `msg-.service.d`, `service.d`처럼 적용되는 접두어·타입별
 drop-in도 운영자 검토 대상으로 중단한다. timer도 같은 규칙을 적용한다.
 고정 plain unit이므로 무관한 `@` template의 drop-in은 적용되지 않는다.
+다른 unit 이름의 symlink가 이 unit 이름을 가리키는 alias도 중단한다. 대상 파일이
+아직 없거나 다른 검색 경로의 같은 이름을 가리켜도 alias의 설정이 함께 적용될 수
+있으므로 이름과 검색 경로를 기준으로 검사한다. 이 unit 자체의 `.wants`,
+`.requires`, `.upholds` 디렉터리도 추가 의존성에 대한 운영자 검토 대상으로 중단한다.
+일반 enable이 만드는 `timers.target.wants`의 timer 링크는 유지한다.
 이 조회는 읽기 전용이며 unit 작성 전, 원자적 작성 후, daemon reload 후에 다시
 검사한다. 검사와 활성화 사이에 다른 root 운영자가 구성을 변경하지 않도록 해야 한다.
 지원하지 않는 Runtime에 연결해도 설치기가 실제 API 지원을 보증하지는 않는다.

@@ -89,6 +89,93 @@ class ImagePreparationInstallTests(unittest.TestCase):
             installer.install(check=True)
             self.assertFalse(any((Path(temporary) / unit).exists() for unit in installer.UNITS))
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX alias and dependency fixtures')
+    def test_aliases_are_rejected_with_absolute_relative_and_dangling_targets(self):
+        for unit in installer.UNITS:
+            for relative in (False, True):
+                for present in (False, True):
+                    with self.subTest(unit=unit, relative=relative, present=present), tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
+                        installer.os, 'geteuid', return_value=0
+                    ), patch.object(installer.subprocess, 'run') as run:
+                        root = Path(temporary)
+                        vendor = root / 'vendor'
+                        vendor.mkdir()
+                        if present:
+                            (root / unit).write_bytes((Path(installer.__file__).parent / unit).read_bytes())
+                            (root / unit).chmod(0o644)
+                        alias = vendor / ('other.' + unit.rsplit('.', 1)[-1])
+                        alias.symlink_to('../' + unit if relative else str(root / unit))
+                        (vendor / (alias.name + '.d')).mkdir()
+                        (vendor / (alias.name + '.d') / 'override.conf').write_text('operator override')
+                        with patch.object(installer, '_unit_directories', return_value=(root, vendor)), self.assertRaises(RuntimeError):
+                            installer.install(check=True)
+                        self.assertTrue(alias.is_symlink())
+                        self.assertEqual((root / unit).exists(), present)
+                        self.assertFalse(any(call.args[0][0] == 'systemctl' for call in run.call_args_list))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX alias fixtures')
+    def test_alias_chains_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
+            installer.os, 'geteuid', return_value=0
+        ), patch.object(installer.subprocess, 'run'):
+            root = Path(temporary)
+            (root / 'first.service').symlink_to('second.service')
+            (root / 'second.service').symlink_to(installer.UNITS[0])
+            with self.assertRaises(RuntimeError):
+                installer.install(check=True)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX alias and dependency fixtures')
+    def test_unrelated_aliases_linked_units_and_enable_target_links_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
+            installer.os, 'geteuid', return_value=0
+        ), patch.object(installer.subprocess, 'run'):
+            root = Path(temporary)
+            (root / 'unrelated.service').symlink_to('another.service')
+            outside = root / 'outside-load-path'
+            outside.mkdir()
+            (root / 'linked.service').symlink_to(outside / installer.UNITS[0])
+            (root / 'timers.target.wants').mkdir()
+            (root / 'timers.target.wants' / installer.UNITS[1]).symlink_to('../' + installer.UNITS[1])
+            installer.install(check=True)
+            self.assertTrue((root / 'unrelated.service').is_symlink())
+            self.assertTrue((root / 'linked.service').is_symlink())
+            self.assertTrue((root / 'timers.target.wants' / installer.UNITS[1]).is_symlink())
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX dependency fixtures')
+    def test_own_unit_dependency_directories_require_operator_review(self):
+        for unit in installer.UNITS:
+            for suffix in ('wants', 'requires', 'upholds'):
+                with self.subTest(unit=unit, suffix=suffix), tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
+                    installer.os, 'geteuid', return_value=0
+                ), patch.object(installer.subprocess, 'run') as run:
+                    root = Path(temporary)
+                    (root / 'unexpected.service').write_text('[Service]\nExecStart=/bin/false\n')
+                    dependencies = root / (unit + '.' + suffix)
+                    dependencies.mkdir()
+                    link = dependencies / 'unexpected.service'
+                    link.symlink_to('../unexpected.service')
+                    with self.assertRaises(RuntimeError):
+                        installer.install(check=True)
+                    self.assertTrue(link.is_symlink())
+                    self.assertFalse(any((root / name).exists() for name in installer.UNITS))
+                    self.assertFalse(any(call.args[0][0] == 'systemctl' for call in run.call_args_list))
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX ownership and atomic installation')
+    def test_alias_introduced_during_reload_stops_before_enable(self):
+        with tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
+            installer.os, 'geteuid', return_value=0
+        ):
+            root = Path(temporary)
+
+            def concurrent_change(command, **kwargs):
+                if command == ['systemctl', 'daemon-reload']:
+                    (root / 'late-alias.service').symlink_to(installer.UNITS[0])
+
+            with patch.object(installer.subprocess, 'run', side_effect=concurrent_change) as run, self.assertRaises(RuntimeError):
+                installer.install()
+            self.assertTrue((root / 'late-alias.service').is_symlink())
+            self.assertFalse(any(call.args[0][:3] == ['systemctl', 'enable', '--now'] for call in run.call_args_list))
+
     def test_unit_created_after_initial_check_is_validated_before_reuse(self):
         with tempfile.TemporaryDirectory() as temporary, self.context(temporary), patch.object(
             installer.os, 'geteuid', return_value=0, create=True

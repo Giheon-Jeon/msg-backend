@@ -64,6 +64,26 @@ def _dropin_directories(name):
     )
 
 
+def _reject_aliases(files, directories):
+    roots = {directory.resolve() for directory in directories}
+    for directory in directories:
+        try:
+            entries = tuple(directory.iterdir())
+        except FileNotFoundError:
+            continue
+        for entry in entries:
+            if entry.suffix not in {".service", ".timer"} or not entry.is_symlink():
+                continue
+            target = Path(os.readlink(entry))
+            if not target.is_absolute():
+                target = entry.parent / target
+            # Alias identity uses the target's unit name and membership in a
+            # load directory, even when that particular target does not exist.
+            # Reject aliases rather than silently accepting their extra config.
+            if target.name in files and target.suffix == entry.suffix and target.parent.resolve() in roots:
+                raise RuntimeError("Unit aliases require operator review: " + entry.name)
+
+
 def _existing(path, expected):
     try:
         metadata = path.lstat()
@@ -82,10 +102,12 @@ def _existing(path, expected):
 
 def _validate_units(files):
     directories = _unit_directories()
+    _reject_aliases(files, directories)
     for name, data in files.items():
         for directory in directories:
             _existing(directory / name, data)
-            for dropin in _dropin_directories(name):
+            overrides_for_unit = (*_dropin_directories(name), *(name + "." + suffix for suffix in ("wants", "requires", "upholds")))
+            for dropin in overrides_for_unit:
                 overrides = directory / dropin
                 if overrides.is_symlink() or overrides.exists():
                     raise RuntimeError("Unit overrides require operator review: " + name)
