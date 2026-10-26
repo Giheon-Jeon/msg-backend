@@ -773,6 +773,146 @@ class RemoteRunTests(ExeFixtures, TestCase):
         self.assertEqual(response.data["data"]["total_count"], 1)
         self.assertEqual(response.data["data"]["runs"][0]["status"], "CLEANUP_PENDING")
 
+    def completed_for_release(self):
+        row = self.assigned()
+        client = self.checker(row)
+        for body in (self.event(row), self.event(row, "CLEANUP")):
+            self.assertEqual(self.callback(client, row, body).status_code, 200)
+        row.refresh_from_db()
+        return row, client
+
+    def test_admin_release_failure_details_are_private_and_do_not_change_execution_result(
+        self,
+    ):
+        row, client = self.completed_for_release()
+        path = self.root / row.payload_key
+        self.user.role = Role.ADMIN
+        self.user.save(update_fields=["role"])
+        for code, status, review in (
+            ("BROKER_CALL_FAILED", 502, False),
+            ("WINDOWS_ASSIGNMENT_NOT_FOUND", 404, True),
+        ):
+            with (
+                self.subTest(code=code),
+                patch(
+                    "apps.challenge.windows_assignments._post_scheduler",
+                    side_effect=SchedulerError(code, "private-provider-detail", status),
+                ),
+            ):
+                with self.assertRaises(SchedulerError):
+                    release_windows_assignment(row.pk)
+            row.refresh_from_db()
+            self.assertEqual(row.last_error_code, code)
+            response = self.client.get(
+                f"/api/v1/admin/challenges/{self.challenge.pk}/remote_runs",
+                {"status": "ACTIVE"},
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+            (data,) = response.data["data"]["runs"]
+            self.assertEqual(data["last_error_code"], code)
+            self.assertEqual(data["requires_review"], review)
+            self.assertTrue(data["release_pending"])
+            self.assertEqual(data["status"], "COMPLETED")
+            self.assertTrue(data["cleanup_complete"])
+            self.assertEqual(data["stdout"], "participant output")
+            self.assertEqual(response.data["data"]["summary"]["failed"], 0)
+            self.assertNotIn(b"private-provider-detail", response.content)
+            public = self.client.get(f"{self.url}/{row.pk}")
+            self.assertNotIn("last_error_code", public.data["data"])
+            self.assertNotIn(code.encode(), public.content)
+            self.assertTrue(path.is_file())
+            self.assertIsNone(row.lease_released_at)
+        self.assertEqual(
+            self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
+        )
+        row.refresh_from_db()
+        self.assertEqual(row.last_error_code, "WINDOWS_ASSIGNMENT_NOT_FOUND")
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(row.lease_id), "status": "EXPIRED"},
+        ):
+            release_windows_assignment(row.pk)
+        response = self.client.get(
+            f"/api/v1/admin/challenges/{self.challenge.pk}/remote_runs"
+        )
+        (data,) = response.data["data"]["runs"]
+        self.assertEqual(data["last_error_code"], "")
+        self.assertFalse(data["requires_review"])
+        self.assertFalse(data["release_pending"])
+
+    def test_worker_pauses_unknown_lease_return_until_operator_review(self):
+        row, client = self.completed_for_release()
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler",
+            side_effect=SchedulerError("WINDOWS_ASSIGNMENT_NOT_FOUND", "fixture", 404),
+        ) as scheduler:
+            call_command(
+                "dispatch_exe_submissions", stdout=io.StringIO(), stderr=io.StringIO()
+            )
+            self.assertEqual(scheduler.call_count, 1)
+            call_command(
+                "dispatch_exe_submissions", stdout=io.StringIO(), stderr=io.StringIO()
+            )
+            self.assertEqual(scheduler.call_count, 1)
+            self.assertEqual(
+                self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
+            )
+            call_command(
+                "dispatch_exe_submissions", stdout=io.StringIO(), stderr=io.StringIO()
+            )
+            self.assertEqual(scheduler.call_count, 1)
+        row.refresh_from_db()
+        self.assertEqual(row.last_error_code, "WINDOWS_ASSIGNMENT_NOT_FOUND")
+        self.assertIsNone(row.lease_released_at)
+        self.assertTrue((self.root / row.payload_key).is_file())
+
+    def test_worker_retries_broker_failure_with_same_lease_and_clears_error_on_ack(
+        self,
+    ):
+        row, client = self.completed_for_release()
+        path = self.root / row.payload_key
+        acknowledgement = {"lease_id": str(row.lease_id), "status": "COMPLETED"}
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler",
+            side_effect=[
+                SchedulerError("BROKER_CALL_FAILED", "fixture", 502),
+                acknowledgement,
+            ],
+        ) as scheduler:
+            call_command(
+                "dispatch_exe_submissions", stdout=io.StringIO(), stderr=io.StringIO()
+            )
+            row.refresh_from_db()
+            self.assertEqual(row.last_error_code, "BROKER_CALL_FAILED")
+            self.assertIsNone(row.lease_released_at)
+            self.assertTrue(path.is_file())
+            self.assertEqual(
+                self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
+            )
+            row.refresh_from_db()
+            self.assertEqual(row.last_error_code, "BROKER_CALL_FAILED")
+            call_command(
+                "dispatch_exe_submissions", stdout=io.StringIO(), stderr=io.StringIO()
+            )
+            self.assertEqual(scheduler.call_count, 2)
+            self.assertEqual(scheduler.call_args_list[0], scheduler.call_args_list[1])
+        row.refresh_from_db()
+        self.assertEqual(row.last_error_code, "")
+        self.assertIsNotNone(row.lease_released_at)
+        self.assertFalse(path.exists())
+
+    def test_uncertain_release_ack_is_recorded_without_confirming_or_deleting(self):
+        row, _ = self.completed_for_release()
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler", return_value={}
+        ):
+            with self.assertRaises(SchedulerError):
+                release_windows_assignment(row.pk)
+        row.refresh_from_db()
+        self.assertEqual(row.last_error_code, "SCHEDULER_UNAVAILABLE")
+        self.assertIsNone(row.lease_released_at)
+        self.assertTrue((self.root / row.payload_key).is_file())
+
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locking")
 class ConcurrentRemoteDispatchTests(ExeFixtures, TransactionTestCase):

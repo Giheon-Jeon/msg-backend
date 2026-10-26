@@ -53,6 +53,7 @@ class Command(BaseCommand):
                 lease_released_at__isnull=True,
             )
             .exclude(attempt_state="RESERVED")
+            .exclude(last_error_code="WINDOWS_ASSIGNMENT_NOT_FOUND")
             .values_list("pk", flat=True)[:limit]
         )
         for submission_id in ids:

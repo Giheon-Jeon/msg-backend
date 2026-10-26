@@ -43,6 +43,10 @@
 이 검사는 파일 생성이나 외부 호출 없이 설정만 확인한다 실제 디스크 쓰기·Scheduler 인증 성공·VM 준비 완료를 의미하지 않는다
 대기·준비·실행·시작 여부 불명과 정리·반납을 기다리는 작업은 진행 중 필터에 남긴다
 파일 바이트와 비밀값은 관리자 목록에도 넣지 않는다
+관리자 실행 목록의 last_error_code에는 고정된 처리 오류 코드를 표시한다 참가자 목록·상세에는 이 필드를 추가하지 않는다
+반납 404 WINDOWS_ASSIGNMENT_NOT_FOUND는 release_pending과 requires_review로 표시하고 주기 워커의 자동 반납 재시도를 보류한다 실제 실행 결과·출력·정리 보고는 변경하지 않는다
+반납 502 BROKER_CALL_FAILED와 응답 유실·잘못된 ACK는 실패 코드를 DB에 남기고 동일 lease_id로 재시도한다 늦은 CLEANUP 보고만으로 반납 오류를 지우지 않는다
+정확한 lease_id와 COMPLETED·EXPIRED ACK를 확인한 뒤에만 반납 오류를 지운다 반납 실패는 실행 실패 건수로 합산하지 않으며 미반납 작업은 ACTIVE 목록에 남는다
 
 ## 체커 연결 계약 v1
 
@@ -95,7 +99,7 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 - 409 WINDOWS_ASSIGNMENT_CONFLICT도 START_UNKNOWN과 requires_review로 분리한다 같은 submission_id의 고정 정보 충돌은 자동 재시도로 해결하지 않으며 새 ID나 VM으로 바꿔 실행하지 않는다 다른 팀의 FIFO 처리는 계속한다
 - 배정 응답의 status는 필수다 누락·null·알 수 없는 값은 배정으로 저장하지 않으며 파일을 보존하고 같은 submission_id로 재조회한다 status가 LEASED인 유효한 배정만 받는다 HTTP 200 응답도 status가 COMPLETED·EXPIRED이거나 expires_at이 지났으면 종료된 배정으로 처리한다
 - VM 부족·502·응답 유실은 같은 submission_id로 재시도한다 새 제출을 자동 생성하지 않는다
-- 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 재시도도 같은 lease_id를 쓴다
+- 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 502·응답 유실은 같은 lease_id로 자동 재시도하고 명시적인 WINDOWS_ASSIGNMENT_NOT_FOUND 404는 운영자 확인 전까지 주기 재시도를 보류한다 운영자가 재확인할 때도 원래 lease_id만 사용한다
 - 임대 기간은 기본 2시간으로 가정하지 않고 expires_at을 따른다 연장 API는 없다 새 실행은 설정된 실행 제한 시간에 dispatch·결과 수집·반납 여유 30초를 더한 시간이 남아 있어야 한다 실제 연동 전 이 여유의 적정성을 확인한다
 - 임대가 끝나도 기존 실행의 결과를 추측하지 않는다 접수 여부가 불명확한 체커 작업은 같은 ID로 조회만 하며 자동 재실행·반납하지 않는다
 

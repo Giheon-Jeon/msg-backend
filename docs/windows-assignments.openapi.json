@@ -21,6 +21,7 @@
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
           },
           "409": {"description": "NO_WINDOWS_WORKER_AVAILABLE, WINDOWS_ASSIGNMENT_ENDED or WINDOWS_ASSIGNMENT_CONFLICT, in the top-level code field. Ended or conflicting assignments are quarantined for operator review, not automatically retried or reallocated. Worker shortage remains retryable with the same submission_id."},
+          "502": {"description": "BROKER_CALL_FAILED in the top-level code field. Replay the same submission_id; do not allocate with a new idempotency key."},
           "503": {"description": "Provider unavailable or outcome unknown. Replay the same submission_id; do not allocate with a new idempotency key."}
         }
       }
@@ -35,7 +36,8 @@
             "description": "Idempotent acknowledgement with the exact lease_id. Raw response and code=SUCCESS/data envelope are accepted.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReleaseAcknowledgement"}}}
           },
-          "404": {"description": "Unknown lease. Backend must retain its file and retry or request operator review; absence is not cleanup proof."},
+          "404": {"description": "WINDOWS_ASSIGNMENT_NOT_FOUND in the top-level code field. Backend persists the code, retains its file and pauses periodic return retries for operator review. Absence is not cleanup proof; any operator recheck must use the same lease_id."},
+          "502": {"description": "BROKER_CALL_FAILED in the top-level code field. Backend persists the code and retries the same lease_id without marking it released or deleting the payload."},
           "503": {"description": "Return outcome unknown. Retry the same lease; do not mark it released or delete the payload yet."}
         }
       }

@@ -220,6 +220,13 @@ class AdminRemoteRunListView(APIView):
                 ).count(),
                 file_size=row.payload_size,
                 counted=row.attempt_state == "USED",
+                last_error_code=row.last_error_code,
+                requires_review=data["requires_review"]
+                or bool(
+                    row.lease_id
+                    and row.lease_released_at is None
+                    and row.last_error_code == "WINDOWS_ASSIGNMENT_NOT_FOUND"
+                ),
                 created_at=isoformat_z(row.created_at),
                 stdout=output.get("stdout"),
                 stderr=output.get("stderr"),

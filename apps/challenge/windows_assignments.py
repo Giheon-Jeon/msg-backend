@@ -18,6 +18,13 @@ from apps.challenge.models import ExeSubmission
 from apps.instances.services import SchedulerError, scheduler_auth_header
 
 MAX_RESPONSE_BYTES = 64 * 1024
+RELEASE_ERROR_CODES = frozenset(
+    {
+        "WINDOWS_ASSIGNMENT_NOT_FOUND",
+        "BROKER_CALL_FAILED",
+        "SCHEDULER_UNAVAILABLE",
+    }
+)
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +73,18 @@ def _post_scheduler(path, body=None):
             payload = json.loads(error.read(MAX_RESPONSE_BYTES).decode("utf-8"))
         except (ValueError, UnicodeError):
             payload = None
+        if isinstance(payload, dict) and (
+            (
+                error.code == 404
+                and payload.get("code") == "WINDOWS_ASSIGNMENT_NOT_FOUND"
+            )
+            or (error.code == 502 and payload.get("code") == "BROKER_CALL_FAILED")
+        ):
+            raise SchedulerError(
+                payload["code"],
+                "Windows assignment provider request failed.",
+                error.code,
+            ) from None
         if (
             error.code == 409
             and isinstance(payload, dict)
@@ -230,6 +249,7 @@ def assign_oldest_exe_submission():
 
 
 def release_windows_assignment(submission_id):
+    failure = None
     with transaction.atomic():
         submission = ExeSubmission.objects.select_for_update().get(pk=submission_id)
         if submission.lease_released_at is not None:
@@ -254,22 +274,40 @@ def release_windows_assignment(submission_id):
                 "Execution must be resolved before lease release.",
                 409,
             )
-        result = _post_scheduler(
-            f"/api/windows-assignments/{submission.lease_id}/release"
-        )
         try:
-            if (
-                not isinstance(result, dict)
-                or uuid.UUID(result["lease_id"]) != submission.lease_id
-                or result["status"] not in ("COMPLETED", "EXPIRED")
-            ):
-                raise ValueError
-        except (KeyError, TypeError, AttributeError, ValueError):
-            raise SchedulerError(
-                "SCHEDULER_UNAVAILABLE", "Invalid Windows release acknowledgement.", 503
-            ) from None
-        submission.lease_released_at = timezone.now()
-        # Release ACK is not proof of Broker VM recreation or cleanup completion.
-        submission.save(update_fields=["lease_released_at", "updated_at"])
-        purge_released_payload(submission)
-        return submission
+            result = _post_scheduler(
+                f"/api/windows-assignments/{submission.lease_id}/release"
+            )
+            try:
+                if (
+                    not isinstance(result, dict)
+                    or uuid.UUID(result["lease_id"]) != submission.lease_id
+                    or result["status"] not in ("COMPLETED", "EXPIRED")
+                ):
+                    raise ValueError
+            except (KeyError, TypeError, AttributeError, ValueError):
+                raise SchedulerError(
+                    "SCHEDULER_UNAVAILABLE",
+                    "Invalid Windows release acknowledgement.",
+                    503,
+                ) from None
+        except SchedulerError as error:
+            failure = error
+            submission.last_error_code = (
+                error.code
+                if error.code in RELEASE_ERROR_CODES
+                else "SCHEDULER_UNAVAILABLE"
+            )
+            submission.save(update_fields=["last_error_code", "updated_at"])
+        else:
+            submission.lease_released_at = timezone.now()
+            submission.last_error_code = ""
+            # Release ACK is not proof of Broker VM recreation or cleanup completion.
+            submission.save(
+                update_fields=["lease_released_at", "last_error_code", "updated_at"]
+            )
+            purge_released_payload(submission)
+    # Raise after committing the diagnostic so worker error handling cannot roll it back.
+    if failure is not None:
+        raise failure
+    return submission

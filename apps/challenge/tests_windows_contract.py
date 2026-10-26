@@ -250,3 +250,40 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
         self.assertIsNotNone(row.lease_released_at)
         self.assertFalse(stored_path.exists())
         self.assertEqual(ExeSubmission.objects.count(), 1)
+
+    def test_release_http_failure_codes_are_persisted_and_success_clears_them(self):
+        row = self.accepted()
+        row.lease_id = uuid.uuid4()
+        row.status, row.attempt_state = "COMPLETED", "USED"
+        row.started_at = row.finished_at = timezone.now()
+        row.cleanup_complete = True
+        row.cleanup_confirmed_at = timezone.now()
+        row.save()
+        path = self.root / row.payload_key
+        errors = [(502, "BROKER_CALL_FAILED"), (404, "WINDOWS_ASSIGNMENT_NOT_FOUND")]
+        replies = [
+            (status, {"code": code, "message": "private-provider-detail"})
+            for status, code in errors
+        ]
+        replies.append({"lease_id": str(row.lease_id), "status": "COMPLETED"})
+        with self.scheduler(replies) as requests:
+            for status, code in errors:
+                with self.subTest(code=code), self.assertRaises(
+                    SchedulerError
+                ) as raised:
+                    release_windows_assignment(row.pk)
+                self.assertEqual(raised.exception.code, code)
+                self.assertEqual(raised.exception.status_code, status)
+                self.assertNotIn("private-provider-detail", raised.exception.message)
+                row.refresh_from_db()
+                self.assertEqual(row.last_error_code, code)
+                self.assertIsNone(row.lease_released_at)
+                self.assertEqual(row.status, "COMPLETED")
+                self.assertTrue(path.is_file())
+            release_windows_assignment(row.pk)
+        row.refresh_from_db()
+        self.assertEqual(row.last_error_code, "")
+        self.assertIsNotNone(row.lease_released_at)
+        self.assertFalse(path.exists())
+        self.assertEqual(len(requests), 3)
+        self.assertTrue(all(request == requests[0] for request in requests))

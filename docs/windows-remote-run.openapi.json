@@ -348,6 +348,7 @@
     },
     "/api/v1/admin/challenges/{challenge_id}/remote_runs": {
       "get": {
+        "description": "Administrator only. Each run includes last_error_code (a fixed local diagnostic code, empty after confirmed release), release_pending and requires_review. WINDOWS_ASSIGNMENT_NOT_FOUND requires operator review and pauses periodic return retries; BROKER_CALL_FAILED and uncertain acknowledgements remain retryable with the same lease_id. Release failure never rewrites execution status/output or increments the execution-failure summary. Diagnostics are not added to participant APIs.",
         "security": [
           {
             "UserToken": []

@@ -15,6 +15,7 @@ from apps.challenge.exe_submissions import (
     normalize_exe_output,
 )
 from apps.challenge.models import Challenge, ExeExecutionEvent, ExeSubmission
+from apps.challenge.windows_assignments import RELEASE_ERROR_CODES
 
 PROVENANCE = {"checker_commit_sha": 40, "vm_template_sha256": 64, "driver_sha256": 64}
 COMMON = {
@@ -266,7 +267,8 @@ def apply_event(authenticated, body):
             if row.cleanup_complete is True and row.cleanup_confirmed_at is None:
                 row.cleanup_confirmed_at = timezone.now()
         row.dispatch_state = "CONFIRMED"
-        row.last_error_code = ""
+        if row.last_error_code not in RELEASE_ERROR_CODES:
+            row.last_error_code = ""
         row.save()
         ExeExecutionEvent.objects.create(
             event_id=event_id, submission=row, fingerprint=fingerprint, event_type=kind
