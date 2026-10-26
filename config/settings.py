@@ -352,6 +352,10 @@ if (
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
 
+# Contract scaffolding only; leave disabled until the checker integration is verified.
+EXE_SUBMISSIONS_ENABLED = os.getenv("EXE_SUBMISSIONS_ENABLED", "False").lower() == "true"
+EXE_SUBMISSION_STORAGE_ROOT = os.getenv("EXE_SUBMISSION_STORAGE_ROOT", "")
+
 # 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
 RUNTIME_SECRET_ENCRYPTION_KEYS = [
     key.strip() for key in os.getenv("RUNTIME_SECRET_ENCRYPTION_KEYS", "").split(",") if key.strip()
