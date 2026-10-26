@@ -1,5 +1,7 @@
 from django.urls import path
 
+from apps.challenge.exe_views import ExeSubmissionCreateView, ExeSubmissionDetailView
+
 from apps.challenge.views import (
     ChallengeDetailView,
     ChallengeFileDownloadView,
@@ -7,6 +9,16 @@ from apps.challenge.views import (
 )
 
 urlpatterns = [
+    path(
+        "challenges/<uuid:challenge_id>/exe-submissions",
+        ExeSubmissionCreateView.as_view(),
+        name="exe-submission-create",
+    ),
+    path(
+        "challenges/<uuid:challenge_id>/exe-submissions/<uuid:submission_id>",
+        ExeSubmissionDetailView.as_view(),
+        name="exe-submission-detail",
+    ),
     path(
         "challenges/<uuid:challenge_id>",
         ChallengeDetailView.as_view(),

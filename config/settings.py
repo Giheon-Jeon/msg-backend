@@ -298,6 +298,7 @@ KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
 KOTH_IMAGE_EXPORT_SIGNING_KEY = os.getenv("KOTH_IMAGE_EXPORT_SIGNING_KEY", "")
 KOTH_IMAGE_EXPORT_URL = os.getenv("KOTH_IMAGE_EXPORT_URL", "")
 KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
+KOTH_ADMIN_PREVIEW_ORIGINS = [value.strip() for value in os.getenv("KOTH_ADMIN_PREVIEW_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
@@ -314,6 +315,10 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
+    # X-Forwarded-For 는 클라이언트가 임의로 넣을 수 있어 요청 제한에 쓰지 않는다.
+    # 실제 접속 주소(REMOTE_ADDR)와 login_id 조합으로 센다. 오프라인 대회라 접속 IP 가 모두 같아
+    # 손해가 없다. 온라인 대회로 바꾸면 모두가 프록시 IP 하나로 묶이므로 다시 본다.
+    "NUM_PROXIES": 0,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
@@ -347,6 +352,10 @@ if (
 
 SCHEDULER_TIMEOUT_SECONDS = int(os.getenv("SCHEDULER_TIMEOUT_SECONDS", "5"))
 
+# Contract scaffolding only; leave disabled until the checker integration is verified.
+EXE_SUBMISSIONS_ENABLED = os.getenv("EXE_SUBMISSIONS_ENABLED", "False").lower() == "true"
+EXE_SUBMISSION_STORAGE_ROOT = os.getenv("EXE_SUBMISSION_STORAGE_ROOT", "")
+
 # Proposed Runtime #70 APIs; never enable before provider deployment and approval.
 IMAGE_PREPARATION_ENABLED = os.getenv("IMAGE_PREPARATION_ENABLED", "False").lower() == "true"
 IMAGE_PREPARATION_RUNTIME_URL = os.getenv("IMAGE_PREPARATION_RUNTIME_URL", "")
@@ -370,6 +379,12 @@ RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
 RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+# Recording alone does not enable workflow_dispatch or automatic import.
+PUBLICATION_REQUESTS_ENABLED = os.getenv("PUBLICATION_REQUESTS_ENABLED", "False").lower() == "true"
+# Separate opt-in and credential for workflow writes; never reuse the read-only Poller token.
+PUBLICATION_DISPATCH_ENABLED = os.getenv("PUBLICATION_DISPATCH_ENABLED", "False").lower() == "true"
+PUBLICATION_DISPATCH_GITHUB_TOKEN = os.getenv("PUBLICATION_DISPATCH_GITHUB_TOKEN", "")
 
 # Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
 REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")

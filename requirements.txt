@@ -8,6 +8,7 @@ django-redis==7.0.0
 django-storages[google]==1.14.6
 djangorestframework==3.18.3
 gunicorn==26.1.0
+pefile==2024.8.26
 psycopg==3.3.4
 psycopg-binary==3.3.4
 pycparser==3.0

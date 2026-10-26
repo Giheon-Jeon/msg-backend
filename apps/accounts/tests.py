@@ -117,6 +117,20 @@ class AuthTests(TestCase):
         res = self.client.get("/api/v1/auth/me", HTTP_AUTHORIZATION=f"Bearer {forged}")
         self.assertEqual(res.data["code"], "TOKEN_INVALID")
 
+    def test_token_without_exp_is_rejected(self):
+        """exp 가 없는 토큰은 만료되지 않으므로 서명이 맞아도 받지 않는다 (QA TC-610)."""
+        payload = {
+            "typ": "access",
+            "sub": str(self.user.user_id),
+            "team_id": str(self.team.team_id),
+            "role": "PARTICIPANT",
+            "is_leader": False,
+        }
+        token = pyjwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
+        res = self.client.get("/api/v1/auth/me", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data["code"], "TOKEN_INVALID")
+
     def test_refresh_token_cannot_call_api(self):
         """refresh 토큰으로 일반 API 를 호출할 수 없다 (typ 검증)."""
         refresh = self.login().data["data"]["refresh_token"]
@@ -186,12 +200,39 @@ class AuthTests(TestCase):
         self.assertEqual(response.data["code"], "RATE_LIMIT_UNAVAILABLE")
         self.assertEqual(RefreshToken.objects.count(), 0)
 
+    def test_login_non_object_body_is_400(self):
+        """배열·문자열 본문이 요청 제한 단계에서 캐시 장애(503)로 잡히면 안 된다 (QA TC-599)."""
+        for body in ("[]", '"a"', "123"):
+            with self.subTest(body=body):
+                res = self.client.post(
+                    "/api/v1/auth/login", body, content_type="application/json"
+                )
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data["code"], "INVALID_REQUEST")
+
     def test_login_throttled(self):
         for _ in range(10):
             self.login(password="wrong")
         res = self.login(password="wrong")
         self.assertEqual(res.status_code, 429)
         self.assertEqual(res.data["code"], "TOO_MANY_REQUESTS")
+
+    def test_throttle_ignores_client_supplied_forwarded_for(self):
+        """X-Forwarded-For 를 바꿔도 실제 접속 주소 기준으로 센다 (QA TC-21)."""
+        for i in range(10):
+            self.client.post(
+                "/api/v1/auth/login",
+                {"login_id": "tester", "password": "wrong"},
+                format="json",
+                HTTP_X_FORWARDED_FOR=f"10.99.0.{i}",
+            )
+        res = self.client.post(
+            "/api/v1/auth/login",
+            {"login_id": "tester", "password": "pw1234"},
+            format="json",
+            HTTP_X_FORWARDED_FOR="10.99.0.99",
+        )
+        self.assertEqual(res.status_code, 429)
 
     def test_throttle_does_not_affect_other_account(self):
         User.objects.create_user(

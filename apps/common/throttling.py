@@ -13,7 +13,9 @@ class LoginRateThrottle(SimpleRateThrottle):
     scope = "login"
 
     def get_cache_key(self, request, view):
-        login_id = str(request.data.get("login_id") or "").strip().lower()
+        # 객체가 아닌 본문은 뷰가 400 으로 거절한다. 여기서 .get 이 터지면 캐시 장애(503)로 잘못 잡힌다.
+        data = request.data if isinstance(request.data, dict) else {}
+        login_id = str(data.get("login_id") or "").strip().lower()
         return f"throttle_login_{self.get_ident(request)}_{login_id}"
 
     def allow_request(self, request, view):

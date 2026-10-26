@@ -3,6 +3,9 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from rest_framework.decorators import api_view, permission_classes
 
+from apps.adminpanel.models import AdminEvent
+from apps.adminpanel.views import _record_event
+from apps.challenge.services import is_correct_flag
 from apps.common.exceptions import ClubNotFound
 from apps.common.permissions import IsAdmin
 from apps.common.response import fail, ok
@@ -104,6 +107,11 @@ def signature_collection(request):
                 flag_hash=make_password(values["flag"]),
                 is_published=False,
             )
+            _record_event(
+                AdminEvent.EventType.SIGNATURE_CREATED,
+                f"시그니처 문제 등록 (signature_id={challenge.pk}, club_id={club.pk})",
+                request.user.login_id,
+            )
     except IntegrityError:
         if SignatureChallenge.objects.filter(club=club).exists():
             raise SignatureAlreadyExists()
@@ -143,6 +151,12 @@ def signature_detail(request, signature_id):
                 "signature_id": str(challenge.signature_id),
                 "club_id": str(challenge.club_id),
             }
+            _record_event(
+                AdminEvent.EventType.SIGNATURE_DELETED,
+                f"시그니처 문제 삭제 (signature_id={challenge.pk}, club_id={challenge.club_id})",
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
+            )
             challenge.delete()
             return ok(deleted, message="시그니처 문제 삭제 성공")
 
@@ -150,20 +164,33 @@ def signature_detail(request, signature_id):
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
 
+        changed_fields = []
+        previous_score = challenge.score
         update_fields = ["updated_at"]
         for field in ("title", "description", "score"):
-            if field in values:
+            if field in values and values[field] != getattr(challenge, field):
                 setattr(challenge, field, values[field])
                 update_fields.append(field)
+                changed_fields.append(field)
 
-        if "flag" in values:
+        if "flag" in values and not is_correct_flag(values["flag"], challenge.flag_hash):
             challenge.flag_hash = make_password(values["flag"])
             update_fields.append("flag_hash")
+            changed_fields.append("flag")
 
-        challenge.save(update_fields=update_fields)
-        if "score" in values:
-            SignatureSolve.objects.filter(challenge=challenge).update(
-                earned_score=challenge.score
+        if changed_fields:
+            challenge.save(update_fields=update_fields)
+            details = ", ".join(changed_fields)
+            if "score" in changed_fields:
+                affected_teams = SignatureSolve.objects.filter(challenge=challenge).update(
+                    earned_score=challenge.score
+                )
+                details += f"; score: {previous_score} -> {challenge.score} (풀이 팀 {affected_teams})"
+            _record_event(
+                AdminEvent.EventType.SIGNATURE_UPDATED,
+                f"시그니처 문제 수정 (signature_id={challenge.pk}, club_id={challenge.club_id}): {details}",
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
             )
 
     return ok(
