@@ -65,6 +65,24 @@ def private_payload_storage():
     )
 
 
+def exe_flag_secret(challenge):
+    secret = (
+        RuntimeSecret.objects.filter(challenge=challenge, name="flag")
+        .order_by("-version")
+        .first()
+    )
+    try:
+        if secret is None or not is_correct_flag(
+            decrypt_runtime_secret(secret), challenge.flag_hash
+        ):
+            raise RuntimeSecretUnavailable()
+    except RuntimeSecretUnavailable:
+        raise ExeSubmissionError(
+            "FLAG_NOT_READY", "플래그 주입 설정을 확인해주세요", 503
+        ) from None
+    return secret
+
+
 def validate_executable(payload):
     if not payload or len(payload) > MAX_PAYLOAD_BYTES:
         raise ExeSubmissionError(
@@ -274,20 +292,7 @@ def accept_exe(user, challenge_id, key, uploaded_file):
                 raise ExeSubmissionError(
                     "RELEASE_NOT_READY", "An AMD64 VM release is required.", 409
                 )
-            secret = (
-                RuntimeSecret.objects.filter(challenge=challenge, name="flag")
-                .order_by("-version")
-                .first()
-            )
-            try:
-                if secret is None or not is_correct_flag(
-                    decrypt_runtime_secret(secret), challenge.flag_hash
-                ):
-                    raise RuntimeSecretUnavailable()
-            except RuntimeSecretUnavailable:
-                raise ExeSubmissionError(
-                    "FLAG_NOT_READY", "플래그 주입 설정을 확인해주세요", 503
-                ) from None
+            secret = exe_flag_secret(challenge)
             submission_id = uuid.uuid4()
             storage = private_payload_storage()
             payload_key = storage.save(

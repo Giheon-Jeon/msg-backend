@@ -1,5 +1,7 @@
+import re
 from datetime import timedelta
 from math import ceil
+
 from django.conf import settings
 from django.utils import timezone
 
@@ -29,6 +31,24 @@ def runtime_ready(challenge):
     )
 
 
+def _backend_ready(challenge):
+    from apps.challenge.exe_submissions import (
+        ExeSubmissionError,
+        exe_flag_secret,
+        private_payload_storage,
+    )
+
+    token = settings.SCHEDULER_API_TOKEN
+    if not isinstance(token, str) or not re.fullmatch(r"[\x21-\x7e]+", token):
+        return False
+    try:
+        private_payload_storage()
+        exe_flag_secret(challenge)
+    except (ExeSubmissionError, OSError, ValueError):
+        return False
+    return True
+
+
 def retry_after_seconds(team_id, challenge_id, interval):
     last = (
         ExeSubmission.objects.filter(team_id=team_id, challenge_id=challenge_id)
@@ -53,6 +73,7 @@ def remote_run_data(challenge, team=None):
         and settings.EXE_DISPATCH_ENABLED
         and runtime_ready(challenge)
         and checker_pool_ready()
+        and _backend_ready(challenge)
     )
     available = bool(config.enabled and ready)
     return {
