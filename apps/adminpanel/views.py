@@ -995,6 +995,19 @@ def instance_list(request):
     )
 
 
+def _record_force_failed(request, instance, action, error):
+    # fail 반환은 트랜잭션을 커밋하므로 실패 기록도 같이 남는다.
+    _record_event(
+        AdminEvent.EventType.INSTANCE_FORCED,
+        f"인스턴스 강제 {action} 실패 ({error.code}): {error.message}",
+        request.user.login_id,
+        severity=AdminEvent.Severity.CRITICAL,
+        team=instance.team,
+        challenge=instance.challenge,
+        instance_id=instance.instance_id,
+    )
+
+
 @api_view(["DELETE"])
 @permission_classes([IsAdmin])
 def instance_force_delete(request, instance_id):
@@ -1040,6 +1053,7 @@ def instance_force_delete(request, instance_id):
             else:
                 call_scheduler_delete(instance, scheduler_auth_header(request))
         except SchedulerError as error:
+            _record_force_failed(request, instance, "정리" if cleanup else "종료", error)
             return fail(error.code, error.message, error.status_code)
 
         if not cleanup:
@@ -1109,6 +1123,7 @@ def instance_force_reset(request, instance_id):
                 instance, scheduler_auth_header(request)
             )
         except SchedulerError as error:
+            _record_force_failed(request, instance, "재시작", error)
             return fail(error.code, error.message, error.status_code)
 
         try:
@@ -1121,6 +1136,7 @@ def instance_force_reset(request, instance_id):
                 release=instance.release,
             )
         except SchedulerError as error:
+            _record_force_failed(request, instance, "재시작", error)
             return fail(error.code, error.message, error.status_code)
         mark_instance_replaced(instance)
         _record_event(
