@@ -1,7 +1,7 @@
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.db import connection
+from django.db import DatabaseError, connection
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
@@ -10,6 +10,7 @@ from apps.accounts.models import Role, User
 from apps.adminpanel.models import AdminEvent, ResourceAccountBilling
 from apps.adminpanel.tests import LOCMEM, _target
 from apps.common.jwt import issue_access_token
+from apps.instances.services import SchedulerError
 
 ACCOUNT_ID = _target()["account_id"]
 BILLING = {
@@ -189,3 +190,45 @@ class ResourceAccountBillingTests(TestCase):
                 row = ResourceAccountBilling.objects.get(pk=ACCOUNT_ID)
                 for field in ("credit_total", "spent", "hourly_cost"):
                     self.assertEqual(getattr(row, field), expected)
+
+    def test_broker_failure_preserves_existing_billing_and_audit(self):
+        saved = self.patch_account({"billing": BILLING, "reason": "기존 요금"})
+        self.assertEqual(saved.status_code, 200, saved.data)
+        previous = ResourceAccountBilling.objects.values().get(pk=ACCOUNT_ID)
+        previous_events = list(AdminEvent.objects.values())
+        self.broker.side_effect = SchedulerError(
+            "SCHEDULER_UNAVAILABLE", "Local review fixture failure", 503
+        )
+
+        response = self.patch_account(
+            {"billing": {**BILLING, "spent": 0}, "reason": "갱신 요청"}
+        )
+
+        self.assertEqual(response.status_code, 503, response.data)
+        self.assertEqual(
+            ResourceAccountBilling.objects.values().get(pk=ACCOUNT_ID), previous
+        )
+        self.assertEqual(list(AdminEvent.objects.values()), previous_events)
+
+    def test_audit_failure_rolls_back_billing_creation_and_update(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                if existing:
+                    saved = self.patch_account(
+                        {"billing": BILLING, "reason": "기존 요금"}
+                    )
+                    self.assertEqual(saved.status_code, 200, saved.data)
+                previous = list(ResourceAccountBilling.objects.values())
+                previous_events = list(AdminEvent.objects.values())
+
+                with patch(
+                    "apps.adminpanel.views._record_event",
+                    side_effect=DatabaseError("Local review fixture failure"),
+                ):
+                    response = self.patch_account(
+                        {"billing": {**BILLING, "spent": 0}, "reason": "갱신 요청"}
+                    )
+
+                self.assertEqual(response.status_code, 500, response.data)
+                self.assertEqual(list(ResourceAccountBilling.objects.values()), previous)
+                self.assertEqual(list(AdminEvent.objects.values()), previous_events)

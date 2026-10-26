@@ -2725,10 +2725,10 @@ def _parse_billing(raw):
             or (isinstance(value, float) and not math.isfinite(value))
         ):
             raise InvalidRequest(f"{name} 는 숫자여야 합니다")
-        value = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        value = Decimal(str(value))
         if not (0 <= value <= MAX_BILLING_AMOUNT):
             raise InvalidRequest(f"{name} 는 0 ~ {MAX_BILLING_AMOUNT} 범위여야 합니다")
-        amounts[name] = value
+        amounts[name] = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return {"plan": raw["plan"], "currency": raw["currency"], **amounts}
 
 
