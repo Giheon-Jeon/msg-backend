@@ -10,7 +10,7 @@ from django.utils import timezone
 from apps.challenge.checker_auth import checker_configuration, mint_job_token
 from apps.challenge.exe_submissions import ExeSubmissionError
 from apps.challenge.models import ExeSubmission
-from apps.challenge.windows_assignments import _NoRedirect
+from apps.challenge.windows_assignments import _NoRedirect, refresh_windows_assignment
 
 LEASE_FINISH_MARGIN_SECONDS = 30
 
@@ -72,6 +72,16 @@ def checker_request(row, method):
         ) from None
 
 
+def _readiness_is_fresh(row, now):
+    return (
+        row.vm_readiness == "READY"
+        and bool(row.readiness_check_id)
+        and bool(row.vm_id)
+        and row.readiness_checked_at is not None
+        and 0 <= (now - row.readiness_checked_at).total_seconds() <= 30
+    )
+
+
 def dispatch_submission(submission_id):
     if not settings.EXE_DISPATCH_ENABLED:
         return None
@@ -98,13 +108,12 @@ def dispatch_submission(submission_id):
                 row.last_error_code = "WINDOWS_CONFIG_NOT_READY"
                 row.save(update_fields=["last_error_code", "updated_at"])
                 return row
-            if (
-                row.vm_readiness != "READY"
-                or not row.readiness_check_id
-                or not row.vm_id
-                or not row.readiness_checked_at
-                or not 0 <= (now - row.readiness_checked_at).total_seconds() <= 30
-            ):
+            if not _readiness_is_fresh(row, now):
+                # shortcut: the bounded Scheduler lookup holds this row lock; use a worker lease if contention grows.
+                if not refresh_windows_assignment(row):
+                    return row
+                now = timezone.now()
+            if not _readiness_is_fresh(row, now):
                 row.last_error_code = "WINDOWS_NOT_READY"
                 row.save(update_fields=["last_error_code", "updated_at"])
                 return row

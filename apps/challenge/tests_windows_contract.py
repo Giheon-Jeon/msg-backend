@@ -16,6 +16,7 @@ from apps.challenge.tests_exe_submissions import ExeFixtures
 from apps.challenge.windows_assignments import (
     assign_oldest_exe_submission,
     release_windows_assignment,
+    refresh_windows_assignment,
     request_windows_assignment,
 )
 from apps.instances.services import SchedulerError
@@ -222,6 +223,35 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
             result = request_windows_assignment(row)
         self.assertEqual(str(result["lease_id"]), response["lease_id"])
         self.assertEqual(json.loads(requests[0]["body"])["submission_id"], str(row.pk))
+
+    def test_same_assignment_post_refreshes_guest_proof_with_identical_body(self):
+        row = self.accepted()
+        initial = {**self.assignment(row), "vm_readiness": "UNKNOWN"}
+        ready = {
+            **initial,
+            "vm_readiness": "READY",
+            "vm_id": "fixture-vm",
+            "readiness_check_id": "fresh-proof",
+            "readiness_checked_at": timezone.now().isoformat(),
+        }
+        with self.scheduler(
+            [
+                (201, {"code": "SUCCESS", "data": initial}),
+                (200, {"code": "SUCCESS", "data": ready}),
+            ]
+        ) as requests:
+            assigned = assign_oldest_exe_submission()
+            self.assertEqual(assigned.vm_readiness, "UNKNOWN")
+            self.assertTrue(refresh_windows_assignment(assigned))
+        self.assertEqual(requests[0], requests[1])
+        assigned.refresh_from_db()
+        self.assertEqual(assigned.pk, row.pk)
+        self.assertEqual(str(assigned.lease_id), initial["lease_id"])
+        self.assertEqual(str(assigned.worker_id), initial["worker_id"])
+        self.assertEqual(assigned.vm_readiness, "READY")
+        self.assertEqual(assigned.readiness_check_id, "fresh-proof")
+        self.assertEqual(assigned.dispatch_state, "PENDING")
+        self.assertEqual(ExeSubmission.objects.count(), 1)
 
     def test_lost_release_ack_preserves_payload_and_retries_same_lease(self):
         row = self.accepted()

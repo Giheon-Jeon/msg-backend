@@ -3,19 +3,23 @@
   "info": {
     "title": "Windows assignment consumer contract",
     "version": "1.0.0-draft",
-    "description": "Backend consumer requirements, not an implemented Scheduler API. Scheduler reserves and checks readiness; Backend calls the Runtime checker directly. Azure Windows pools, guest readiness and the checker are pending. Broker complete queues recreation and is not proof that the guest was reset."
+    "description": "Backend consumer requirements. Scheduler PR #81 implements assignment/release but deployment, Azure Windows pools, guest readiness evidence and the checker remain pending. Backend calls the Runtime checker directly. Broker complete queues recreation and is not proof that the guest was reset."
   },
   "security": [{"scheduler_service": []}],
   "paths": {
     "/api/windows-assignments": {
       "post": {
         "operationId": "reserve_windows_assignment",
-        "description": "Persist submission_id with team_id, challenge_id, release_id and payload_sha256 before reserving a Broker worker. Replay the same binding; reject a different body. Use submission_id as the Broker Idempotency-Key. Do not call the checker here. A Broker READY value alone is not guest readiness proof.",
+        "description": "Persist submission_id with team_id, challenge_id, release_id and payload_sha256 before reserving a Broker worker. Replay the same binding; reject a different body. Use submission_id as the Broker Idempotency-Key. Backend replays the identical POST to refresh missing or stale guest evidence for ASSIGNED jobs that have never been dispatched. Return the same lease_id and worker_id with current evidence; a known vm_id cannot change. Ended/expired assignments return WINDOWS_ASSIGNMENT_ENDED without an address. Do not call the checker here. A Broker READY value alone is not guest readiness proof.",
         "requestBody": {
           "required": true,
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AssignmentRequest"}}}
         },
         "responses": {
+          "201": {
+            "description": "New assignment. Backend accepts the same response shape as replay; creation does not prove guest readiness.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
+          },
           "200": {
             "description": "A reserved assignment or replay. Raw response and code=SUCCESS/data envelope are accepted by Backend. An explicitly ended status never authorizes execution.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
@@ -32,6 +36,10 @@
         "description": "Empty request body. Translate to the Broker complete API using the same lease_id. This acknowledges the reservation return, not completion of VM recreation. Never expose a recreating worker to another job. Backend requires both a RESULT and a separate accepted CLEANUP(cleanup_complete=true) report before this call. A RESULT cleanup hint alone is insufficient.",
         "parameters": [{"name": "lease_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {
+          "202": {
+            "description": "Return accepted with the exact lease_id and COMPLETED or EXPIRED status. Not VM reset completion.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReleaseAcknowledgement"}}}
+          },
           "200": {
             "description": "Idempotent acknowledgement with the exact lease_id. Raw response and code=SUCCESS/data envelope are accepted.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReleaseAcknowledgement"}}}

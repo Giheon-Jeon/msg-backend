@@ -172,6 +172,12 @@ def request_windows_assignment(submission):
         raise SchedulerError(
             "WINDOWS_ASSIGNMENT_ENDED", "Windows assignment has already ended.", 409
         )
+    if submission.lease_id is not None and (
+        lease_id != submission.lease_id or worker_id != submission.worker_id
+    ):
+        raise SchedulerError(
+            "WINDOWS_ASSIGNMENT_CONFLICT", "Windows assignment binding changed.", 409
+        )
     fields = {
         "lease_id": lease_id,
         "worker_id": worker_id,
@@ -205,7 +211,53 @@ def request_windows_assignment(submission):
             raise SchedulerError(
                 "SCHEDULER_UNAVAILABLE", "Guest readiness proof is required.", 503
             ) from None
+        if submission.vm_id and fields["vm_id"] != submission.vm_id:
+            raise SchedulerError(
+                "WINDOWS_ASSIGNMENT_CONFLICT", "Windows guest binding changed.", 409
+            )
     return fields
+
+
+def refresh_windows_assignment(submission):
+    """Refresh a never-dispatched assignment while its dispatch row is locked."""
+    try:
+        if submission.lease_id is None or submission.worker_id is None:
+            raise SchedulerError(
+                "WINDOWS_ASSIGNMENT_CONFLICT",
+                "Windows assignment binding is missing.",
+                409,
+            )
+        assignment = request_windows_assignment(submission)
+    except SchedulerError as error:
+        submission.last_error_code = error.code
+        submission.vm_readiness = "UNKNOWN"
+        submission.readiness_check_id = ""
+        submission.readiness_checked_at = None
+        if error.code in {"WINDOWS_ASSIGNMENT_ENDED", "WINDOWS_ASSIGNMENT_CONFLICT"}:
+            submission.status = ExeSubmission.Status.START_UNKNOWN
+        submission.save(
+            update_fields=[
+                "last_error_code",
+                "vm_readiness",
+                "readiness_check_id",
+                "readiness_checked_at",
+                "status",
+                "updated_at",
+            ]
+        )
+        return False
+    # A readiness lookup cannot extend the existing lease or replace its VM.
+    if submission.lease_expires_at:
+        assignment["lease_expires_at"] = min(
+            submission.lease_expires_at, assignment["lease_expires_at"]
+        )
+    if assignment["vm_readiness"] != "READY":
+        assignment.update(readiness_check_id="", readiness_checked_at=None)
+    for field, value in assignment.items():
+        setattr(submission, field, value)
+    submission.last_error_code = ""
+    submission.save(update_fields=[*assignment, "last_error_code", "updated_at"])
+    return True
 
 
 def assign_oldest_exe_submission():

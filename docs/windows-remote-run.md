@@ -75,6 +75,24 @@ POST 응답을 잃거나 전송 중 워커가 재시작되면 같은 작업의 G
 체커의 GET은 접수 확인에 사용한다 최종 결과와 정리는 callback으로 보고해야 한다
 실행 여부가 끝내 불명확하면 새 접수와 자동 반납을 막고 운영자가 실제 이력을 확인한다
 
+### 배정 후 준비 증거 갱신
+
+아직 체커에 보내지 않은 ASSIGNED·dispatch_state=PENDING 작업에서 준비 증거가 없거나
+30초를 넘으면 기존 POST /api/windows-assignments를 같은 submission_id·본문으로 다시 호출한다
+별도 준비 상태 조회 API를 가정하지 않는다 유효한 READY 증거가 이미 있으면 추가 호출은 생략한다
+
+- 응답은 원래 lease_id·worker_id와 같아야 한다 이미 확인한 vm_id도 바꿀 수 없다
+- READY이면 실제 수신한 readiness_check_id·readiness_checked_at을 저장한다 조회 시각으로 증거 시각을 새로 만들지 않는다
+- UNKNOWN·NOT_READY 또는 통신 실패이면 이전 준비 증거를 무효화하고 같은 배정을 유지한 채 다음 워커 실행에서 재조회한다
+- 조회로 기존 임대 만료 시각을 연장하지 않는다 실행 제한 시간과 반납 여유가 부족하면 실행하지 않는다
+- WINDOWS_ASSIGNMENT_ENDED·WINDOWS_ASSIGNMENT_CONFLICT나 배정/VM 식별자 변경은 START_UNKNOWN으로 보류한다 파일·예약을 보존하며 새 submission_id·VM으로 자동 재실행하지 않는다
+- 체커로 전송한 이력이 있으면 Scheduler 준비 재조회와 체커 POST를 하지 않는다 기존 체커 GET 복구만 유지한다
+
+준비 재조회는 다른 워커의 실행 요청과 겹치지 않도록 해당 제출 행 잠금 안에서 제한 시간 있는
+Scheduler 호출을 수행한다 대회 규모에서 잠금 대기가 문제가 되면 별도 워커 lease로 전환한다
+현재 Scheduler #81은 vm_readiness=UNKNOWN만 제공하며 Broker·Runtime의 게스트 증거 연결은 별도 구현 대기다
+따라서 이 보완은 실제 Windows 실행·준비 증거 생성 완료를 의미하지 않으며 실행 설정의 기본값은 바꾸지 않는다
+
 ## 운영 설정
 
 EXE_CHECKERS_JSON의 키는 브로커 worker UUID다 각 값에는 다음 항목을 등록한다
@@ -110,7 +128,8 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 challenge.0011_exesubmission_cleanup_confirmed_at을 배포 전에 적용한다 이 migration은 nullable 확인 시각만 추가하며 데이터나 파일을 삭제하지 않는다
 기존 cleanup_complete=true 값이나 과거 이벤트의 해시만으로 별도 CLEANUP 완료 보고를 추정해 채우지 않는다
 확인 시각 없는 기존 작업은 자동 반납·파일 삭제를 보류한다 유효한 새 CLEANUP 완료 보고 또는 운영자 확인이 필요하며 기존 이벤트 ID 재생만으로 확인 시각을 만들지 않는다
-체커 인증 경계와 준비 정보 갱신·임대 만료·VM 초기화 상태 반영은 별도 계약 대기이며 이 보완에서 변경하지 않는다
+체커 인증 경계와 실제 준비 증거 생성·임대 만료·VM 초기화 통지는 별도 계약 대기다
+배정 재조회로 준비 증거를 갱신하는 Backend 경로만 위 절과 같이 연결한다
 
 ## 실제 제공 구현과 남은 연결
 
@@ -118,7 +137,7 @@ challenge.0011_exesubmission_cleanup_confirmed_at을 배포 전에 적용한다 
 
 | 구간 | 확인한 구현 | 남은 작업 |
 | --- | --- | --- |
-| 백엔드 → 스케줄러 | 이 PR의 /api/windows-assignments 호출 | 스케줄러 dev에는 이 경로가 없다 배정·준비 확인·반납 API 구현 필요 |
+| 백엔드 → 스케줄러 | 이 PR의 /api/windows-assignments 호출과 Scheduler #81의 배정·반납 구현 | 실제 배포·연동 확인과 게스트 준비 증거 전달은 대기 중이다 |
 | 스케줄러 → 브로커 | 브로커의 /v1/windows-worker-leases와 /{lease_id}/complete | submission_id를 Idempotency-Key로 전달하고 팀·release·파일 해시는 스케줄러가 고정해야 한다 |
 | 브로커 → Windows | 현재 Windows 풀은 GCP zonal MIG 기반 | Azure VM용 등록·배정·복구 경로를 추가해야 한다 일반 Azure VM 어댑터만으로 연결된 것으로 보지 않는다 |
 | 준비 확인 | 브로커 READY는 MIG의 RUNNING·NONE·HEALTHY와 IP로 판정 | 런타임의 게스트·드라이버 점검 결과를 별도로 받아야 한다 READY를 그대로 vm_readiness로 복사하지 않는다 |
