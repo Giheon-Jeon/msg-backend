@@ -2197,51 +2197,62 @@ def _team_delete(request, team_id):
 
     # 동적 점수 재계산까지 한 트랜잭션에서 끝낸다. 커밋 뒤에 따로 돌리면 도중에 끊길 때
     # 팀만 지워지고 문제·다른 팀 점수는 옛 값으로 남는다.
-    with transaction.atomic():
-        # 플래그 제출과 같은 문제 → 팀 순서로 잠근다.
+    while True:
         try:
-            prelocked = list(
+            prelocked = set(
                 Solve.objects.filter(team_id=team_id).values_list(
                     "challenge_id", flat=True
                 )
             )
         except ValidationError:
-            prelocked = []
-        _lock_challenges(prelocked)
-        team = _get_team_for_update(team_id)
-        # 인스턴스 행만 지우면 스케줄러의 컨테이너가 고아로 남는다.
-        if Instance.objects.filter(
-            team=team, status__in=TEAM_BLOCKING_INSTANCE_STATUSES
-        ).exists():
-            return fail(
-                "ACTIVE_INSTANCE_EXISTS", "팀의 인스턴스를 먼저 종료해야 합니다", 409
+            prelocked = set()
+        with transaction.atomic():
+            # 플래그 제출과 같은 문제 → 팀 순서로 잠근다.
+            challenges = _lock_challenges(prelocked)
+            team = _get_team_for_update(team_id)
+            # 인스턴스 행만 지우면 스케줄러의 컨테이너가 고아로 남는다.
+            if Instance.objects.filter(
+                team=team, status__in=TEAM_BLOCKING_INSTANCE_STATUSES
+            ).exists():
+                return fail(
+                    "ACTIVE_INSTANCE_EXISTS", "팀의 인스턴스를 먼저 종료해야 합니다", 409
+                )
+
+            # 읽은 뒤 팀을 잠그기 전에 새로 푼 문제가 있으면, 팀을 쥔 채 그 문제를 잠그면
+            # 순서가 뒤집혀 정답 처리와 교착한다. 잠금을 풀고 처음부터 다시 잡는다.
+            # 다시 시작하려면 이 팀이 새 문제를 풀어야 하므로 반복은 문제 수를 넘지 않는다.
+            solved = set(
+                Solve.objects.filter(team=team).values_list("challenge_id", flat=True)
+            )
+            if not solved <= prelocked:
+                continue
+
+            member_count = User.objects.filter(team=team).count()
+            deleted_id, deleted_name = str(team.team_id), team.team_name
+            team.delete()
+            _record_event(
+                AdminEvent.EventType.TEAM_DELETED,
+                f"팀 삭제: {deleted_name} ({deleted_id}), 계정 {member_count}개와 기록 함께 삭제: {reason}",
+                request.user.login_id,
+                severity=AdminEvent.Severity.CRITICAL,
+                deleted_team=(deleted_id, deleted_name),
             )
 
-        # 먼저 읽은 뒤 팀을 잠그기 전까지 새로 푼 문제가 있을 수 있어 다시 읽는다.
-        challenges = _lock_challenges(
-            Solve.objects.filter(team=team).values_list("challenge_id", flat=True)
-        )
-        member_count = User.objects.filter(team=team).count()
-        deleted_id, deleted_name = str(team.team_id), team.team_name
-        team.delete()
-        _record_event(
-            AdminEvent.EventType.TEAM_DELETED,
-            f"팀 삭제: {deleted_name} ({deleted_id}), 계정 {member_count}개와 기록 함께 삭제: {reason}",
-            request.user.login_id,
-            severity=AdminEvent.Severity.CRITICAL,
-            deleted_team=(deleted_id, deleted_name),
-        )
-
-        # 문제마다 따로 잠그면 팀 잠금 순서가 섞이므로 영향받는 팀을 한 번에 PK 순으로 잠근다.
-        list(
-            Team.objects.filter(
-                pk__in=Solve.objects.filter(challenge__in=challenges).values("team_id")
+            # 문제마다 따로 잠그면 팀 잠금 순서가 섞이므로 영향받는 팀을 한 번에 PK 순으로 잠근다.
+            list(
+                Team.objects.filter(
+                    pk__in=Solve.objects.filter(challenge__in=challenges).values(
+                        "team_id"
+                    )
+                )
+                .select_for_update(no_key=True)
+                .order_by("pk")
             )
-            .select_for_update(no_key=True)
-            .order_by("pk")
-        )
-        for challenge in challenges:
-            update_dynamic_score_and_team_scores(challenge, teams_already_locked=True)
+            for challenge in challenges:
+                update_dynamic_score_and_team_scores(
+                    challenge, teams_already_locked=True
+                )
+        break
 
     return ok(
         {
