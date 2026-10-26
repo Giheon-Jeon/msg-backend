@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -68,7 +69,10 @@ class TerminalInstanceStatusTests(TestCase):
     @patch("apps.instances.views.call_scheduler_active", side_effect=SchedulerError("INSTANCE_NOT_FOUND", "absent", 404))
     @patch("apps.instances.views.call_scheduler_detail")
     def test_newer_stopping_instance_hides_an_older_failure(self, detail, active):
-        self.instance()
+        older = self.instance()
+        Instance.objects.filter(pk=older.pk).update(
+            created_at=timezone.now() - timedelta(seconds=1)
+        )
         stopping = self.instance(status=InstanceStatus.STOPPING, delete_reason=DeleteReason.USER_REQUESTED)
         detail.return_value = {"status": "STOPPING"}
         response = self.request()
