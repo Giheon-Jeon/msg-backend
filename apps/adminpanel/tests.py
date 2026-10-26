@@ -509,6 +509,7 @@ class AdminTests(TestCase):
                 "is_leader",
                 "team_id",
                 "team_name",
+                "koth_division",
                 "created_at",
             },
         )
@@ -1057,6 +1058,28 @@ class AdminTests(TestCase):
         team = Team.objects.get(team_name="새로운팀")
         self.assertEqual(str(team.team_id), d["team_id"])
         self.assertEqual(team.mileage, 0)
+
+    def test_account_create_can_set_koth_division_for_new_team(self):
+        self.auth("root")
+        res = self.client.post(
+            "/api/v1/admin/accounts",
+            {
+                "login_id": "internal-team",
+                "password": "pw12345678",
+                "nickname": "내부팀장",
+                "team_name": "내부팀",
+                "koth_division": "INTERNAL",
+                "is_leader": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["koth_division"], "INTERNAL")
+        self.assertEqual(
+            Team.objects.get(team_name="내부팀").koth_division,
+            Team.KothDivision.INTERNAL,
+        )
 
     def test_account_create_duplicate_team_name(self):
         self.auth("root")
@@ -2544,6 +2567,8 @@ class AdminSettingsTests(TestCase):
             {"board": {"dice_rolls_per_reset": 21}},
             {"board": {"dice_reset_interval_minutes": 1441}},
             {"board": {"solve_deadline_minutes": 181}},
+            {"board": {"line_bonus_percent": -1}},
+            {"board": {"line_category_bonus_percent": 101}},
             {"flag": {"max_attempts": 11}},
             {"flag": {"lock_seconds": 3601}},
         ]:
@@ -2734,6 +2759,8 @@ class AdminSettingsTests(TestCase):
                 "dice_rolls_per_reset",
                 "dice_reset_interval_minutes",
                 "solve_deadline_minutes",
+                "line_bonus_percent",
+                "line_category_bonus_percent",
             },
         )
         self.assertEqual(set(d["flag"]), {"max_attempts", "lock_seconds"})
@@ -3259,6 +3286,77 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(event.actor, "root")
         self.assertIn("플래그 공유", event.message)
 
+    @patch("apps.adminpanel.views.call_scheduler_delete")
+    def test_ban_stops_running_instances_of_team(self, mock_delete):
+        """정지된 팀의 실행 중 인스턴스는 강제 종료한다 (QA TC-61)."""
+        from apps.adminpanel.models import AdminEvent
+
+        running = self.instance()
+        other_team = Team.objects.create(team_name="다른 팀")
+        outsider = Instance.objects.create(
+            user=User.objects.create_user(
+                login_id="outsider", password="pw1234", nickname="밖", team=other_team
+            ),
+            team=other_team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+        )
+
+        res = self.client.post(
+            f"/api/v1/admin/teams/{self.team.team_id}/ban",
+            {"ban_reason": "플래그 공유"},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["stopped_instance_count"], 1)
+        self.assertEqual(res.data["data"]["remaining_instance_count"], 0)
+        mock_delete.assert_called_once()
+        running.refresh_from_db()
+        self.assertEqual(running.status, InstanceStatus.STOPPING)
+        self.assertEqual(running.delete_reason, DeleteReason.ADMIN_FORCED)
+        outsider.refresh_from_db()
+        self.assertEqual(outsider.status, InstanceStatus.RUNNING)
+        event = self.only_event(AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(event.severity, AdminEvent.Severity.WARNING)
+        self.assertEqual(event.instance_id, running.instance_id)
+
+    @patch("apps.adminpanel.views.call_scheduler_delete")
+    def test_ban_keeps_ban_when_instances_cannot_be_stopped(self, mock_delete):
+        """종료가 실패하거나 종료할 수 없는 상태여도 정지는 유지하고 CRITICAL 로 남긴다."""
+        from apps.adminpanel.models import AdminEvent
+        from apps.instances.services import SchedulerError
+
+        mock_delete.side_effect = SchedulerError(
+            "SCHEDULER_UNAVAILABLE", "스케줄러에 연결할 수 없습니다", 503
+        )
+        failing = self.instance()
+        provisioning = self.instance(status=InstanceStatus.PROVISIONING)
+
+        res = self.client.post(
+            f"/api/v1/admin/teams/{self.team.team_id}/ban",
+            {"ban_reason": "플래그 공유"},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["stopped_instance_count"], 0)
+        self.assertEqual(res.data["data"]["remaining_instance_count"], 2)
+        self.team.refresh_from_db()
+        self.assertTrue(self.team.is_banned)
+        for instance in (failing, provisioning):
+            instance.refresh_from_db()
+        self.assertEqual(failing.status, InstanceStatus.RUNNING)
+        self.assertEqual(provisioning.status, InstanceStatus.PROVISIONING)
+        events = self.events(AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(
+            {(e.instance_id, e.severity) for e in events},
+            {
+                (failing.instance_id, AdminEvent.Severity.CRITICAL),
+                (provisioning.instance_id, AdminEvent.Severity.CRITICAL),
+            },
+        )
+
     def test_unban_records_event_with_previous_reason(self):
         from apps.adminpanel.models import AdminEvent
 
@@ -3358,8 +3456,9 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(event.challenge_id, self.challenge.challenge_id)
 
     @patch("apps.adminpanel.views.call_scheduler_delete")
-    def test_force_delete_scheduler_failure_leaves_no_event(self, mock_delete):
-        """스케줄러 실패는 예외가 아니라 fail 반환이라 트랜잭션이 커밋된다. 그래도 이벤트는 없어야 한다."""
+    def test_force_delete_scheduler_failure_records_critical_event(self, mock_delete):
+        """스케줄러 실패는 fail 반환이라 트랜잭션이 커밋된다. 성공 기록 대신 CRITICAL 실패 기록만 남는다."""
+        from apps.adminpanel.models import AdminEvent
         from apps.instances.services import SchedulerError
 
         mock_delete.side_effect = SchedulerError(
@@ -3370,7 +3469,11 @@ class AdminEventRecordingTests(TestCase):
         res = self.client.delete(f"/api/v1/admin/instances/{inst.instance_id}")
 
         self.assertEqual(res.status_code, 503)
-        self.assertEqual(self.events(), [])
+        [event] = self.events()
+        self.assertEqual(event.type, AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
+        self.assertEqual(event.instance_id, inst.instance_id)
+        self.assertIn("SCHEDULER_UNAVAILABLE", event.message)
 
     @patch("apps.adminpanel.views.call_scheduler_reset")
     def test_force_reset_records_new_instance_id(self, mock_reset):
@@ -3425,7 +3528,8 @@ class AdminEventRecordingTests(TestCase):
         self.assertIn("flag.max_attempts=5", event.message)
 
     @patch("apps.adminpanel.views.call_scheduler_reset")
-    def test_force_reset_scheduler_failure_leaves_no_event(self, mock_reset):
+    def test_force_reset_scheduler_failure_records_critical_event(self, mock_reset):
+        from apps.adminpanel.models import AdminEvent
         from apps.instances.services import SchedulerError
 
         mock_reset.side_effect = SchedulerError(
@@ -3436,7 +3540,10 @@ class AdminEventRecordingTests(TestCase):
         res = self.client.post(f"/api/v1/admin/instances/{old.instance_id}/reset")
 
         self.assertEqual(res.status_code, 503)
-        self.assertEqual(self.events(), [])
+        [event] = self.events()
+        self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
+        self.assertEqual(event.instance_id, old.instance_id)
+        self.assertIn("재시작 실패", event.message)
 
     def test_failed_unban_leaves_no_event(self):
         res = self.client.delete(f"/api/v1/admin/teams/{self.team.team_id}/ban")
@@ -4442,6 +4549,25 @@ class AdminTeamManageTests(TestCase):
         self.assertIn("감자는외로워 → 감자전", event.message)
         self.assertEqual(event.team_id, self.team.team_id)
 
+    def test_change_koth_division(self):
+        res = self.patch(
+            {"koth_division": "INTERNAL", "reason": "교내 참가팀 확인"}
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["koth_division"], "INTERNAL")
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.koth_division, Team.KothDivision.INTERNAL)
+        [event] = self.events("TEAM_UPDATED")
+        self.assertIn("KOTH 구분 EXTERNAL → INTERNAL", event.message)
+
+    def test_rejects_invalid_koth_division(self):
+        res = self.patch({"koth_division": "UNKNOWN", "reason": "x"})
+
+        self.assertEqual(res.status_code, 400)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.koth_division, Team.KothDivision.EXTERNAL)
+
     def test_rename_to_taken_name_is_409(self):
         res = self.patch({"team_name": "고구마", "reason": "x"})
         self.assertEqual(res.status_code, 409)
@@ -4642,15 +4768,98 @@ class AdminTeamManageTests(TestCase):
             score=100,
             flag_hash="x",
         )
-        Instance.objects.create(
+        instance = Instance.objects.create(
             user=self.member,
             team=self.team,
             challenge=challenge,
             status=InstanceStatus.RUNNING,
         )
-        res = self.delete({"reason": "정리"})
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+        # 종료 중 · 정리 대기도 스케줄러에 컨테이너가 남아 있을 수 있다.
+        for status in (
+            InstanceStatus.RUNNING,
+            InstanceStatus.STOPPING,
+            InstanceStatus.CLEANUP_PENDING,
+        ):
+            with self.subTest(status=status):
+                Instance.objects.filter(pk=instance.pk).update(status=status)
+                res = self.delete({"reason": "정리"})
+                self.assertEqual(res.status_code, 409)
+                self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+                self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
+                self.assertEqual(self.events("TEAM_DELETED"), [])
+
+    def test_delete_restarts_when_solve_appears_before_team_lock(self):
+        """팀을 쥔 채 새 문제를 잠그면 정답 처리(문제 → 팀)와 교착한다. 처음부터 다시 잡아야 한다."""
+        from apps.adminpanel import views
+
+        first, late = [
+            Challenge.objects.create(
+                title=title,
+                category="WEB",
+                difficulty="EASY",
+                score=500,
+                flag_hash="x",
+                initial_score=500,
+                minimum_score=100,
+                decay=1,
+            )
+            for title in ("먼저 푼 문제", "나중에 푼 문제")
+        ]
+        Solve.objects.create(
+            team=self.team, challenge=first, earned_score=500, earned_mileage=0
+        )
+        calls = []
+        lock_challenges, lock_team = views._lock_challenges, views._get_team_for_update
+
+        def record_challenges(ids):
+            calls.append(("challenges", set(ids)))
+            return lock_challenges(ids)
+
+        def record_team(team_id):
+            if not any(name == "team" for name, _ in calls):
+                # 문제 목록을 읽은 뒤 팀을 잠그기 전에 정답이 하나 더 커밋된 상황
+                Solve.objects.create(
+                    team=self.team, challenge=late, earned_score=500, earned_mileage=0
+                )
+            calls.append(("team", None))
+            return lock_team(team_id)
+
+        with patch.object(views, "_lock_challenges", record_challenges), patch.object(
+            views, "_get_team_for_update", record_team
+        ):
+            res = self.delete({"reason": "정리"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            calls,
+            [
+                ("challenges", {first.pk}),
+                ("team", None),
+                ("challenges", {first.pk, late.pk}),
+                ("team", None),
+            ],
+        )
+        self.assertFalse(Team.objects.filter(pk=self.team.pk).exists())
+
+    def test_delete_rolls_back_when_score_recalculation_fails(self):
+        """재계산이 도중에 끊기면 팀 삭제도 남지 않아야 다시 시도할 수 있다."""
+        challenge = Challenge.objects.create(
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+        )
+        Solve.objects.create(
+            team=self.team, challenge=challenge, earned_score=500, earned_mileage=0
+        )
+        with patch(
+            "apps.adminpanel.views.update_dynamic_score_and_team_scores",
+            side_effect=RuntimeError("중단"),
+        ):
+            res = self.delete({"reason": "정리"})
+
+        self.assertEqual(res.status_code, 500)
         self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
         self.assertEqual(self.events("TEAM_DELETED"), [])
 
@@ -5135,11 +5344,12 @@ class AdminLineMonopolyTests(TestCase):
 
     def test_score_accepts_upper_storage_boundary(self):
         monopoly = self.monopolize()
-        res = self.patch({"earned_score": 9999999999.99, "reason": "보정"})
+        # JSON 실수는 이 자릿수의 소수를 담지 못해 정수로 경계를 확인한다.
+        res = self.patch({"earned_score": 999_999_999_999_999_999, "reason": "보정"})
 
         self.assertEqual(res.status_code, 200)
         monopoly.refresh_from_db()
-        self.assertEqual(monopoly.earned_score, Decimal("9999999999.99"))
+        self.assertEqual(monopoly.earned_score, Decimal("999999999999999999.00"))
 
     def test_line_not_monopolized_by_team_is_rejected(self):
         self.monopolize(line_number=2)
@@ -5161,7 +5371,8 @@ class AdminLineMonopolyTests(TestCase):
             ({"earned_score": "10", "reason": "보정"}, "3"),
             ({"earned_score": -1, "reason": "보정"}, "3"),
             ({"earned_score": -0.001, "reason": "보정"}, "3"),
-            ({"earned_score": 1e13, "reason": "보정"}, "3"),
+            ({"earned_score": 10**18, "reason": "보정"}, "3"),
+            ({"earned_score": 1e19, "reason": "보정"}, "3"),
             ({"earned_score": 10**100, "reason": "보정"}, "3"),
             ({"earned_score": 1e100, "reason": "보정"}, "3"),
             ({"earned_score": -1e100, "reason": "보정"}, "3"),

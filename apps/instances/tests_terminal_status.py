@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -22,7 +23,13 @@ class TerminalInstanceStatusTests(TestCase):
                       host="https://old.example", ports=[8080],
                       endpoints=instance_tests.ENDPOINTS, expires_at=timezone.now())
         values.update(overrides)
-        return Instance.objects.create(**values)
+        instance = Instance.objects.create(**values)
+        self.history_created_at = getattr(
+            self, "history_created_at", timezone.now() - timedelta(days=1)
+        ) + timedelta(seconds=1)
+        Instance.objects.filter(pk=instance.pk).update(created_at=self.history_created_at)
+        instance.created_at = self.history_created_at
+        return instance
 
     def request(self, challenge=None):
         return self.client.get("/api/v1/teams/me/instances", {"challenge_id": str(challenge or self.challenge.pk)})

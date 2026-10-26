@@ -3,12 +3,15 @@ import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 
+from django.contrib.postgres.expressions import ArraySubquery
 from django.db import transaction
-from django.db.models import Count, Exists, F, OuterRef, Q, Subquery
+from django.db.models import CharField, Count, Exists, F, OuterRef, Q, Subquery
+from django.db.models.functions import Cast, JSONObject
 from django.utils import timezone
 
 from apps.accounts.models import Team
 from apps.adminpanel.models import setting_subquery, setting_values
+from apps.ranking.models import LineMonopoly
 from apps.teams.models import MileageHistory, MileageType
 
 from .exceptions import (
@@ -110,6 +113,7 @@ def _board_state_read_queryset(
     include_completion=False,
     include_pending=False,
     include_cards=False,
+    include_line_monopolies=False,
     dice_request_user=None,
 ):
     # 조회 경로의 충전 판단에 쓴다. 같은 쿼리에 붙여 조회 횟수를 늘리지 않는다.
@@ -145,6 +149,20 @@ def _board_state_read_queryset(
             TeamChanceCard.objects.filter(
                 team_id=OuterRef("team_id"),
                 card_id__in=ChanceCard.CardId.values,
+            )
+        )
+    if include_line_monopolies:
+        # 실제 지급된 값을 보여준다. 관리자 수정·정답 회수도 그대로 반영된다.
+        # JSON 숫자로 넘기면 읽을 때 float 가 되어 큰 정수의 자릿수가 사라지므로 문자열로 넘긴다.
+        annotations["line_monopolies"] = ArraySubquery(
+            LineMonopoly.objects.filter(team_id=OuterRef("team_id"))
+            .order_by("line_number")
+            .values(
+                json=JSONObject(
+                    line_number="line_number",
+                    earned_score=Cast("earned_score", CharField()),
+                    is_category_bonus="is_category_bonus",
+                )
             )
         )
     return _board_state_queryset().annotate(**annotations)
@@ -187,6 +205,7 @@ def get_board_state_for_read(
     include_completion=False,
     include_pending=False,
     include_cards=False,
+    include_line_monopolies=False,
     dice_request_user=None,
 ):
     """Avoid a write transaction when a read cannot change recharge state."""
@@ -194,6 +213,7 @@ def get_board_state_for_read(
         include_completion=include_completion,
         include_pending=include_pending,
         include_cards=include_cards,
+        include_line_monopolies=include_line_monopolies,
         dice_request_user=dice_request_user,
     )
     state = read_states.filter(team=team).first()

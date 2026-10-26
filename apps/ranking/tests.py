@@ -417,3 +417,74 @@ class MemberRankingAPITest(APITestCase):
                 "last_solved_at",
             },
         )
+
+class TeamRankingCategoryScoresAPITest(APITestCase):
+
+    URL = "/api/v1/ranking"
+
+    def setUp(self):
+        self.team = Team.objects.create(team_name="알파")
+        self.other = Team.objects.create(team_name="브라보")
+        self.user = User.objects.create_user(
+            login_id="me", password="pw", nickname="나", team=self.team
+        )
+
+    def solve(self, team, name, category, score):
+        challenge = Challenge.objects.create(
+            title=name,
+            category=category,
+            difficulty="EASY",
+            score=Decimal(score),
+            current_score=Decimal(score),
+            flag_hash=f"hash_{name}",
+            is_published=True,
+        )
+        Solve.objects.create(
+            team=team,
+            challenge=challenge,
+            earned_score=Decimal(score),
+            earned_mileage=100,
+        )
+        return challenge
+
+    def rows_by_name(self, **params):
+        auth(self.client, self.user)
+        res = self.client.get(self.URL, params)
+        self.assertEqual(res.status_code, 200)
+        return {row["team_name"]: row for row in res.data["data"]["rankings"]}
+
+    def test_category_scores_sum_current_score_per_category(self):
+        self.solve(self.team, "웹1", "WEB", "500")
+        web2 = self.solve(self.team, "웹2", "WEB", "300")
+        self.solve(self.team, "포렌식", "FORENSIC", "200")
+        Challenge.objects.filter(pk=web2.pk).update(current_score=Decimal("250.5"))
+
+        rows = self.rows_by_name()
+
+        alpha = rows["알파"]["category_scores"]
+        self.assertEqual(alpha["WEB"], 750.5)
+        self.assertEqual(alpha["FORENSIC"], 200)
+        self.assertEqual(sum(alpha.values()), rows["알파"]["team_score"])
+
+    def test_every_category_is_present_with_zero_default(self):
+        rows = self.rows_by_name()
+
+        self.assertEqual(
+            rows["브라보"]["category_scores"],
+            {category: 0 for category in Challenge.CategoryType.values},
+        )
+
+    def test_category_scores_only_count_own_team(self):
+        self.solve(self.other, "남의문제", "PWN", "1000")
+
+        rows = self.rows_by_name()
+
+        self.assertEqual(rows["알파"]["category_scores"]["PWN"], 0)
+        self.assertEqual(rows["브라보"]["category_scores"]["PWN"], 1000)
+
+    def test_category_scores_follow_pagination(self):
+        self.solve(self.other, "남의문제", "PWN", "1000")
+
+        rows = self.rows_by_name(page=2, size=1)
+
+        self.assertEqual(list(rows), ["알파"])

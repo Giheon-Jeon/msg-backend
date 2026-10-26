@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class InstanceStatus(models.TextChoices):
@@ -211,6 +212,42 @@ class ChallengeRelease(models.Model):
         return f"{self.challenge_id} v{self.version}"
 
 
+class ImagePreparationRequest(models.Model):
+    class DeliveryStatus(models.TextChoices):
+        PENDING = "PENDING"
+        SENDING = "SENDING"
+        ACCEPTED = "ACCEPTED"
+        UNKNOWN = "UNKNOWN"
+        REJECTED = "REJECTED"
+        CONFLICT = "CONFLICT"
+
+    request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    release = models.ForeignKey(ChallengeRelease, on_delete=models.PROTECT, related_name="image_preparations")
+    parent = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True, related_name="retries")
+    auto_key = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    runtime_origin = models.CharField(max_length=512)
+    spec = models.JSONField(default=dict)
+    payload = models.JSONField(default=dict)
+    expected_image_set_id = models.CharField(max_length=71)
+    delivery_status = models.CharField(max_length=20, choices=DeliveryStatus.choices, default=DeliveryStatus.PENDING)
+    operation_id = models.CharField(max_length=128, blank=True, default="")
+    image_set_id = models.CharField(max_length=71, blank=True, default="")
+    operation_status = models.CharField(max_length=10, blank=True, default="")
+    progress = models.JSONField(default=dict, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=64, blank=True, default="")
+    created_by = models.CharField(max_length=50, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "image_preparation_requests"
+        indexes = [models.Index(fields=["next_attempt_at", "request_id"], name="image_prep_due_idx")]
+
+
 class ReleaseContainer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     release = models.ForeignKey(
@@ -371,3 +408,81 @@ class ChallengeRuntimeConfig(models.Model):
 
     def __str__(self):
         return str(self.challenge_id)
+
+
+class PublicationRequest(models.Model):
+    class DispatchStatus(models.TextChoices):
+        NOT_DISPATCHED = "NOT_DISPATCHED"
+        DISPATCH_UNKNOWN = "DISPATCH_UNKNOWN"
+        DISPATCHED = "DISPATCHED"
+        DISPATCH_REJECTED = "DISPATCH_REJECTED"
+        DISPATCH_CONFLICT = "DISPATCH_CONFLICT"
+
+    request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge = models.ForeignKey(
+        "challenge.Challenge",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="publication_requests",
+    )
+    challenge_slug = models.CharField(max_length=100)
+    repository = models.CharField(max_length=200)
+    workflow = models.CharField(max_length=200)
+    ref = models.CharField(max_length=200)
+    requested_sha = models.CharField(max_length=40, null=True, blank=True)
+    publish_images = models.BooleanField(default=True)
+    runtime_smoke = models.BooleanField(default=False)
+    dispatch_status = models.CharField(
+        max_length=20,
+        choices=DispatchStatus.choices,
+        default=DispatchStatus.NOT_DISPATCHED,
+    )
+    run_id = models.PositiveBigIntegerField(null=True, blank=True)
+    run_attempt = models.PositiveIntegerField(null=True, blank=True)
+    workflow_status = models.CharField(max_length=30, null=True, blank=True)
+    workflow_conclusion = models.CharField(max_length=30, null=True, blank=True)
+    dispatch_started_at = models.DateTimeField(null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=60, blank=True, default="")
+    run_head_sha = models.CharField(max_length=40, null=True, blank=True)
+    run_number = models.PositiveIntegerField(null=True, blank=True)
+    collection = models.JSONField(default=dict, blank=True)
+    reused_request = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="reused_by",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="publication_requests",
+    )
+    requested_by_login = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "publication_requests"
+        indexes = [
+            models.Index(
+                fields=["challenge_slug", "-created_at", "-request_id"],
+                name="publication_request_order_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(requested_sha__isnull=True)
+                | models.Q(requested_sha__regex=r"\A[a-f0-9]{40}\Z"),
+                name="ck_publication_requested_sha",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(run_id__isnull=True)
+                | models.Q(run_id__gt=0, run_id__lte=9007199254740991),
+                name="ck_publication_run_id",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(run_attempt__isnull=True)
+                | models.Q(run_id__isnull=False, run_attempt__gt=0),
+                name="ck_publication_run_attempt",
+            ),
+        ]

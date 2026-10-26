@@ -30,6 +30,8 @@ VM 에이전트가 이미지와 실제 환경변수를 확인해 APPLIED를 보�
 | POST /api/v1/admin/koth/challenges/{challenge_id}/periods/{period_id}/retry | 종료된 미반영 구간 재수집 |
 | POST /api/v1/admin/koth/challenges/{challenge_id}/connection_test | 저장된 문제·점수 조회 주소의 연결 확인 |
 
+점수 수집 이력의 `award_provenance`가 `RECORDED_AT_APPLICATION`이면 적용 당시 저장한 정확한 지급액이고, `RECONSTRUCTED_FROM_RESPONSE`이면 기존 응답으로 복원한 추정치입니다. 기존 구간에는 지급 당시 제재 상태가 남아 있지 않으므로 현재 제재 상태를 복원 계산에 사용하지 않습니다.
+
 모든 관리자 API는 Bearer 인증과 ADMIN 권한이 필요합니다
 참가자 지문·파일·접속 주소는 기존 ACTIVE 조건을 유지합니다
 저장소 연결은 metadata_revision만 갱신하며 실행 중인 source_revision을 바꾸지 않습니다

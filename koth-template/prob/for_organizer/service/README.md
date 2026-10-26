@@ -31,6 +31,7 @@
 - `X-KOTH-Internal-Token` 인증
 - `period_id`, `scored_at` query 처리
 - 팀별 `metric_score`와 `period_rank` 반환 (지급 점수는 플랫폼이 계산하므로 반환하지 않음)
+- 미제출·실패 팀은 `metric_score`를 0으로 반환하며 플랫폼 지급 순위에서 제외됨
 - 결과가 없는 구간은 `data: null` 반환
 - period별 결과 저장 및 재조회
 - `code`, `message`, `data` 공통 응답 봉투 적용

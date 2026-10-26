@@ -5,8 +5,18 @@ from django.db import models
 
 
 class Team(models.Model):
+    class KothDivision(models.TextChoices):
+        INTERNAL = "INTERNAL", "내부"
+        EXTERNAL = "EXTERNAL", "외부"
+
     team_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team_name = models.CharField(max_length=100, unique=True)
+    koth_division = models.CharField(
+        max_length=10,
+        choices=KothDivision.choices,
+        default=KothDivision.EXTERNAL,
+        db_default=KothDivision.EXTERNAL,
+    )
     team_score = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     mileage = models.IntegerField(default=0)
     is_banned = models.BooleanField(default=False)

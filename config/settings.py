@@ -299,6 +299,7 @@ KOTH_TEAM_TOKEN_SECRET = os.getenv("KOTH_TEAM_TOKEN_SECRET", JWT_SECRET)
 KOTH_IMAGE_EXPORT_SIGNING_KEY = os.getenv("KOTH_IMAGE_EXPORT_SIGNING_KEY", "")
 KOTH_IMAGE_EXPORT_URL = os.getenv("KOTH_IMAGE_EXPORT_URL", "")
 KOTH_SCORE_API_ALLOWED_ORIGINS = [value.strip() for value in os.getenv("KOTH_SCORE_API_ALLOWED_ORIGINS", "").split(",") if value.strip()]
+KOTH_ADMIN_PREVIEW_ORIGINS = [value.strip() for value in os.getenv("KOTH_ADMIN_PREVIEW_ORIGINS", "").split(",") if value.strip()]
 # Shared rankings may lag score/team changes by at most this many seconds.
 KOTH_LEADERBOARD_CACHE_SECONDS = max(
     0, int(os.getenv("KOTH_LEADERBOARD_CACHE_SECONDS", "1"))
@@ -315,6 +316,10 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
+    # X-Forwarded-For 는 클라이언트가 임의로 넣을 수 있어 요청 제한에 쓰지 않는다.
+    # 실제 접속 주소(REMOTE_ADDR)와 login_id 조합으로 센다. 오프라인 대회라 접속 IP 가 모두 같아
+    # 손해가 없다. 온라인 대회로 바꾸면 모두가 프록시 IP 하나로 묶이므로 다시 본다.
+    "NUM_PROXIES": 0,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
@@ -362,6 +367,15 @@ if not isinstance(EXE_CHECKERS, dict):
     raise ImproperlyConfigured("EXE_CHECKERS_JSON은 worker UUID별 객체여야 합니다")
 EXE_DISPATCH_ENABLED = os.getenv("EXE_DISPATCH_ENABLED", "False").lower() == "true"
 
+# Proposed Runtime #70 APIs; never enable before provider deployment and approval.
+IMAGE_PREPARATION_ENABLED = os.getenv("IMAGE_PREPARATION_ENABLED", "False").lower() == "true"
+IMAGE_PREPARATION_RUNTIME_URL = os.getenv("IMAGE_PREPARATION_RUNTIME_URL", "")
+IMAGE_PREPARATION_API_TOKEN = os.getenv("IMAGE_PREPARATION_API_TOKEN", "")
+IMAGE_PREPARATION_TARGET_IDS = os.getenv("IMAGE_PREPARATION_TARGET_IDS", "")
+IMAGE_PREPARATION_TIMEOUT_SECONDS = os.getenv("IMAGE_PREPARATION_TIMEOUT_SECONDS", "5")
+IMAGE_PREPARATION_POLL_SECONDS = os.getenv("IMAGE_PREPARATION_POLL_SECONDS", "15")
+IMAGE_PREPARATION_MAX_ATTEMPTS = os.getenv("IMAGE_PREPARATION_MAX_ATTEMPTS", "3")
+
 # 새 비밀값은 첫 키로 암호화하고, 이전 키는 복호화에만 사용한다
 RUNTIME_SECRET_ENCRYPTION_KEYS = [
     key.strip() for key in os.getenv("RUNTIME_SECRET_ENCRYPTION_KEYS", "").split(",") if key.strip()
@@ -376,6 +390,12 @@ RELEASE_POLL_REPO = os.getenv("RELEASE_POLL_REPO", "MSG-CTF/2026_MSG_CTF")
 RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
+
+# Recording alone does not enable workflow_dispatch or automatic import.
+PUBLICATION_REQUESTS_ENABLED = os.getenv("PUBLICATION_REQUESTS_ENABLED", "False").lower() == "true"
+# Separate opt-in and credential for workflow writes; never reuse the read-only Poller token.
+PUBLICATION_DISPATCH_ENABLED = os.getenv("PUBLICATION_DISPATCH_ENABLED", "False").lower() == "true"
+PUBLICATION_DISPATCH_GITHUB_TOKEN = os.getenv("PUBLICATION_DISPATCH_GITHUB_TOKEN", "")
 
 # Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
 REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")
