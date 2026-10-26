@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class InstanceStatus(models.TextChoices):
@@ -209,6 +210,42 @@ class ChallengeRelease(models.Model):
 
     def __str__(self):
         return f"{self.challenge_id} v{self.version}"
+
+
+class ImagePreparationRequest(models.Model):
+    class DeliveryStatus(models.TextChoices):
+        PENDING = "PENDING"
+        SENDING = "SENDING"
+        ACCEPTED = "ACCEPTED"
+        UNKNOWN = "UNKNOWN"
+        REJECTED = "REJECTED"
+        CONFLICT = "CONFLICT"
+
+    request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    release = models.ForeignKey(ChallengeRelease, on_delete=models.PROTECT, related_name="image_preparations")
+    parent = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True, related_name="retries")
+    auto_key = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    runtime_origin = models.CharField(max_length=512)
+    spec = models.JSONField(default=dict)
+    payload = models.JSONField(default=dict)
+    expected_image_set_id = models.CharField(max_length=71)
+    delivery_status = models.CharField(max_length=20, choices=DeliveryStatus.choices, default=DeliveryStatus.PENDING)
+    operation_id = models.CharField(max_length=128, blank=True, default="")
+    image_set_id = models.CharField(max_length=71, blank=True, default="")
+    operation_status = models.CharField(max_length=10, blank=True, default="")
+    progress = models.JSONField(default=dict, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=64, blank=True, default="")
+    created_by = models.CharField(max_length=50, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "image_preparation_requests"
+        indexes = [models.Index(fields=["next_attempt_at", "request_id"], name="image_prep_due_idx")]
 
 
 class ReleaseContainer(models.Model):
