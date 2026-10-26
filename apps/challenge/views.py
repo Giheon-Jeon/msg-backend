@@ -22,6 +22,7 @@ from apps.challenge.services import (
 from apps.common.response import fail, ok
 from apps.instances.models import ChallengeRuntimeConfig, Instance
 from apps.instances.user_files import current_user_file_bundle, serialize_user_file
+from apps.challenge.remote_run_config import remote_run_data
 from apps.instances.services import (
     ACTIVE_INSTANCE_STATUSES,
     SchedulerError,
@@ -104,6 +105,7 @@ class ChallengeDetailView(APIView):
                 "difficulty": challenge.difficulty,
                 "score": number_value(challenge.current_score),
                 "description": challenge.description,
+                "remote_run": remote_run_data(challenge, team),
                 "requires_instance": ChallengeRuntimeConfig.objects.filter(
                     challenge=challenge, current_release__isnull=False
                 ).exists(),

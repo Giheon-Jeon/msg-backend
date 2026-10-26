@@ -1,10 +1,13 @@
 from django.urls import path
 
 from . import views, challenge_settings, challenge_files, challenge_solves, published_challenges, board_readiness, challenge_preview
+from apps.challenge.remote_run_views import RemoteRunSettingsView, AdminRemoteRunListView
 from . import submission_history
 from . import publication_requests
 
 urlpatterns = [
+    path("admin/challenges/<uuid:challenge_id>/remote_run", RemoteRunSettingsView.as_view()),
+    path("admin/challenges/<uuid:challenge_id>/remote_runs", AdminRemoteRunListView.as_view()),
     path("admin/teams", views.team_list),
     path("admin/teams/<str:team_id>/ban", views.team_ban),
     path("admin/teams/<str:team_id>/mileage", views.team_mileage),

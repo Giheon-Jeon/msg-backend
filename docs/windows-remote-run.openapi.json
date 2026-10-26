@@ -1,0 +1,1166 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Windows remote execution backend boundary",
+    "version": "1.0.0",
+    "description": "Backend API candidate; actual Azure, Scheduler guest readiness and checker provider integration are pending. No execution quota; per-team request interval only."
+  },
+  "paths": {
+    "/api/v1/challenges/{challenge_id}/exe-submissions": {
+      "get": {
+        "security": [
+          {
+            "UserToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "idempotency_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/SubmissionList"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "UserToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Submission"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Submission"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "EXE_RATE_LIMITED; existing request replay is exempt",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "retry_after_seconds": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "retry_after_seconds"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/challenges/{challenge_id}/exe-submissions/{submission_id}": {
+      "get": {
+        "security": [
+          {
+            "UserToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Submission"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/challenges/{challenge_id}/remote_run": {
+      "patch": {
+        "security": [
+          {
+            "UserToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/RemoteRunConfig"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteRunSettings"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/challenges/{challenge_id}/remote_runs": {
+      "get": {
+        "description": "Administrator only. Each run includes last_error_code (a fixed local diagnostic code, empty after confirmed release), release_pending and requires_review. WINDOWS_ASSIGNMENT_NOT_FOUND requires operator review and pauses periodic return retries; BROKER_CALL_FAILED and uncertain acknowledgements remain retryable with the same lease_id. Release failure never rewrites execution status/output or increments the execution-failure summary. Diagnostics are not added to participant APIs.",
+        "security": [
+          {
+            "UserToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/checker-submissions/{submission_id}/events": {
+      "post": {
+        "security": [
+          {
+            "JobToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "submission_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "event_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "accepted": {
+                          "type": "boolean"
+                        },
+                        "duplicate": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "submission_id",
+                        "event_id",
+                        "accepted",
+                        "duplicate"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionEvent"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/checker-submissions/{submission_id}/secret": {
+      "get": {
+        "security": [
+          {
+            "JobToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "submission_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "env": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "propertyNames": {
+                            "const": "FLAG"
+                          },
+                          "minProperties": 1,
+                          "maxProperties": 1
+                        }
+                      },
+                      "required": [
+                        "submission_id",
+                        "env"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/checker-submissions/{submission_id}/payload": {
+      "get": {
+        "security": [
+          {
+            "JobToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Private executable, digest verified",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ExecutionOutput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stdout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stderr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "encoding": {
+            "const": "utf-8"
+          },
+          "stdout_truncated": {
+            "type": "boolean"
+          },
+          "stderr_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stdout",
+          "stderr",
+          "encoding",
+          "stdout_truncated",
+          "stderr_truncated"
+        ]
+      },
+      "RemoteRunConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "accept": {
+            "type": "array",
+            "items": {
+              "const": ".exe"
+            }
+          },
+          "executable": {
+            "const": "pe-amd64"
+          },
+          "max_file_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 180
+          },
+          "max_attempts": {
+            "type": "null"
+          },
+          "rate_limit_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "can_enable": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "config_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "availability_message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "accept",
+          "executable",
+          "max_file_bytes",
+          "timeout_seconds",
+          "max_attempts",
+          "rate_limit_seconds",
+          "retry_after_seconds",
+          "available",
+          "can_enable",
+          "enabled",
+          "config_version",
+          "availability_message"
+        ]
+      },
+      "Submission": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "submission_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "QUEUED",
+              "PREPARING",
+              "RUNNING",
+              "COMPLETED",
+              "CRASH",
+              "TIMEOUT",
+              "INFRA_ERROR",
+              "CLEANUP_PENDING",
+              "START_UNKNOWN"
+            ]
+          },
+          "execution_status": {
+            "enum": [
+              "QUEUED",
+              "PREPARING",
+              "RUNNING",
+              "COMPLETED",
+              "CRASH",
+              "TIMEOUT",
+              "INFRA_ERROR",
+              "CLEANUP_PENDING",
+              "START_UNKNOWN"
+            ]
+          },
+          "vm_readiness": {
+            "enum": [
+              "READY",
+              "NOT_READY",
+              "UNKNOWN"
+            ]
+          },
+          "cleanup_complete": {
+            "description": "Confirmed only by a separate accepted CLEANUP report. A legacy true value without confirmation is returned as null.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "requires_review": {
+            "type": "boolean"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "file_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "release_pending": {
+            "type": "boolean"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionOutput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempt_limit": {
+            "type": "null"
+          },
+          "used_attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reserved_attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining_attempts": {
+            "type": "null"
+          },
+          "available_attempts": {
+            "type": "null"
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "submission_id",
+          "challenge_id",
+          "status",
+          "execution_status",
+          "vm_readiness",
+          "cleanup_complete",
+          "requires_review",
+          "file_name",
+          "file_size",
+          "exit_code",
+          "duration_ms",
+          "release_pending",
+          "output",
+          "attempt_limit",
+          "used_attempts",
+          "reserved_attempts",
+          "remaining_attempts",
+          "available_attempts",
+          "submitted_at",
+          "started_at",
+          "finished_at",
+          "updated_at"
+        ]
+      },
+      "RemoteRunSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "accept": {
+            "type": "array",
+            "items": {
+              "const": ".exe"
+            }
+          },
+          "executable": {
+            "const": "pe-amd64"
+          },
+          "max_file_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 180
+          },
+          "rate_limit_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "minProperties": 1
+      },
+      "ExecutionEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "request_version": {
+                "const": 1
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "assignment_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "payload_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "event_type": {
+                "const": "STARTED"
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "checker_commit_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "vm_template_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "driver_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "config_version": {
+                "type": "string"
+              },
+              "started": {
+                "const": true
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "request_version",
+              "event_id",
+              "assignment_id",
+              "payload_sha256",
+              "event_type",
+              "observed_at",
+              "checker_commit_sha",
+              "vm_template_sha256",
+              "driver_sha256",
+              "config_version",
+              "started",
+              "started_at"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "request_version": {
+                "const": 1
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "assignment_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "payload_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "event_type": {
+                "const": "RESULT"
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "checker_commit_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "vm_template_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "driver_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "config_version": {
+                "type": "string"
+              },
+              "execution_status": {
+                "enum": [
+                  "COMPLETED",
+                  "CRASH",
+                  "TIMEOUT",
+                  "INFRA_ERROR",
+                  "START_UNKNOWN"
+                ]
+              },
+              "started": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "started_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "finished_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "output": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ExecutionOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cleanup_complete": {
+                "description": "Compatibility hint only. RESULT never confirms cleanup or authorizes lease release; send a separate CLEANUP report.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "request_version",
+              "event_id",
+              "assignment_id",
+              "payload_sha256",
+              "event_type",
+              "observed_at",
+              "checker_commit_sha",
+              "vm_template_sha256",
+              "driver_sha256",
+              "config_version",
+              "execution_status",
+              "started",
+              "started_at",
+              "finished_at",
+              "output",
+              "cleanup_complete",
+              "exit_code"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "request_version": {
+                "const": 1
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "assignment_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "payload_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "event_type": {
+                "const": "CLEANUP"
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "checker_commit_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "vm_template_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "driver_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "config_version": {
+                "type": "string"
+              },
+              "cleanup_complete": {
+                "description": "Only an accepted true CLEANUP report confirms cleanup. RESULT must also be received before lease release.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "request_version",
+              "event_id",
+              "assignment_id",
+              "payload_sha256",
+              "event_type",
+              "observed_at",
+              "checker_commit_sha",
+              "vm_template_sha256",
+              "driver_sha256",
+              "config_version",
+              "cleanup_complete"
+            ]
+          }
+        ]
+      },
+      "SubmissionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Submission"
+            }
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_attempts": {
+            "type": "null"
+          },
+          "remote_run": {
+            "$ref": "#/components/schemas/RemoteRunConfig"
+          }
+        },
+        "required": [
+          "runs",
+          "total_count",
+          "max_attempts",
+          "remote_run"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "UserToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "JobToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

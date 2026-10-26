@@ -8,6 +8,7 @@ from apps.common.permissions import IsAdmin
 from apps.common.response import fail, ok
 from apps.instances.models import ChallengeRuntimeConfig
 from apps.instances.user_files import current_user_file_bundle, serialize_user_file
+from apps.challenge.remote_run_config import remote_run_data
 
 
 @never_cache
@@ -30,4 +31,5 @@ def challenge_preview(request, challenge_id):
         "files": [serialize_user_file(challenge, bundle)] if bundle else [],
         "solved_team_count": Solve.objects.filter(challenge=challenge).count(),
         "is_solved": False, "instance": None,
+        "remote_run": remote_run_data(challenge),
     })

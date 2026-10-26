@@ -140,6 +140,39 @@ class FlagSubmissionLock(models.Model):
         ]
 
 
+class RemoteRunConfig(models.Model):
+    challenge = models.OneToOneField(Challenge, on_delete=models.CASCADE, primary_key=True, related_name="remote_run_config")
+    environment = models.CharField(
+        max_length=80, default="Windows 11 25H2 x64 (10.0.26200.8875)"
+    )
+    max_file_bytes = models.PositiveIntegerField(default=10485760)
+    timeout_seconds = models.PositiveIntegerField(default=180)
+    rate_limit_seconds = models.PositiveIntegerField(default=30)
+    enabled = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        db_table = "remote_run_configs"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(max_file_bytes__gte=1, max_file_bytes__lte=10485760),
+                name="ck_remote_file_limit",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(timeout_seconds__gte=10, timeout_seconds__lte=180),
+                name="ck_remote_timeout",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    rate_limit_seconds__gte=1, rate_limit_seconds__lte=3600
+                ),
+                name="ck_remote_rate_interval",
+            ),
+        ]
+
+
 class ExeSubmission(models.Model):
     class Status(models.TextChoices):
         QUEUED = "QUEUED"
@@ -177,7 +210,7 @@ class ExeSubmission(models.Model):
         related_name="exe_submissions",
     )
     idempotency_key = models.UUIDField()
-    payload_key = models.CharField(max_length=200)
+    payload_key = models.CharField(max_length=200, blank=True)
     payload_sha256 = models.CharField(max_length=64)
     payload_size = models.PositiveIntegerField()
     status = models.CharField(
@@ -211,9 +244,27 @@ class ExeSubmission(models.Model):
         validators=[RegexValidator(regex=r"\A[0-9a-f]{64}\Z")],
     )
     config_version = models.CharField(max_length=200, null=True, blank=True)
+    config_snapshot = models.JSONField(default=dict, blank=True)
+    file_name = models.CharField(max_length=200, default="payload.exe")
+    vm_readiness = models.CharField(max_length=10, default="UNKNOWN")
+    readiness_checked_at = models.DateTimeField(null=True, blank=True)
+    readiness_check_id = models.CharField(max_length=200, blank=True, default="")
+    vm_id = models.CharField(max_length=200, blank=True, default="")
+    dispatch_state = models.CharField(max_length=10, default="PENDING")
+    dispatch_started_at = models.DateTimeField(null=True, blank=True)
+    checker_job_id = models.CharField(max_length=200, blank=True, default="")
+    exit_code = models.BigIntegerField(null=True, blank=True)
+    flag_secret = models.ForeignKey(
+        "instances.RuntimeSecret",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="exe_submissions",
+    )
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     cleanup_complete = models.BooleanField(null=True, blank=True)
+    cleanup_confirmed_at = models.DateTimeField(null=True, blank=True)
     stdout = models.TextField(null=True, blank=True)
     stderr = models.TextField(null=True, blank=True)
     stdout_truncated = models.BooleanField(default=False)
@@ -258,4 +309,18 @@ class ExeSubmission(models.Model):
                 fields=["team", "challenge", "attempt_state"],
                 name="exe_attempt_count_idx",
             ),
+            models.Index(
+                fields=["team", "challenge", "-created_at"], name="exe_team_recent_idx"
+            ),
         ]
+
+
+class ExeExecutionEvent(models.Model):
+    event_id = models.UUIDField(primary_key=True)
+    submission = models.ForeignKey(ExeSubmission, on_delete=models.PROTECT, related_name="execution_events")
+    fingerprint = models.CharField(max_length=64)
+    event_type = models.CharField(max_length=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "exe_execution_events"

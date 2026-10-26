@@ -14,6 +14,7 @@ from apps.challenge.exe_submissions import (
 from apps.challenge.models import ExeSubmission
 from apps.common.permissions import IsAuthenticated
 from apps.common.response import ok
+from apps.challenge.remote_run_views import RemoteRunListView
 
 
 class ExeSizeLimitHandler(FileUploadHandler):
@@ -32,9 +33,15 @@ class ExeSizeLimitHandler(FileUploadHandler):
         return None
 
 
-class ExeSubmissionCreateView(APIView):
+class ExeSubmissionCreateView(RemoteRunListView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+
+    def handle_exception(self, exc):
+        response = super().handle_exception(exc)
+        if response.status_code == 429 and isinstance(getattr(exc, "wait", None), int):
+            response["Retry-After"] = str(exc.wait)
+        return response
 
     def initialize_request(self, request, *args, **kwargs):
         request.upload_handlers.insert(0, ExeSizeLimitHandler(request))

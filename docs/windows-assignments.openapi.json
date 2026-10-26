@@ -1,0 +1,98 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Windows assignment consumer contract",
+    "version": "1.0.0-draft",
+    "description": "Backend consumer requirements. Scheduler PR #81 implements assignment/release but deployment, Azure Windows pools, guest readiness evidence and the checker remain pending. Backend calls the Runtime checker directly. Broker complete queues recreation and is not proof that the guest was reset."
+  },
+  "security": [{"scheduler_service": []}],
+  "paths": {
+    "/api/windows-assignments": {
+      "post": {
+        "operationId": "reserve_windows_assignment",
+        "description": "Persist submission_id with team_id, challenge_id, release_id and payload_sha256 before reserving a Broker worker. Replay the same binding; reject a different body. Use submission_id as the Broker Idempotency-Key. Backend replays the identical POST to refresh missing or stale guest evidence for ASSIGNED jobs that have never been dispatched. Return the same lease_id and worker_id with current evidence; a known vm_id cannot change. Ended/expired assignments return WINDOWS_ASSIGNMENT_ENDED without an address. Do not call the checker here. A Broker READY value alone is not guest readiness proof.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AssignmentRequest"}}}
+        },
+        "responses": {
+          "201": {
+            "description": "New assignment. Backend accepts the same response shape as replay; creation does not prove guest readiness.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
+          },
+          "200": {
+            "description": "A reserved assignment or replay. Raw response and code=SUCCESS/data envelope are accepted by Backend. An explicitly ended status never authorizes execution.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
+          },
+          "409": {"description": "NO_WINDOWS_WORKER_AVAILABLE, WINDOWS_ASSIGNMENT_ENDED or WINDOWS_ASSIGNMENT_CONFLICT, in the top-level code field. Ended or conflicting assignments are quarantined for operator review, not automatically retried or reallocated. Worker shortage remains retryable with the same submission_id."},
+          "502": {"description": "BROKER_CALL_FAILED in the top-level code field. Replay the same submission_id; do not allocate with a new idempotency key."},
+          "503": {"description": "Provider unavailable or outcome unknown. Replay the same submission_id; do not allocate with a new idempotency key."}
+        }
+      }
+    },
+    "/api/windows-assignments/{lease_id}/release": {
+      "post": {
+        "operationId": "release_windows_assignment",
+        "description": "Empty request body. Translate to the Broker complete API using the same lease_id. This acknowledges the reservation return, not completion of VM recreation. Never expose a recreating worker to another job. Backend requires both a RESULT and a separate accepted CLEANUP(cleanup_complete=true) report before this call. A RESULT cleanup hint alone is insufficient.",
+        "parameters": [{"name": "lease_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {
+          "202": {
+            "description": "Return accepted with the exact lease_id and COMPLETED or EXPIRED status. Not VM reset completion.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReleaseAcknowledgement"}}}
+          },
+          "200": {
+            "description": "Idempotent acknowledgement with the exact lease_id. Raw response and code=SUCCESS/data envelope are accepted.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReleaseAcknowledgement"}}}
+          },
+          "404": {"description": "WINDOWS_ASSIGNMENT_NOT_FOUND in the top-level code field. Backend persists the code, retains its file and pauses periodic return retries for operator review. Absence is not cleanup proof; any operator recheck must use the same lease_id."},
+          "502": {"description": "BROKER_CALL_FAILED in the top-level code field. Backend persists the code and retries the same lease_id without marking it released or deleting the payload."},
+          "503": {"description": "Return outcome unknown. Retry the same lease; do not mark it released or delete the payload yet."}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "scheduler_service": {"type": "http", "scheme": "bearer", "description": "Existing Backend-to-Scheduler service authentication over a trusted TLS/private transport; participant JWTs are not accepted."}
+    },
+    "schemas": {
+      "AssignmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["submission_id", "team_id", "challenge_id", "release_id", "payload_sha256"],
+        "properties": {
+          "submission_id": {"type": "string", "format": "uuid"},
+          "team_id": {"type": "string", "format": "uuid"},
+          "challenge_id": {"type": "string", "format": "uuid"},
+          "release_id": {"type": "string", "format": "uuid"},
+          "payload_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      },
+      "Assignment": {
+        "type": "object",
+        "required": ["submission_id", "lease_id", "worker_id", "address", "expires_at", "status"],
+        "description": "status is required. Missing, null or unknown status never authorizes assignment; only an unexpired LEASED response can be used. COMPLETED and EXPIRED are ended assignments. For READY, vm_id, readiness_check_id and readiness_checked_at are required and the observation must be at most 30 seconds old. The checker must recheck guest state immediately before execution. Omitted readiness is UNKNOWN and never authorizes dispatch.",
+        "properties": {
+          "submission_id": {"type": "string", "format": "uuid"},
+          "lease_id": {"type": "string", "format": "uuid"},
+          "worker_id": {"type": "string", "format": "uuid"},
+          "address": {"type": "string", "minLength": 1, "maxLength": 255},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "status": {"type": "string", "enum": ["LEASED", "COMPLETED", "EXPIRED"]},
+          "vm_readiness": {"type": "string", "enum": ["UNKNOWN", "NOT_READY", "READY"]},
+          "vm_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "readiness_check_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "readiness_checked_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "ReleaseAcknowledgement": {
+        "type": "object",
+        "required": ["lease_id", "status"],
+        "properties": {
+          "lease_id": {"type": "string", "format": "uuid"},
+          "status": {"type": "string", "enum": ["COMPLETED", "EXPIRED"]}
+        }
+      }
+    }
+  }
+}
