@@ -196,17 +196,37 @@ def accept_exe(user, challenge_id, key, uploaded_file):
     storage = None
     try:
         with transaction.atomic():
-            member = User.objects.select_for_update().get(pk=user.pk)
+            # Flag submission and team administration lock challenge, team, user.
+            # Never hold a member/team lock while waiting for the challenge.
+            try:
+                challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
+            except Challenge.DoesNotExist:
+                raise ExeSubmissionError(
+                    "CHALLENGE_NOT_FOUND", "Challenge not found.", 404
+                ) from None
+            try:
+                locked_team = Team.objects.select_for_update(no_key=True).get(pk=team.pk)
+            except Team.DoesNotExist:
+                raise ExeSubmissionError(
+                    "TEAM_CHANGED", "팀 배정이 바뀌었습니다 현재 팀을 확인한 뒤 다시 요청해주세요", 409
+                ) from None
+            try:
+                member = User.objects.select_for_update(no_key=True).get(pk=user.pk)
+            except User.DoesNotExist:
+                raise ExeSubmissionError(
+                    "USER_HAS_NO_TEAM", "계정과 팀 배정을 확인해주세요", 404
+                ) from None
             if member.team_id is None:
                 raise ExeSubmissionError(
                     "USER_HAS_NO_TEAM", "팀 배정을 확인해주세요", 404
                 )
-            locked_team = Team.objects.select_for_update().get(pk=member.team_id)
+            if member.team_id != locked_team.pk:
+                raise ExeSubmissionError(
+                    "TEAM_CHANGED", "팀 배정이 바뀌었습니다 현재 팀을 확인한 뒤 다시 요청해주세요", 409
+                )
             if locked_team.is_banned:
                 raise ExeSubmissionError("TEAM_BANNED", "참가할 수 없는 팀입니다", 403)
-            # One lock serializes reservations and their future execution transitions.
-            challenge = Challenge.objects.select_for_update().get(pk=challenge_id)
-            team = submission_team(user)
+            team = locked_team
             check_challenge_access(team, challenge)
             if (
                 ExeSubmission.objects.filter(
