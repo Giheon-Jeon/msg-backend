@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.validators import RegexValidator
 from django.db import models
 
 
@@ -190,6 +191,26 @@ class ExeSubmission(models.Model):
     worker_address = models.CharField(max_length=255, blank=True, default="")
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     lease_released_at = models.DateTimeField(null=True, blank=True)
+    # Reported execution provenance; never infer missing values from the release.
+    checker_commit_sha = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        validators=[RegexValidator(regex=r"\A[0-9a-f]{40}\Z")],
+    )
+    vm_template_sha256 = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        validators=[RegexValidator(regex=r"\A[0-9a-f]{64}\Z")],
+    )
+    driver_sha256 = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        validators=[RegexValidator(regex=r"\A[0-9a-f]{64}\Z")],
+    )
+    config_version = models.CharField(max_length=200, null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     cleanup_complete = models.BooleanField(null=True, blank=True)
@@ -211,6 +232,21 @@ class ExeSubmission(models.Model):
             models.CheckConstraint(
                 condition=models.Q(payload_size__gt=0, payload_size__lte=10485760),
                 name="ck_exe_payload_size",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(checker_commit_sha__isnull=True)
+                | models.Q(checker_commit_sha__regex=r"\A[0-9a-f]{40}\Z"),
+                name="ck_exe_checker_sha",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(vm_template_sha256__isnull=True)
+                | models.Q(vm_template_sha256__regex=r"\A[0-9a-f]{64}\Z"),
+                name="ck_exe_vm_sha256",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(driver_sha256__isnull=True)
+                | models.Q(driver_sha256__regex=r"\A[0-9a-f]{64}\Z"),
+                name="ck_exe_driver_sha256",
             ),
         ]
         indexes = [

@@ -13,8 +13,17 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import DatabaseError, close_old_connections, connection, connections
+from django.core.exceptions import ValidationError
+from django.db import (
+    DatabaseError,
+    IntegrityError,
+    close_old_connections,
+    connection,
+    connections,
+    transaction,
+)
 from django.db.models.deletion import ProtectedError
+from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -416,6 +425,122 @@ class ExeSubmissionTests(ExeFixtures, TestCase):
         self.assertEqual(response.status_code, 409)
 
 
+class ExeExecutionProvenanceTests(ExeFixtures, TestCase):
+    fields = (
+        "checker_commit_sha",
+        "vm_template_sha256",
+        "driver_sha256",
+        "config_version",
+    )
+
+    def test_new_submission_provenance_is_unknown(self):
+        submission = self.accepted()
+        submission.refresh_from_db()
+        self.assertEqual(
+            {name: getattr(submission, name) for name in self.fields},
+            dict.fromkeys(self.fields),
+        )
+        submission.full_clean()
+
+    def test_reported_versions_persist_without_changing_execution_or_grading(self):
+        submission = self.accepted()
+        versions = {
+            "checker_commit_sha": "a" * 40,
+            "vm_template_sha256": "b" * 64,
+            "driver_sha256": "c" * 64,
+            "config_version": "checker-config-v1",
+        }
+        for name, value in versions.items():
+            setattr(submission, name, value)
+        submission.full_clean()
+        submission.save(update_fields=list(self.fields))
+        submission.refresh_from_db()
+        self.assertEqual(
+            {name: getattr(submission, name) for name in self.fields}, versions
+        )
+        response = self.post_exe(key=submission.idempotency_key)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["submission_id"], str(submission.pk))
+        submission.refresh_from_db()
+        self.assertEqual(
+            {name: getattr(submission, name) for name in self.fields}, versions
+        )
+        for data in (
+            response.data["data"],
+            self.client.get(f"{self.url}/{submission.pk}").data["data"],
+        ):
+            for name in self.fields:
+                self.assertNotIn(name, data)
+            self.assertEqual(data["used_attempts"], 0)
+            self.assertEqual(data["reserved_attempts"], 1)
+        self.assertFalse(Solve.objects.exists())
+        self.assertFalse(FlagSubmission.objects.exists())
+        self.assertFalse(MileageHistory.objects.exists())
+
+    def test_partial_provenance_does_not_fabricate_remaining_values(self):
+        submission = self.accepted()
+        submission.checker_commit_sha = "a" * 40
+        submission.full_clean()
+        submission.save(update_fields=["checker_commit_sha"])
+        submission.refresh_from_db()
+        self.assertEqual(submission.checker_commit_sha, "a" * 40)
+        for name in self.fields[1:]:
+            self.assertIsNone(getattr(submission, name))
+
+    def test_invalid_hashes_fail_model_validation(self):
+        submission = self.accepted()
+        for name, length in (
+            ("checker_commit_sha", 40),
+            ("vm_template_sha256", 64),
+            ("driver_sha256", 64),
+        ):
+            for value in (
+                "a" * (length - 1),
+                "a" * (length + 1),
+                "g" * length,
+                "A" * length,
+                "a" * length + "\n",
+            ):
+                with self.subTest(field=name, size=len(value)):
+                    setattr(submission, name, value)
+                    with self.assertRaises(ValidationError):
+                        submission.full_clean()
+                    setattr(submission, name, None)
+        submission.config_version = "v" * 201
+        with self.assertRaises(ValidationError):
+            submission.full_clean()
+
+    def test_invalid_hashes_cannot_bypass_validation_with_queryset_update(self):
+        submission = self.accepted()
+        for name, length in (
+            ("checker_commit_sha", 40),
+            ("vm_template_sha256", 64),
+            ("driver_sha256", 64),
+        ):
+            for value in (
+                "",
+                "a" * (length - 1),
+                "g" * length,
+                "A" * length,
+                "a" * (length - 1) + "\n",
+            ):
+                with self.subTest(field=name, size=len(value)):
+                    with self.assertRaises(IntegrityError), transaction.atomic():
+                        ExeSubmission.objects.filter(pk=submission.pk).update(
+                            **{name: value}
+                        )
+            submission.refresh_from_db()
+            self.assertIsNone(getattr(submission, name))
+
+    def test_participant_cannot_supply_execution_versions(self):
+        for name in self.fields:
+            with self.subTest(field=name):
+                self.assertEqual(
+                    self.post_exe(**{name: "forged-version"}).status_code, 400
+                )
+        self.assertFalse(ExeSubmission.objects.exists())
+
+
 class WindowsAssignmentTests(ExeFixtures, TestCase):
     @override_settings(SCHEDULER_API_TOKEN="")
     def test_scheduler_service_token_is_required(self):
@@ -600,6 +725,46 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
                 with self.assertRaises(ExeSubmissionError):
                     release_windows_assignment(submission.pk)
                 called.assert_not_called()
+
+
+class ExeProvenanceMigrationTests(ExeFixtures, TransactionTestCase):
+    def test_existing_submission_survives_provenance_migration(self):
+        submission = self.accepted()
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
+
+        def restore_schema():
+            MigrationExecutor(connection).migrate(latest)
+
+        self.addCleanup(restore_schema)
+        previous = [("challenge", "0008_exesubmission")]
+        executor.migrate(previous)
+        historical = executor.loader.project_state(previous).apps.get_model(
+            "challenge", "ExeSubmission"
+        )
+        started_at = timezone.now()
+        historical.objects.filter(pk=submission.pk).update(
+            status="RUNNING",
+            attempt_state="USED",
+            started_at=started_at,
+            stdout="existing output",
+            stderr="",
+        )
+        restore_schema()
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, "RUNNING")
+        self.assertEqual(submission.attempt_state, "USED")
+        self.assertEqual(submission.started_at, started_at)
+        self.assertEqual(submission.stdout, "existing output")
+        self.assertEqual(submission.release_id, self.release.pk)
+        self.assertEqual(
+            submission.payload_sha256, hashlib.sha256(harmless_pe()).hexdigest()
+        )
+        self.assertEqual(
+            (self.root / submission.payload_key).read_bytes(), harmless_pe()
+        )
+        for name in ExeExecutionProvenanceTests.fields:
+            self.assertIsNone(getattr(submission, name))
 
 
 @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL row locking")
