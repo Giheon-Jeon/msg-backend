@@ -5,7 +5,14 @@ from .models import RefreshToken, Team, User
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ("team_name", "team_score", "mileage", "is_banned")
+    list_display = (
+        "team_name",
+        "koth_division",
+        "team_score",
+        "mileage",
+        "is_banned",
+    )
+    list_filter = ("koth_division", "is_banned")
     search_fields = ("team_name",)
 
 

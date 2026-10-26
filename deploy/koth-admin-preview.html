@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>관리자 게임 테스트</title><p id="status" role="status">관리자 접속을 확인하고 있습니다</p><script>
+(async () => {
+  const ticket = new URLSearchParams(location.hash.slice(1)).get("ticket");
+  history.replaceState(null, "", location.pathname);
+  const status = document.getElementById("status");
+  if (!ticket) { status.textContent = "관리자 화면에서 게임 테스트 열기를 눌러주세요"; return; }
+  try {
+    const response = await fetch(location.pathname, { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }) });
+    if (response.status !== 204) throw new Error("테스트 접속이 만료됐습니다 관리자 화면에서 다시 열어주세요");
+    location.replace("/");
+  } catch (error) { status.textContent = error.message || "관리자 접속을 확인하지 못했습니다"; }
+})();
+</script></html>

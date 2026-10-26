@@ -45,7 +45,7 @@ KOTH 문제는 일반 web 문제와 달리 팀 토큰 인증과 15분 점수 API
 
 1. 참가자가 문제 서버에서 팀 토큰을 입력합니다.
 2. 문제 서버가 플랫폼 백엔드의 `/internal/koth/team_tokens/verify`를 호출합니다.
-3. 검증 성공 시 응답의 `team_id`와 `team_name`을 세션 또는 서버 상태에 저장합니다.
+3. 검증 성공 시 응답의 `team_id`, `team_name`, `koth_division`을 세션 또는 서버 상태에 저장합니다.
 4. 이후 모든 팀 상태, 제출 코드, 점유 정보, 성능 측정값은 `team_id` 기준으로 관리합니다.
 5. 브라우저가 직접 보낸 `team_id`는 사용하지 않습니다.
 
@@ -210,6 +210,8 @@ Query:
 
 `metric_score`는 등수 계산에 사용한 성능 측정값입니다. 타입은 Double입니다.
 `period_rank`는 해당 15분 구간의 등수입니다. 타입은 Long입니다. 대회 전체 누적 등수는 플랫폼이 따로 계산하므로 이름이 다릅니다.
+
+`metric_score`가 0 이하인 결과는 미제출·실패로 간주되어 플랫폼 지급 순위에서 제외되고 0점을 받습니다. 플랫폼은 `koth_division`(`INTERNAL` 또는 `EXTERNAL`)별로 순위를 분리해 배점합니다.
 
 ## 문제 풀이 (writeup)
 
