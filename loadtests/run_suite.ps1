@@ -13,6 +13,7 @@ New-Item -ItemType Directory -Force -Path $results | Out-Null
 
 $readScenarios = @(
     "board_get", "board_me", "cell_current", "opened_challenges", "chance_catalog", "dice_status",
+    "healthz", "timer", "ranking", "ranking_me", "ranking_member", "leaderboard",
     "koth_clubs", "koth_club_detail", "koth_me", "koth_leaderboard",
     "koth_verify_token", "koth_internal_teams"
 )
