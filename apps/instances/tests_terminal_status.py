@@ -84,6 +84,43 @@ class TerminalInstanceStatusTests(TestCase):
         self.assertEqual(response.data["data"]["status"], "STOPPING")
         self.assertEqual(response.data["data"]["delete_reason"], "USER_REQUESTED")
 
+    @patch("apps.instances.views.call_scheduler_active", side_effect=SchedulerError("INSTANCE_NOT_FOUND", "absent", 404))
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_cleanup_and_stopping_replace_stale_create_status(self, detail, active):
+        for status, reason in (
+            (InstanceStatus.CLEANUP_PENDING, "CREATE_FAILED_CLEANUP"),
+            (InstanceStatus.STOPPING, "USER_REQUESTED"),
+        ):
+            with self.subTest(status=status):
+                instance = self.instance(status=InstanceStatus.REQUESTED, delete_reason=None)
+                detail.return_value = {
+                    "instance_id": str(instance.pk), "user_id": str(self.user.pk),
+                    "team_id": str(self.team.pk), "challenge_id": str(self.challenge.pk),
+                    "release_id": str(instance.release_id) if instance.release_id else None,
+                    "status": status, "delete_reason": reason,
+                }
+                response = self.request()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["data"]["status"], status)
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, status)
+                self.assertIsNone(response.data["data"]["host"])
+                self.assertEqual(response.data["data"]["endpoints"], [])
+
+    @patch("apps.instances.views.call_scheduler_active", side_effect=SchedulerError("INSTANCE_NOT_FOUND", "absent", 404))
+    @patch("apps.instances.views.call_scheduler_detail")
+    def test_cleanup_response_with_foreign_scope_cannot_change_pending_instance(self, detail, active):
+        instance = self.instance(status=InstanceStatus.REQUESTED, delete_reason=None)
+        detail.return_value = {
+            "instance_id": str(instance.pk), "team_id": str(uuid.uuid4()),
+            "challenge_id": str(self.challenge.pk), "status": "CLEANUP_PENDING",
+            "delete_reason": "CREATE_FAILED_CLEANUP",
+        }
+        response = self.request()
+        self.assertEqual(response.status_code, 503)
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, InstanceStatus.REQUESTED)
+
     @patch("apps.instances.views.call_scheduler_active")
     def test_malformed_challenge_is_rejected_before_scheduler_access(self, active):
         response = self.client.get("/api/v1/teams/me/instances", {"challenge_id": "not-a-uuid"})
