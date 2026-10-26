@@ -2544,6 +2544,8 @@ class AdminSettingsTests(TestCase):
             {"board": {"dice_rolls_per_reset": 21}},
             {"board": {"dice_reset_interval_minutes": 1441}},
             {"board": {"solve_deadline_minutes": 181}},
+            {"board": {"line_bonus_percent": -1}},
+            {"board": {"line_category_bonus_percent": 101}},
             {"flag": {"max_attempts": 11}},
             {"flag": {"lock_seconds": 3601}},
         ]:
@@ -2734,6 +2736,8 @@ class AdminSettingsTests(TestCase):
                 "dice_rolls_per_reset",
                 "dice_reset_interval_minutes",
                 "solve_deadline_minutes",
+                "line_bonus_percent",
+                "line_category_bonus_percent",
             },
         )
         self.assertEqual(set(d["flag"]), {"max_attempts", "lock_seconds"})
@@ -5218,11 +5222,12 @@ class AdminLineMonopolyTests(TestCase):
 
     def test_score_accepts_upper_storage_boundary(self):
         monopoly = self.monopolize()
-        res = self.patch({"earned_score": 9999999999.99, "reason": "보정"})
+        # JSON 실수는 이 자릿수의 소수를 담지 못해 정수로 경계를 확인한다.
+        res = self.patch({"earned_score": 999_999_999_999_999_999, "reason": "보정"})
 
         self.assertEqual(res.status_code, 200)
         monopoly.refresh_from_db()
-        self.assertEqual(monopoly.earned_score, Decimal("9999999999.99"))
+        self.assertEqual(monopoly.earned_score, Decimal("999999999999999999.00"))
 
     def test_line_not_monopolized_by_team_is_rejected(self):
         self.monopolize(line_number=2)
@@ -5244,7 +5249,8 @@ class AdminLineMonopolyTests(TestCase):
             ({"earned_score": "10", "reason": "보정"}, "3"),
             ({"earned_score": -1, "reason": "보정"}, "3"),
             ({"earned_score": -0.001, "reason": "보정"}, "3"),
-            ({"earned_score": 1e13, "reason": "보정"}, "3"),
+            ({"earned_score": 10**18, "reason": "보정"}, "3"),
+            ({"earned_score": 1e19, "reason": "보정"}, "3"),
             ({"earned_score": 10**100, "reason": "보정"}, "3"),
             ({"earned_score": 1e100, "reason": "보정"}, "3"),
             ({"earned_score": -1e100, "reason": "보정"}, "3"),
