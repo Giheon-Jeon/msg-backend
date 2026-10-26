@@ -24,7 +24,7 @@ class LineMonopolyTests(TestCase):
             for index in range(2, 7)
         ]
 
-    def complete_line(self, team, prefix):
+    def complete_line(self, team, prefix, earned_score=100):
         last_challenge = None
         for index, cell in enumerate(self.cells, start=1):
             challenge = Challenge.objects.create(
@@ -45,11 +45,27 @@ class LineMonopolyTests(TestCase):
             Solve.objects.create(
                 team=team,
                 challenge=challenge,
-                earned_score=100,
+                earned_score=earned_score,
                 earned_mileage=0,
             )
             last_challenge = challenge
         return last_challenge
+
+    def test_bonus_at_largest_allowed_scores_and_percent_is_stored(self):
+        """관리자 API 가 허용하는 점수와 100% 비율 조합도 저장된다. 넘치면 마지막 정답 제출이 실패한다."""
+        AdminSetting.objects.create(key="board.line_category_bonus_percent", value=100)
+        for prefix, score, expected in (
+            ("reviewed", Decimal("2000000000"), Decimal("10000000000.00")),
+            ("largest", Decimal("9999999999.99"), Decimal("49999999999.95")),
+        ):
+            with self.subTest(score=score):
+                team = Team.objects.create(team_name=f"{prefix} 팀")
+                self.complete_line(team, prefix, earned_score=score)
+
+                award = check_and_record_line_monopoly(team, line_number=1)
+
+                award.refresh_from_db()
+                self.assertEqual(award.earned_score, expected)
 
     def test_each_team_receives_the_same_line_bonus_once(self):
         first_team = Team.objects.create(team_name="첫 번째 팀")

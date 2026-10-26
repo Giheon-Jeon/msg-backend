@@ -132,8 +132,11 @@ EVENT_TYPES = set(AdminEvent.EventType.values)
 
 FIRST_LINE_NUMBER = 1
 LAST_LINE_NUMBER = 6
-# line_monopolies.earned_score 는 DecimalField(max_digits=12, decimal_places=2)
-MAX_LINE_SCORE = Decimal("9999999999.99")
+# line_monopolies.earned_score 의 저장 범위. 필드 크기가 바뀌어도 따라가도록 정의에서 계산한다.
+_LINE_SCORE_FIELD = LineMonopoly._meta.get_field("earned_score")
+MAX_LINE_SCORE = Decimal(10) ** (
+    _LINE_SCORE_FIELD.max_digits - _LINE_SCORE_FIELD.decimal_places
+) - Decimal("0.01")
 
 CELL_STATUS_UNVISITED = "UNVISITED"
 CELL_STATUS_CONSUMED = "CONSUMED"
