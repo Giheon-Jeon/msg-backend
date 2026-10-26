@@ -343,7 +343,11 @@ class PublicationTests(TestCase):
         response = self.client.get(self.path + "/periods")
 
         self.assertEqual(response.status_code, 200, response.data)
-        rows = response.data["data"]["periods"][0]["results"]
+        period_data = response.data["data"]["periods"][0]
+        self.assertEqual(
+            period_data["award_provenance"], "RECORDED_AT_APPLICATION"
+        )
+        rows = period_data["results"]
         awards = {row["team_id"]: row["awarded_score"] for row in rows}
         self.assertEqual(awards[str(internal.pk)], 40)
         self.assertEqual(awards[str(external.pk)], 40)

@@ -444,7 +444,8 @@ def period_data(record):
     payload = (record.response_payload or {}).get("data") or {}
     results = payload.get("results") or []
     teams = {str(t.pk): t for t in Team.objects.filter(pk__in=[r.get("team_id") for r in results])}
-    awards = (record.award_snapshot or {}).get("awarded_scores", {})
+    award_snapshot = record.award_snapshot or {}
+    awards = award_snapshot.get("awarded_scores", {})
     rows = []
     for item in results:
         team = teams.get(item.get("team_id"))
@@ -454,7 +455,8 @@ def period_data(record):
                      "awarded_score": awards.get(item.get("team_id"), 0) if record.status == "APPLIED" else 0})
     return {"period_id": utc(record.period_id), "status": record.status, "attempts": record.attempts,
             "last_error": "점수 수집에 실패했습니다 연결 설정과 응답을 확인해주세요" if record.last_error else "",
-            "applied_at": utc(record.applied_at), "results": rows}
+            "applied_at": utc(record.applied_at),
+            "award_provenance": award_snapshot.get("provenance"), "results": rows}
 
 
 @method_decorator(never_cache, name="dispatch")

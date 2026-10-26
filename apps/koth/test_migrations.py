@@ -122,7 +122,7 @@ class LegacyAwardSnapshotMigrationTests(TransactionTestCase):
                         },
                         {
                             "team_id": str(second.pk),
-                            "period_rank": 2,
+                            "period_rank": 1,
                             "metric_score": 90,
                         },
                     ]
@@ -131,6 +131,8 @@ class LegacyAwardSnapshotMigrationTests(TransactionTestCase):
         )
         self.first_id = str(first.pk)
         self.second_id = str(second.pk)
+        second.is_banned = True
+        second.save(update_fields=["is_banned"])
 
         executor = MigrationExecutor(connection)
         executor.migrate(self.migrate_to)
@@ -139,10 +141,11 @@ class LegacyAwardSnapshotMigrationTests(TransactionTestCase):
     def _restore_migrations(self, targets):
         MigrationExecutor(connection).migrate(targets)
 
-    def test_backfills_the_original_fixed_rank_awards(self):
+    def test_backfill_ignores_current_ban_state_and_marks_reconstruction(self):
         KothScorePeriod = self.apps.get_model("koth", "KothScorePeriod")
 
         snapshot = KothScorePeriod.objects.get(pk=self.period.pk).award_snapshot
         self.assertEqual(snapshot["algorithm"], "fixed_top_5_v1")
-        self.assertEqual(snapshot["awarded_scores"][self.first_id], 40)
-        self.assertEqual(snapshot["awarded_scores"][self.second_id], 25)
+        self.assertEqual(snapshot["provenance"], "RECONSTRUCTED_FROM_RESPONSE")
+        self.assertEqual(snapshot["awarded_scores"][self.first_id], 32)
+        self.assertEqual(snapshot["awarded_scores"][self.second_id], 32)

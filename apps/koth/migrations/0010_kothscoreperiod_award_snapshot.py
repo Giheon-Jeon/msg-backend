@@ -16,7 +16,7 @@ def backfill_legacy_award_snapshots(apps, schema_editor):
         ]
         teams = {
             str(team.pk): team
-            for team in Team.objects.filter(pk__in=result_ids, is_banned=False)
+            for team in Team.objects.filter(pk__in=result_ids)
         }
         grouped = {}
         awarded_scores = {
@@ -44,6 +44,7 @@ def backfill_legacy_award_snapshots(apps, schema_editor):
         period.award_snapshot = {
             "version": 1,
             "algorithm": "fixed_top_5_v1",
+            "provenance": "RECONSTRUCTED_FROM_RESPONSE",
             "points": list(LEGACY_POINTS.values()),
             "team_divisions": {
                 team_id: team.koth_division for team_id, team in teams.items()

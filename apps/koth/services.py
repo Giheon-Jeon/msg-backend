@@ -294,6 +294,7 @@ def _locked_awards_and_snapshot(results):
     snapshot = {
         "version": 1,
         "algorithm": "inverse_root_v1",
+        "provenance": "RECORDED_AT_APPLICATION",
         "first_place_points": FIRST_PLACE_POINTS,
         "team_count_by_division": group_counts,
         "points_by_division": {

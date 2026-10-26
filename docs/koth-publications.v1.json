@@ -1594,6 +1594,13 @@
               "null"
             ]
           },
+          "award_provenance": {
+            "description": "RECORDED_AT_APPLICATION is the exact stored award. RECONSTRUCTED_FROM_RESPONSE is a legacy estimate rebuilt from the original score response without historical sanction state.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "results": {
             "type": "array",
             "items": {
