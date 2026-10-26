@@ -106,6 +106,7 @@ from apps.instances.services import (
     SchedulerError,
     call_scheduler_delete,
     call_scheduler_force_cleanup,
+    call_scheduler_retry_cleanup,
     call_scheduler_reset,
     create_instance_from_scheduler,
     isoformat_z,
@@ -1170,6 +1171,46 @@ def instance_force_delete(request, instance_id):
         message="인스턴스 강제 정리가 완료되었습니다" if cleanup else "인스턴스 종료 요청이 접수되었습니다.",
         status=200 if cleanup else 202,
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAdmin])
+def instance_retry_cleanup(request, instance_id):
+    if not isinstance(request.data, dict) or request.data:
+        return fail("INVALID_REQUEST", "정리 재시도 요청 본문은 비워주세요", 400)
+    owner = Instance.objects.select_related("user").filter(pk=instance_id).first()
+    if owner is None:
+        return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
+    with transaction.atomic():
+        _lock_instance_owner(owner.user)
+        instance = (
+            Instance.objects.select_for_update(of=("self",))
+            .select_related("team", "release").filter(pk=instance_id).first()
+        )
+        if instance is None:
+            return fail("INSTANCE_NOT_FOUND", "존재하지 않는 인스턴스 ID입니다", 404)
+        if instance.status != InstanceStatus.FAILED:
+            return fail("INVALID_STATE_TRANSITION", "실패한 인스턴스만 정리를 재시도할 수 있습니다", 409,
+                        data={"instance_id": str(instance.pk), "status": instance.status})
+        try:
+            data = call_scheduler_retry_cleanup(instance, scheduler_auth_header(request))
+            update_instance_from_scheduler(instance, data)
+        except SchedulerError as error:
+            _record_force_failed(request, instance, "정리 재시도", error)
+            return fail(error.code, error.message, error.status_code)
+        _record_event(
+            AdminEvent.EventType.INSTANCE_FORCED,
+            "인스턴스 정리 재시도 접수",
+            request.user.login_id,
+            severity=AdminEvent.Severity.WARNING,
+            team=instance.team,
+            challenge=instance.challenge,
+            instance_id=instance.pk,
+        )
+    return ok({
+        "instance_id": str(instance.pk), "status": instance.status,
+        "requested_by": request.user.login_id, "requested_at": isoformat_z(timezone.now()),
+    }, message="인스턴스 정리 재시도가 접수되었습니다", status=202)
 
 
 @api_view(["POST"])

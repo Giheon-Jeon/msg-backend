@@ -80,13 +80,16 @@ class ExpiryHistoryTests(Fixtures, TestCase):
     def test_explicit_historical_scope_repairs_missing_reason_without_polling_all_final_rows(self, detail):
         row = self.instance(status=InstanceStatus.CLEANED, delete_reason=None)
         other = self.instance(status=InstanceStatus.FAILED, delete_reason=None)
-        self.assertEqual(reconcile_instances_once()["checked"], 0)
-        detail.return_value = {**self.snapshot(row), "delete_reason": "TTL_EXPIRED"}
+        detail.side_effect = lambda item, _: {
+            **self.snapshot(item, item.status),
+            "delete_reason": "TTL_EXPIRED" if item.pk == row.pk else None,
+        }
+        self.assertEqual(reconcile_instances_once()["checked"], 1)
         self.assertEqual(reconcile_instances_once(instance_ids=[row.pk])["updated"], 1)
         row.refresh_from_db();other.refresh_from_db()
         self.assertEqual(row.delete_reason, DeleteReason.TTL_EXPIRED)
         self.assertIsNone(other.delete_reason)
-        self.assertEqual(detail.call_count, 1)
+        self.assertEqual(detail.call_count, 2)
 
     def test_participant_detail_path_also_copies_reason_without_overwriting_explicit_delete_reason(self):
         row = self.instance(status=InstanceStatus.RUNNING, delete_reason=None)

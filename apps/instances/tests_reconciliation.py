@@ -65,10 +65,7 @@ class InstanceHistoryTests(Fixtures, TestCase):
             cpu_millicores=500, memory_mib=256, ephemeral_storage_mib=512,
         )
         row = self.instance(release=release)
-        untouched = [
-            self.instance(status=status)
-            for status in (InstanceStatus.CLEANED, InstanceStatus.FAILED)
-        ]
+        untouched = [self.instance(status=InstanceStatus.CLEANED)]
         for value in (None, str(uuid.uuid4())):
             detail.return_value = {**self.snapshot(row), "release_id": value}
             self.assertEqual(reconcile_instances_once()["error"], 1)

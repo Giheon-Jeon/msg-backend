@@ -15,6 +15,7 @@ from apps.instances.services import (
     call_scheduler_detail,
     scheduler_auth_header,
     scheduler_delete_reason,
+    validate_failed_cleanup_transition,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,8 +24,8 @@ ACTIVE_STATUSES = (
     InstanceStatus.RUNNING, InstanceStatus.RESTARTING, InstanceStatus.RESETTING,
 )
 PENDING_STATUSES = (*ACTIVE_STATUSES, InstanceStatus.STOPPING, InstanceStatus.CLEANUP_PENDING,
-                    InstanceStatus.EXPIRED, InstanceStatus.STOPPED)
-FINAL_STATUSES = (InstanceStatus.CLEANED, InstanceStatus.FAILED)
+                    InstanceStatus.EXPIRED, InstanceStatus.STOPPED, InstanceStatus.FAILED)
+FINAL_STATUSES = (InstanceStatus.CLEANED,)
 RESULT_STATUSES = (*PENDING_STATUSES, *FINAL_STATUSES)
 # 다른 기능의 advisory lock과 키를 공유하지 않는다
 LOCK_NAMESPACE = 0x4D534749
@@ -74,6 +75,7 @@ def _validate_snapshot(instance, data):
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "종료 이력 응답의 소유 정보나 상태가 일치하지 않습니다", 503,
         )
+    validate_failed_cleanup_transition(instance, data["status"])
     scheduler_delete_reason(data)
 
 

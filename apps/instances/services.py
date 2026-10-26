@@ -81,6 +81,13 @@ def scheduler_delete_reason(data):
     return SCHEDULER_DELETE_REASONS[reason]
 
 
+def validate_failed_cleanup_transition(instance, status):
+    if instance.status == InstanceStatus.FAILED and status not in (
+        InstanceStatus.FAILED, InstanceStatus.CLEANUP_PENDING, InstanceStatus.CLEANED,
+    ):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "실패한 인스턴스의 정리 상태가 올바르지 않습니다", 503)
+
+
 def isoformat_z(value):
     # datetime 값을 API 응답용 UTC 문자열로 바꾼다
     if value is None:
@@ -511,6 +518,29 @@ def call_scheduler_force_cleanup(instance, auth_header=None):
     return data
 
 
+def call_scheduler_retry_cleanup(instance, auth_header=None):
+    try:
+        data = scheduler_request(
+            "POST", f"/api/instances/{instance.instance_id}/retry-cleanup",
+            body={}, auth_header=auth_header,
+        )
+    except (ValueError, TypeError, AttributeError):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "정리 재시도 접수 결과를 확인할 수 없습니다", 503) from None
+    expected = {
+        "instance_id": str(instance.pk), "team_id": str(instance.team_id),
+        "challenge_id": str(instance.challenge_id),
+    }
+    if instance.release_id is not None:
+        expected["release_id"] = str(instance.release_id)
+    if (
+        not isinstance(data, dict)
+        or any(data.get(key) != value for key, value in expected.items())
+        or data.get("status") != InstanceStatus.CLEANUP_PENDING
+    ):
+        raise SchedulerError("SCHEDULER_UNAVAILABLE", "정리 재시도 접수 결과를 확인할 수 없습니다", 503)
+    return data
+
+
 def call_scheduler_reset(instance, auth_header=None):
     # Scheduler에 인스턴스 초기화를 요청한다
     return scheduler_request(
@@ -592,6 +622,7 @@ def update_instance_from_scheduler(instance, scheduler_data):
 
     update_fields = ["updated_at"]
 
+    validate_failed_cleanup_transition(instance, scheduler_data.get("status", instance.status))
     reason = scheduler_delete_reason(scheduler_data)
     if instance.delete_reason is None and reason is not None:
         instance.delete_reason = reason
@@ -711,8 +742,10 @@ def mark_instance_replaced(instance):
 
 
 def sync_instance_from_scheduler(instance, auth_header=None):
-    # 최종 상태가 아닌 인스턴스를 Scheduler 최신 상태로 동기화한다
-    if instance is None or instance.status in FINAL_INSTANCE_STATUSES:
+    # FAILED는 운영자 정리 재시도 뒤 CLEANED로 바뀔 수 있다.
+    if instance is None or (
+        instance.status in FINAL_INSTANCE_STATUSES and instance.status != InstanceStatus.FAILED
+    ):
         return instance
 
     scheduler_data = call_scheduler_detail(instance, auth_header)

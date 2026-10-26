@@ -49,6 +49,7 @@ urlpatterns = [
     path("admin/payment/<str:history_id>/refund", views.payment_refund),
     path("admin/instances", views.instance_list),
     path("admin/instances/<uuid:instance_id>", views.instance_force_delete),
+    path("admin/instances/<uuid:instance_id>/retry-cleanup", views.instance_retry_cleanup),
     path("admin/instances/<uuid:instance_id>/reset", views.instance_force_reset),
     path("admin/mileage_history", views.mileage_history),
     path("admin/accounts", views.account_create),
