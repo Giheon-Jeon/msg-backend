@@ -144,17 +144,17 @@ def _validated_results(challenge, period, payload):
                 "score result contains an invalid rank, metric, or duplicate team"
             )
         seen_teams.add(team_id)
-        parsed.append((team_id, rank))
+        parsed.append((team_id, rank, metric))
 
-    _validate_rank_sequence(parsed)
+    _validate_rank_sequence([(team_id, rank) for team_id, rank, _ in parsed])
     teams = Team.objects.in_bulk(
-        [team_id for team_id, _ in parsed], field_name="team_id"
+        [team_id for team_id, _, _ in parsed], field_name="team_id"
     )
     if len(teams) != len(parsed):
         raise ScoreFetchError("score response contains an unknown team")
     results = [
-        (teams[team_id], rank)
-        for team_id, rank in parsed
+        (teams[team_id], rank, metric)
+        for team_id, rank, metric in parsed
         if not teams[team_id].is_banned
     ]
     return results
@@ -236,7 +236,13 @@ def _awards(results):
         .annotate(total=Count("team_id"))
     }
     divisions = defaultdict(list)
-    for team, rank in results:
+    for result in results:
+        team, rank = result[:2]
+        metric = result[2] if len(result) > 2 else Decimal("1")
+        # Checkers use zero for unanswered or failed attempts. Such teams remain
+        # visible in the raw period payload but never occupy a paid rank.
+        if metric <= 0:
+            continue
         divisions[team.koth_division].append((team, rank))
 
     awards = []

@@ -7,6 +7,7 @@ import secrets
 import time
 import zipfile
 from datetime import timedelta
+from decimal import Decimal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, quote
 
@@ -444,8 +445,15 @@ def period_data(record):
     payload = (record.response_payload or {}).get("data") or {}
     results = payload.get("results") or []
     teams = {str(t.pk): t for t in Team.objects.filter(pk__in=[r.get("team_id") for r in results])}
-    awards = dict((str(team.pk), float(amount)) for team, amount in services._awards([
-        (teams[r["team_id"]], r["period_rank"]) for r in results if r.get("team_id") in teams and not teams[r["team_id"]].is_banned]))
+    awards = dict((str(team.pk), amount) for team, amount in services._awards([
+        (
+            teams[r["team_id"]],
+            r["period_rank"],
+            Decimal(str(r.get("metric_score", 0))),
+        )
+        for r in results
+        if r.get("team_id") in teams and not teams[r["team_id"]].is_banned
+    ]))
     rows = []
     for item in results:
         team = teams.get(item.get("team_id"))

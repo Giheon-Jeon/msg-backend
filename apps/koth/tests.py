@@ -644,6 +644,9 @@ class KothApiTests(TestCase):
             **headers,
         )
         self.assertTrue(response.data["data"]["valid"])
+        self.assertEqual(
+            response.data["data"]["koth_division"], Team.KothDivision.EXTERNAL
+        )
         invalid = self.client.post(
             "/internal/koth/team_tokens/verify",
             {
@@ -666,6 +669,14 @@ class KothApiTests(TestCase):
         returned_ids = {team["team_id"] for team in teams.data["data"]["teams"]}
         self.assertIn(str(self.team.team_id), returned_ids)
         self.assertNotIn(str(self.banned.team_id), returned_ids)
+        returned_team = next(
+            team
+            for team in teams.data["data"]["teams"]
+            if team["team_id"] == str(self.team.team_id)
+        )
+        self.assertEqual(
+            returned_team["koth_division"], Team.KothDivision.EXTERNAL
+        )
 
 
 @override_settings(CACHES=LOCMEM)
@@ -798,6 +809,11 @@ class KothScorePollingTests(TestCase):
                         "team_id": str(internal_second.pk),
                         "period_rank": 4,
                         "metric_score": 70,
+                    },
+                    {
+                        "team_id": str(external_missing[0].pk),
+                        "period_rank": 5,
+                        "metric_score": 0,
                     },
                 ],
             },

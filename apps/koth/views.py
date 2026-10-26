@@ -398,6 +398,7 @@ def verify_team_token(request):
             "valid": valid,
             "team_id": str(token.team_id) if valid else None,
             "team_name": token.team.team_name if valid else None,
+            "koth_division": token.team.koth_division if valid else None,
             "koth_challenge_id": str(challenge.koth_challenge_id),
         }
     )
