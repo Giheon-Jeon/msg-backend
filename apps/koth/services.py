@@ -1,5 +1,6 @@
 import http.client
 import json
+import math
 import os
 import uuid
 import urllib.parse
@@ -8,6 +9,7 @@ from datetime import timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -15,7 +17,7 @@ from apps.accounts.models import Team
 
 from .models import KothScorePeriod, KothScorePeriodStatus, KothSolve
 
-PERIOD_POINTS = {1: 40, 2: 25, 3: 15, 4: 12, 5: 8}
+FIRST_PLACE_POINTS = 40
 
 
 class ScoreFetchError(Exception):
@@ -142,18 +144,17 @@ def _validated_results(challenge, period, payload):
                 "score result contains an invalid rank, metric, or duplicate team"
             )
         seen_teams.add(team_id)
-        parsed.append((team_id, rank))
+        parsed.append((team_id, rank, metric))
 
-    _validate_rank_sequence(parsed)
+    _validate_rank_sequence([(team_id, rank) for team_id, rank, _ in parsed])
     teams = Team.objects.in_bulk(
-        [team_id for team_id, _ in parsed], field_name="team_id"
+        [team_id for team_id, _, _ in parsed], field_name="team_id"
     )
     if len(teams) != len(parsed):
         raise ScoreFetchError("score response contains an unknown team")
     results = [
-        (teams[team_id], rank)
-        for team_id, rank in parsed
-        if not teams[team_id].is_banned
+        (teams[team_id], rank, metric)
+        for team_id, rank, metric in parsed
     ]
     return results
 
@@ -176,19 +177,134 @@ def _validate_rank_sequence(results):
         index = end
 
 
-def _awards(results):
-    grouped = defaultdict(list)
-    for team, rank in results:
-        grouped[rank].append(team)
-    awards = []
-    for rank, teams in grouped.items():
-        occupied_points = sum(
-            PERIOD_POINTS.get(position, 0)
-            for position in range(rank, rank + len(teams))
+def rank_points(team_count, first_place_points=FIRST_PLACE_POINTS):
+    """Return a strict integer inverse-root curve for the top half of a group.
+
+    The first awarded place receives ``first_place_points`` and the last receives
+    one point. Every place in between is unique. Square-root weights decide how
+    the remaining point gaps are distributed; the one-point base gap guarantees
+    that rounding can never create duplicate place scores.
+    """
+    if isinstance(team_count, bool) or not isinstance(team_count, int):
+        raise ValueError("team_count must be an integer")
+    if team_count < 0:
+        raise ValueError("team_count must be non-negative")
+
+    if team_count == 0:
+        return ()
+    awarded_count = max(1, team_count // 2)
+    if awarded_count > first_place_points:
+        raise ValueError(
+            "top-half scoring cannot assign unique positive integer points "
+            f"to {awarded_count} places from a {first_place_points}-point maximum"
         )
-        amount = Decimal(occupied_points // len(teams))
-        awards.extend((team, amount) for team in teams if amount > 0)
+    if awarded_count == 1:
+        return (first_place_points,)
+
+    # Dropping one point between adjacent places consumes awarded_count - 1
+    # points. Allocate the remaining drop using the change in 1/sqrt(rank),
+    # which keeps the requested inverse-root shape while preserving integers.
+    extra_drop = first_place_points - awarded_count
+    weights = [
+        (1 / math.sqrt(rank)) - (1 / math.sqrt(rank + 1))
+        for rank in range(1, awarded_count)
+    ]
+    weight_sum = sum(weights)
+    raw_extras = [extra_drop * weight / weight_sum for weight in weights]
+    extras = [math.floor(value) for value in raw_extras]
+    remaining = extra_drop - sum(extras)
+    remainder_order = sorted(
+        range(len(extras)),
+        key=lambda index: (raw_extras[index] - extras[index], -index),
+        reverse=True,
+    )
+    for index in remainder_order[:remaining]:
+        extras[index] += 1
+
+    points = [first_place_points]
+    for extra in extras:
+        points.append(points[-1] - 1 - extra)
+    return tuple(points)
+
+
+def _awards(results, group_counts=None):
+    if group_counts is None:
+        group_counts = {
+            row["koth_division"]: row["total"]
+            for row in Team.objects.filter(is_banned=False)
+            .values("koth_division")
+            .annotate(total=Count("team_id"))
+        }
+    divisions = defaultdict(list)
+    for result in results:
+        team, rank = result[:2]
+        metric = result[2] if len(result) > 2 else Decimal("1")
+        # Checkers use zero for unanswered or failed attempts. Such teams remain
+        # visible in the raw period payload but never occupy a paid rank.
+        if metric <= 0:
+            continue
+        divisions[team.koth_division].append((team, rank))
+
+    awards = []
+    for division, division_results in divisions.items():
+        points = rank_points(group_counts.get(division, 0))
+        grouped = defaultdict(list)
+        for team, source_rank in division_results:
+            grouped[source_rank].append(team)
+
+        # The score server ranks all teams together. Compress those source ranks
+        # within each division so INTERNAL and EXTERNAL receive independent curves.
+        division_rank = 1
+        for source_rank in sorted(grouped):
+            teams = grouped[source_rank]
+            occupied_points = sum(
+                points[position - 1] if position <= len(points) else 0
+                for position in range(division_rank, division_rank + len(teams))
+            )
+            amount = occupied_points // len(teams)
+            awards.extend((team, amount) for team in teams if amount > 0)
+            division_rank += len(teams)
     return awards
+
+
+def _locked_awards_and_snapshot(results):
+    """Calculate awards from one locked, internally consistent team snapshot."""
+    team_rows = list(Team.objects.select_for_update().order_by("team_id"))
+    teams_by_id = {team.pk: team for team in team_rows}
+    group_counts = {division: 0 for division in Team.KothDivision.values}
+    for team in team_rows:
+        if not team.is_banned:
+            group_counts[team.koth_division] += 1
+
+    current_results = []
+    team_divisions = {}
+    awarded_scores = {str(team.pk): 0 for team, _, _ in results}
+    for stale_team, rank, metric in results:
+        team = teams_by_id.get(stale_team.pk)
+        if team is None:
+            continue
+        team_divisions[str(team.pk)] = team.koth_division
+        if not team.is_banned:
+            current_results.append((team, rank, metric))
+
+    awards = _awards(current_results, group_counts=group_counts)
+    for team, amount in awards:
+        awarded_scores[str(team.pk)] = amount
+
+    snapshot = {
+        "version": 1,
+        "algorithm": "inverse_root_v1",
+        "provenance": "RECORDED_AT_APPLICATION",
+        "first_place_points": FIRST_PLACE_POINTS,
+        "team_count_by_division": group_counts,
+        "points_by_division": {
+            division: list(rank_points(team_count))
+            for division, team_count in group_counts.items()
+        },
+        "team_divisions": team_divisions,
+        "awarded_scores": awarded_scores,
+    }
+    return awards, snapshot
 
 
 def poll_challenge_period(challenge, period):
@@ -228,9 +344,10 @@ def poll_challenge_period(challenge, period):
         record = KothScorePeriod.objects.select_for_update().get(pk=record.pk)
         if record.status == KothScorePeriodStatus.APPLIED:
             return False
-        for team, amount in _awards(results):
+        awards, award_snapshot = _locked_awards_and_snapshot(results)
+        for team, amount in awards:
             solve, _ = KothSolve.objects.select_for_update().get_or_create(
-                team=team, challenge=challenge, defaults={"earned_score": Decimal("0")}
+                team=team, challenge=challenge, defaults={"earned_score": 0}
             )
             was_zero = solve.earned_score <= 0
             solve.earned_score += amount
@@ -239,12 +356,14 @@ def poll_challenge_period(challenge, period):
             solve.save(update_fields=["earned_score", "solved_at", "updated_at"])
         record.status = KothScorePeriodStatus.APPLIED
         record.response_payload = payload
+        record.award_snapshot = award_snapshot
         record.last_error = ""
         record.applied_at = timezone.now()
         record.save(
             update_fields=[
                 "status",
                 "response_payload",
+                "award_snapshot",
                 "last_error",
                 "applied_at",
                 "updated_at",

@@ -224,6 +224,7 @@ def team_list(request):
             {
                 "team_id": str(team.team_id),
                 "team_name": team.team_name,
+                "koth_division": team.koth_division,
                 "team_score": num(team.total_score),
                 "mileage": team.mileage,
                 # 보드 앱이 생기면 team_board_states.position 으로 채운다.
@@ -329,10 +330,15 @@ def account_create(request):
 
     team_id = body.get("team_id")
     team_name = body.get("team_name")
+    koth_division = body.get("koth_division", Team.KothDivision.EXTERNAL)
+    if koth_division not in Team.KothDivision.values:
+        raise InvalidRequest("koth_division 은 INTERNAL 또는 EXTERNAL 이어야 합니다")
     if role == Role.ADMIN and (team_id is not None or team_name is not None):
         raise InvalidRequest("관리자 계정은 팀에 소속될 수 없습니다")
     if "team_id" in body and "team_name" in body:
         raise InvalidRequest("team_id 와 team_name 은 함께 보낼 수 없습니다")
+    if "koth_division" in body and team_name is None:
+        raise InvalidRequest("koth_division 은 새 팀을 만들 때만 지정할 수 있습니다")
 
     team = None
     if team_id:
@@ -368,7 +374,10 @@ def account_create(request):
     try:
         with transaction.atomic():
             if team is None and team_name:
-                team = Team.objects.create(team_name=team_name)
+                team = Team.objects.create(
+                    team_name=team_name,
+                    koth_division=koth_division,
+                )
             user = User.objects.create_user(
                 login_id=login_id,
                 password=password,
@@ -401,6 +410,7 @@ def account_create(request):
             "is_leader": user.is_leader,
             "team_id": str(user.team_id) if user.team_id else None,
             "team_name": team.team_name if team else None,
+            "koth_division": team.koth_division if team else None,
             "created_at": user.created_at,
         },
         message="계정이 등록되었습니다",
@@ -1203,6 +1213,7 @@ def team_detail(request, team_id):
         {
             "team_id": str(team.team_id),
             "team_name": team.team_name,
+            "koth_division": team.koth_division,
             "team_score": num(get_team_total_score(team.pk)),
             "mileage": team.mileage,
             "board_position_states": board_position,
@@ -2215,9 +2226,13 @@ def _team_members_payload(team):
 
 def _team_update(request, team_id):
     body = _json_object(request)
-    if not {"team_name", "leader_user_id", "add_user_ids", "remove_user_ids"} & set(
-        body
-    ):
+    if not {
+        "team_name",
+        "koth_division",
+        "leader_user_id",
+        "add_user_ids",
+        "remove_user_ids",
+    } & set(body):
         raise InvalidRequest("변경할 항목이 없습니다")
     reason = _require_reason(body)
 
@@ -2229,6 +2244,10 @@ def _team_update(request, team_id):
         team_name = team_name.strip()
         if len(team_name) > 100:
             raise InvalidRequest("team_name 은 100자 이하여야 합니다")
+
+    koth_division = body.get("koth_division")
+    if koth_division is not None and koth_division not in Team.KothDivision.values:
+        raise InvalidRequest("koth_division 은 INTERNAL 또는 EXTERNAL 이어야 합니다")
 
     add_ids = _user_id_set(body, "add_user_ids")
     remove_ids = _user_id_set(body, "remove_user_ids")
@@ -2299,6 +2318,7 @@ def _team_update(request, team_id):
             if Team.objects.filter(team_name=team_name).exclude(pk=team.pk).exists():
                 raise TeamNameTaken()
         old_name = team.team_name
+        old_division = team.koth_division
 
         changed = set()
         # 팀당 팀장 하나 제약이 있어 기존 팀장을 먼저 내린 뒤 새 팀장을 세운다.
@@ -2319,9 +2339,15 @@ def _team_update(request, team_id):
             users[new_leader].is_leader = True
             users[new_leader].save(update_fields=["is_leader"])
             changed.add(new_leader)
+        team_update_fields = []
         if team_name is not None and team_name != old_name:
             team.team_name = team_name
-            team.save(update_fields=["team_name", "updated_at"])
+            team_update_fields.append("team_name")
+        if koth_division is not None and koth_division != old_division:
+            team.koth_division = koth_division
+            team_update_fields.append("koth_division")
+        if team_update_fields:
+            team.save(update_fields=[*team_update_fields, "updated_at"])
 
         # 제외된 팀원이 가지고 있는 QR도 더는 이 팀의 잔액을 쓸 수 없어야 한다.
         # 결제와 같은 팀 잠금 안에서 ACTIVE 토큰만 폐기해 완료된 거래는 보존한다.
@@ -2340,6 +2366,8 @@ def _team_update(request, team_id):
         parts = []
         if team_name is not None and team_name != old_name:
             parts.append(f"이름 {old_name} → {team_name}")
+        if koth_division is not None and koth_division != old_division:
+            parts.append(f"KOTH 구분 {old_division} → {koth_division}")
         if add_ids:
             parts.append("추가 " + ", ".join(sorted(login(u) for u in add_ids)))
         if remove_ids:
@@ -2359,6 +2387,7 @@ def _team_update(request, team_id):
         {
             "team_id": str(team.team_id),
             "team_name": team.team_name,
+            "koth_division": team.koth_division,
             "member_count": len(members_payload),
             "members": members_payload,
             "updated_at": timezone.now().replace(microsecond=0),
