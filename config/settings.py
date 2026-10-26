@@ -371,6 +371,9 @@ RELEASE_POLL_GITHUB_TOKEN = os.getenv("RELEASE_POLL_GITHUB_TOKEN", "")
 RELEASE_POLL_LIMIT = int(os.getenv("RELEASE_POLL_LIMIT", "100"))
 RELEASE_POLL_SOURCE_REF = os.getenv("RELEASE_POLL_SOURCE_REF", "refs/heads/main")
 
+# Record-only scaffolding; this does not enable workflow_dispatch or automatic import.
+PUBLICATION_REQUESTS_ENABLED = os.getenv("PUBLICATION_REQUESTS_ENABLED", "False").lower() == "true"
+
 # Optional read-only Git mirror; otherwise use the configured repository's GitHub API.
 REPOSITORY_ENV_GIT_DIR = os.getenv("REPOSITORY_ENV_GIT_DIR", "")
 REPOSITORY_ENV_REF = os.getenv("REPOSITORY_ENV_REF", "main")
