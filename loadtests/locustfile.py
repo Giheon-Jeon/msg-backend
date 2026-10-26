@@ -63,6 +63,12 @@ READ_SCENARIOS = {
         None,
         True,
     ),
+    "healthz": ("GET", "/healthz", None, False),
+    "timer": ("GET", "/api/v1/timer", None, True),
+    "ranking": ("GET", "/api/v1/ranking", None, True),
+    "ranking_me": ("GET", "/api/v1/ranking/me", None, True),
+    "ranking_member": ("GET", "/api/v1/ranking/member", None, True),
+    "leaderboard": ("GET", "/api/v1/leaderboard", None, True),
 }
 
 WRITE_SCENARIOS = {
@@ -109,10 +115,23 @@ class ApiUser(HttpUser):
             else:
                 try:
                     body = response.json()
-                    if body.get("success") is False:
-                        response.failure(response.text[:200])
                 except ValueError:
                     response.failure("non-JSON response")
+                    return
+                if not isinstance(body, dict):
+                    response.failure("non-object JSON response")
+                elif path == "/healthz":
+                    # This liveness route is outside the common API envelope.
+                    if body.get("status") != "ok":
+                        response.failure(response.text[:200])
+                elif body.get("code") != "SUCCESS":
+                    # Board and KOTH, including both internal token/team routes,
+                    # use the backend's code/message/data envelope.
+                    response.failure(response.text[:200])
+                elif path == "/internal/koth/team_tokens/verify":
+                    data = body.get("data")
+                    if not isinstance(data, dict) or data.get("valid") is not True:
+                        response.failure("Prepared team token was not valid")
 
     @task
     def run_scenario(self):
