@@ -103,3 +103,9 @@ class SubmissionNotFound(APIError):
     status_code = status.HTTP_404_NOT_FOUND
     code = "SUBMISSION_NOT_FOUND"
     message = "존재하지 않는 제출 기록입니다"
+
+
+class AccountNotFound(APIError):
+    status_code = status.HTTP_404_NOT_FOUND
+    code = "ACCOUNT_NOT_FOUND"
+    message = "존재하지 않는 리소스 계정입니다"
