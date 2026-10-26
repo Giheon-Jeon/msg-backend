@@ -62,7 +62,7 @@ from apps.koth.models import KothSolve
 from apps.ranking.models import LineMonopoly
 from apps.signature.models import SignatureSolve
 from apps.timer.models import Contest
-from .models import SETTING_SPECS, AdminEvent, AdminSetting
+from .models import SETTING_SPECS, AdminEvent, AdminSetting, ResourceAccountBilling
 from .challenge_deployment import deployment_summaries
 
 from apps.teams.models import (
@@ -90,6 +90,7 @@ from .exceptions import (
     ContestAlreadyStarted,
     ChallengeInUse,
     SubmissionNotFound,
+    AccountNotFound,
 )
 
 from apps.instances.models import (
@@ -2676,12 +2677,102 @@ def admin_resources(request):
             "HEALTHY" if all(n["status"] == "HEALTHY" for n in nodes) else "DEGRADED"
         )
 
+    billings = {
+        row.account_id: row
+        for row in ResourceAccountBilling.objects.filter(account_id__in=accounts)
+    }
+    for account_id, account in accounts.items():
+        billing = billings.get(account_id)
+        account["billing"] = _serialize_billing(billing) if billing else None
+
     return ok(
         {
             "accounts": list(accounts.values()),
             "total_count": len(accounts),
             "collected_at": generated_at,
         }
+    )
+
+
+MAX_BILLING_AMOUNT = Decimal("999999999999.99")
+BILLING_AMOUNT_FIELDS = ("credit_total", "spent", "hourly_cost")
+
+
+def _serialize_billing(billing):
+    return {
+        "plan": billing.plan,
+        "currency": billing.currency,
+        **{name: num(getattr(billing, name)) for name in BILLING_AMOUNT_FIELDS},
+        "observed_at": billing.observed_at,
+    }
+
+
+def _parse_billing(raw):
+    if not isinstance(raw, dict) or set(raw) != {"plan", "currency", *BILLING_AMOUNT_FIELDS}:
+        raise InvalidRequest(
+            "billing 은 plan, currency, credit_total, spent, hourly_cost 를 모두 담은 객체여야 합니다"
+        )
+    if raw["plan"] not in ResourceAccountBilling.Plan.values:
+        raise InvalidRequest("plan 은 FREE_TRIAL, CREDIT, BUDGET 중 하나여야 합니다")
+    if raw["currency"] not in ResourceAccountBilling.Currency.values:
+        raise InvalidRequest("currency 는 USD, KRW 중 하나여야 합니다")
+    amounts = {}
+    for name in BILLING_AMOUNT_FIELDS:
+        value = raw[name]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or (isinstance(value, float) and not math.isfinite(value))
+        ):
+            raise InvalidRequest(f"{name} 는 숫자여야 합니다")
+        value = Decimal(str(value))
+        if not (0 <= value <= MAX_BILLING_AMOUNT):
+            raise InvalidRequest(f"{name} 는 0 ~ {MAX_BILLING_AMOUNT} 범위여야 합니다")
+        amounts[name] = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return {"plan": raw["plan"], "currency": raw["currency"], **amounts}
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAdmin])
+def resource_account(request, account_id):
+    """리소스 계정의 요금 계획을 저장한다. 새 배치 켜고 끄기는 브로커 쓰기 API 가 생기면 붙인다."""
+    body = _json_object(request)
+    if "scheduling_enabled" in body:
+        raise InvalidRequest("scheduling_enabled 는 아직 지원하지 않습니다 (브로커 연동 전)")
+    unknown = set(body) - {"billing", "reason"}
+    if unknown:
+        raise InvalidRequest(f"알 수 없는 필드입니다: {', '.join(sorted(unknown))}")
+    if "billing" not in body:
+        raise InvalidRequest("필수 항목이 누락되었습니다: billing")
+    billing = _parse_billing(body["billing"])
+    reason = _require_reason(body)
+    if len(account_id) > ResourceAccountBilling._meta.get_field("account_id").max_length:
+        raise AccountNotFound()
+
+    try:
+        _, targets = fetch_resource_targets()
+    except SchedulerError as error:
+        return fail(error.code, error.message, error.status_code)
+    if not any(target.get("account_id") == account_id for target in targets or ()):
+        raise AccountNotFound()
+
+    now = timezone.now().replace(microsecond=0)
+    with transaction.atomic():
+        row, _ = ResourceAccountBilling.objects.update_or_create(
+            account_id=account_id,
+            defaults={**billing, "observed_at": now, "updated_by": request.user.login_id},
+        )
+        _record_event(
+            AdminEvent.EventType.RESOURCE_ACCOUNT_UPDATED,
+            f"리소스 계정 {account_id} 요금 계획: {row.plan} {row.currency} "
+            f"크레딧 {num(row.credit_total)} · 사용 {num(row.spent)} · "
+            f"시간당 {num(row.hourly_cost)}: {reason}",
+            request.user.login_id,
+        )
+
+    return ok(
+        {"account_id": account_id, "billing": _serialize_billing(row)},
+        message="리소스 계정 요금 계획이 저장되었습니다",
     )
 
 

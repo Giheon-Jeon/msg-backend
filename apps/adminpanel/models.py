@@ -47,6 +47,31 @@ def setting_subquery(key):
     return Coalesce(models.Subquery(stored), models.Value(SETTING_SPECS[key][2]))
 
 
+class ResourceAccountBilling(models.Model):
+    """리소스 계정의 요금 계획. 브로커에는 없는 값이라 관리자가 입력해 둔다."""
+
+    class Plan(models.TextChoices):
+        FREE_TRIAL = "FREE_TRIAL"
+        CREDIT = "CREDIT"
+        BUDGET = "BUDGET"
+
+    class Currency(models.TextChoices):
+        USD = "USD"
+        KRW = "KRW"
+
+    account_id = models.CharField(max_length=100, primary_key=True)
+    plan = models.CharField(max_length=20, choices=Plan.choices)
+    currency = models.CharField(max_length=3, choices=Currency.choices)
+    credit_total = models.DecimalField(max_digits=14, decimal_places=2)
+    spent = models.DecimalField(max_digits=14, decimal_places=2)
+    hourly_cost = models.DecimalField(max_digits=14, decimal_places=2)
+    observed_at = models.DateTimeField()
+    updated_by = models.CharField(max_length=50)
+
+    class Meta:
+        db_table = "resource_account_billings"
+
+
 class AdminEvent(models.Model):
     class EventType(models.TextChoices):
         TEAM_BANNED = "TEAM_BANNED"
@@ -73,6 +98,7 @@ class AdminEvent(models.Model):
         SIGNATURE_UPDATED = "SIGNATURE_UPDATED"
         SIGNATURE_DELETED = "SIGNATURE_DELETED"
         SUBMISSION_DELETED = "SUBMISSION_DELETED"
+        RESOURCE_ACCOUNT_UPDATED = "RESOURCE_ACCOUNT_UPDATED"
 
     class Severity(models.TextChoices):
         INFO = "INFO"
