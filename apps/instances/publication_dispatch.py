@@ -113,7 +113,7 @@ def _record(request_id):
     return row
 
 
-def _validate_request(row):
+def validate_publication_request(row):
     if (
         (row.repository, row.workflow, row.ref) != (REPOSITORY, WORKFLOW, REF)
         or not row.publish_images
@@ -136,7 +136,7 @@ def _safe_id(value, maximum=9007199254740991):
     return type(value) is int and 0 < value <= maximum
 
 
-def _run_values(row, run):
+def validate_publication_run(row, run):
     try:
         if (
             not _safe_id(run["id"])
@@ -156,7 +156,9 @@ def _run_values(row, run):
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise PublicationDispatchError(
-            "PUBLICATION_RUN_MISMATCH", "Run provenance does not match this request."
+            "PUBLICATION_RUN_MISMATCH",
+            "Run provenance does not match this request.",
+            409,
         ) from None
     return {
         "run_id": run["id"],
@@ -237,7 +239,7 @@ def dispatch_publication(request_id):
     row = _record(request_id)
     if row.reused_request_id or row.dispatch_status != "NOT_DISPATCHED":
         return row
-    _validate_request(row)
+    validate_publication_request(row)
     _token()
     with transaction.atomic():
         if (
@@ -290,7 +292,7 @@ def dispatch_publication(request_id):
         row = PublicationRequest.objects.select_for_update().get(pk=request_id)
         if row.reused_request_id or row.dispatch_status != "NOT_DISPATCHED":
             return row
-        _validate_request(row)
+        validate_publication_request(row)
         # The source SHA pins the caller's approved tool refs. Keep smoke options separate.
         if _reuse_existing(row):
             return row
@@ -387,7 +389,7 @@ def _recover_run(row):
             seen.add(run["id"])
             if run.get("display_title") != f"문제 요청 {row.challenge_slug} / {row.pk}":
                 continue
-            values = _run_values(row, run)
+            values = validate_publication_run(row, run)
             try:
                 created = parse_datetime(run["created_at"])
                 if (
@@ -427,12 +429,14 @@ def sync_publication(request_id):
         return _record(request_id)
     if row.dispatch_started_at is None or row.dispatch_status == "DISPATCH_REJECTED":
         return row
-    _validate_request(row)
+    validate_publication_request(row)
     _token()
     checked_at = timezone.now()
     try:
         values = (
-            _run_values(row, github_json(f"{REPO_PATH}/actions/runs/{row.run_id}"))
+            validate_publication_run(
+                row, github_json(f"{REPO_PATH}/actions/runs/{row.run_id}")
+            )
             if row.run_id
             else _recover_run(row)
         )

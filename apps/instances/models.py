@@ -409,6 +409,7 @@ class PublicationRequest(models.Model):
     last_error_code = models.CharField(max_length=60, blank=True, default="")
     run_head_sha = models.CharField(max_length=40, null=True, blank=True)
     run_number = models.PositiveIntegerField(null=True, blank=True)
+    collection = models.JSONField(default=dict, blank=True)
     reused_request = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True,
         related_name="reused_by",

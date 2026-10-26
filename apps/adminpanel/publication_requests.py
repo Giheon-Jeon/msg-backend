@@ -99,9 +99,16 @@ def serialize_publication_request(record):
             if effective.run_id
             else None
         ),
-        # A matching run SHA is not proof of a verified publish bundle.
         "dispatch_supported": settings.PUBLICATION_DISPATCH_ENABLED,
-        "sha_verified": False,
+        # Proof belongs to a particular imported run attempt, not all later reruns.
+        "sha_verified": bool(
+            effective.dispatch_status == "DISPATCHED"
+            and effective.collection
+            and effective.collection.get("run_id") == effective.run_id
+            and effective.collection.get("run_attempt") == effective.run_attempt
+            and effective.collection.get("source_sha") == record.requested_sha
+        ),
+        "collection": effective.collection,
         "requested_by": {
             "user_id": str(record.requested_by_id) if record.requested_by_id else None,
             "login_id": record.requested_by_login,
