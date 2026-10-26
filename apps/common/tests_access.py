@@ -12,9 +12,7 @@ class AnonymousGameAccessTests(SimpleTestCase):
     def test_game_and_admin_reads_require_a_login_before_loading_data(self):
         item_id = "11111111-1111-4111-8111-111111111111"
         paths = [
-            "/api/v1/board",
             "/api/v1/board/me",
-            "/api/v1/board/chance/catalog",
             "/api/v1/board/dice/status",
             "/api/v1/board/cell/current",
             "/api/v1/board/opened_challenges",

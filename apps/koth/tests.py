@@ -358,7 +358,7 @@ class KothApiTests(TestCase):
         self.assertEqual(KothTeamToken.objects.count(), 1)
         self.assertEqual(KothTeamToken.objects.get().token_hash, hash_token(first))
 
-    def test_me_does_not_assign_rank_to_banned_team(self):
+    def test_me_rejects_banned_team(self):
         KothSolve.objects.create(
             team=self.banned,
             challenge=self.challenge,
@@ -369,9 +369,8 @@ class KothApiTests(TestCase):
 
         response = self.client.get("/api/v1/koth/me")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["data"]["challenges"][0]["earned_score"], 60)
-        self.assertIsNone(response.data["data"]["challenges"][0]["rank"])
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "TEAM_BANNED")
 
     def test_leaderboard_requires_auth_and_valid_challenge_id(self):
         url = "/api/v1/koth/leaderboard"
@@ -436,18 +435,18 @@ class KothApiTests(TestCase):
         )
         self.assertEqual(data["title"], self.challenge.title)
         self.assertEqual(data["status"], KothChallengeStatus.ACTIVE)
-        self.assertEqual(data["total_count"], 3)
+        self.assertEqual(data["total_count"], 4)
         self.assertIsNotNone(data["updated_at"])
         self.assertEqual(
             [row["team_id"] for row in data["leaderboard"]],
-            [str(self.other.team_id), str(self.team.team_id), str(third.team_id)],
+            [str(self.other.team_id), str(self.team.team_id), str(third.team_id), str(zero.team_id)],
         )
-        self.assertEqual([row["rank"] for row in data["leaderboard"]], [1, 1, 3])
+        self.assertEqual([row["rank"] for row in data["leaderboard"]], [1, 1, 3, None])
         self.assertEqual(
-            [row["earned_score"] for row in data["leaderboard"]], [100, 100, 40]
+            [row["earned_score"] for row in data["leaderboard"]], [100, 100, 40, 0]
         )
         self.assertTrue(
-            all(row["solved_at"] is not None for row in data["leaderboard"])
+            all(row["solved_at"] is not None for row in data["leaderboard"] if row["earned_score"] > 0)
         )
 
     @override_settings(KOTH_LEADERBOARD_CACHE_SECONDS=60)

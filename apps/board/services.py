@@ -207,6 +207,12 @@ def get_board_state_for_read(
         if state.dice_rolls_left >= state.max_dice_rolls
         else state.next_dice_reset_at is None or now >= state.next_dice_reset_at
     )
+    if (
+        include_completion
+        and state.board_completed
+        and state.next_dice_reset_at is not None
+    ):
+        recharge_update_required = True
     if recharge_update_required:
         get_or_create_board_state(team)
         return read_states.get(team=team)
@@ -1180,6 +1186,11 @@ def discard_chance_card(team, card_id, *, team_card_id=None):
         )
         if target is None:
             raise ChanceCardNotFound()
+
+        # A chosen roll owns a pending movement. Discarding it would orphan
+        # that movement and leave neither confirm nor another roll usable.
+        if target.pending_first_number is not None:
+            raise ChanceCardWrongTiming()
 
         target.discarded_at = timezone.now()
         target.save(update_fields=["discarded_at"])

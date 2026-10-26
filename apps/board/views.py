@@ -6,11 +6,13 @@ from django.db import DatabaseError
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.generics import ListAPIView
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from apps.common.exceptions import InvalidRequest, UserHasNoTeam
 from apps.common.permissions import IsAuthenticated
 from apps.common.response import ok
+from apps.common.throttling import ReadApiThrottle
 
 from .exceptions import BoardLoadFailed, ChallengeIdRequired, RequestBodyNotAllowed
 from .idempotency import idempotent
@@ -92,9 +94,10 @@ def _serialize_active_challenge(access):
 
 
 class BoardView(ListAPIView):
-    """GET /api/v1/board — 로그인 후 고정 보드 배치 조회."""
+    """GET /api/v1/board — 공개 고정 보드 배치 조회."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+    throttle_classes = [ReadApiThrottle]
     queryset = Cell.objects.all()
     serializer_class = CellSerializer
 
@@ -204,9 +207,10 @@ class CellOpenView(APIView):
 
 
 class ChanceCardCatalogView(ListAPIView):
-    """GET /api/v1/board/chance/catalog — 로그인 후 카드 목록 조회."""
+    """GET /api/v1/board/chance/catalog — 공개 카드 종류 조회."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+    throttle_classes = [ReadApiThrottle]
     queryset = ChanceCard.objects.filter(card_id__in=ChanceCard.CardId.values)
     serializer_class = ChanceCardSerializer
 

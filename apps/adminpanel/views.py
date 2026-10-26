@@ -1875,7 +1875,10 @@ def board_position(request, team_id):
         cell = _get_cell(position)
         previous_position = state.position_id
         state.position = cell
-        state.save(update_fields=["position", "updated_at"])
+        # Forced moves end the current timer without revoking access history.
+        if previous_position != cell.pk:
+            state.active_challenge_access = None
+        state.save(update_fields=["position", "active_challenge_access", "updated_at"])
 
         # 확정되지 않은 굴림이 남아 있으면 팀이 확정하는 순간 교정한 위치가 덮어써진다.
         # 선택을 기다리던 찬스카드를 함께 마감하지 않으면 이후 모든 확정이 막힌다.

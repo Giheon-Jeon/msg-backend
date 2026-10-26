@@ -1,0 +1,33 @@
+# Render using envsubst only for the four named variables below.
+# BACKEND_UPSTREAM: private Gunicorn endpoint, e.g. 127.0.0.1:8080.
+# PUBLIC_LISTEN: public gateway listener, e.g. 0.0.0.0:8088.
+# INTERNAL_LISTEN: private interface listener; never use a public interface.
+# KOTH_CALLER_CIDR: exact problem-server private subnet or host CIDR.
+upstream msg_backend {
+    server ${BACKEND_UPSTREAM};
+}
+
+server {
+    listen ${PUBLIC_LISTEN};
+    # Nginx matches the normalized URI, including encoded path separators.
+    location = /internal { return 404; }
+    location ^~ /internal/ { return 404; }
+    location / {
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://msg_backend;
+    }
+}
+
+server {
+    listen ${INTERNAL_LISTEN};
+    allow ${KOTH_CALLER_CIDR};
+    deny all;
+    location /internal/ {
+        # X-Internal-Token is still checked by Django for each challenge.
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://msg_backend;
+    }
+    location / { return 404; }
+}
