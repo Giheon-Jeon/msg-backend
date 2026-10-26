@@ -25,6 +25,7 @@ def purge_released_payload(submission):
     if (
         submission.lease_released_at is None
         or submission.cleanup_complete is not True
+        or submission.cleanup_confirmed_at is None
         or not submission.payload_key
     ):
         return False
@@ -72,10 +73,11 @@ def _post_scheduler(path, body=None):
             in (
                 "NO_WINDOWS_WORKER_AVAILABLE",
                 "WINDOWS_ASSIGNMENT_ENDED",
+                "WINDOWS_ASSIGNMENT_CONFLICT",
             )
         ):
             raise SchedulerError(
-                payload["code"], "Windows assignment is unavailable or ended.", 409
+                payload["code"], "Windows assignment cannot be used.", 409
             ) from None
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE", "Windows assignment request failed.", 503
@@ -209,8 +211,11 @@ def assign_oldest_exe_submission():
         except SchedulerError as error:
             submission.last_error_code = error.code
             update_fields = ["last_error_code", "updated_at"]
-            if error.code == "WINDOWS_ASSIGNMENT_ENDED":
-                # A finished lease is not execution/cleanup evidence; retain the reservation for review.
+            if error.code in {
+                "WINDOWS_ASSIGNMENT_ENDED",
+                "WINDOWS_ASSIGNMENT_CONFLICT",
+            }:
+                # Neither an ended lease nor a conflicting binding proves safe execution or cleanup.
                 submission.status = ExeSubmission.Status.START_UNKNOWN
                 update_fields.append("status")
             submission.save(update_fields=update_fields)
@@ -243,6 +248,7 @@ def release_windows_assignment(submission_id):
             }
             or submission.attempt_state == ExeSubmission.AttemptState.RESERVED
             or submission.cleanup_complete is not True
+            or submission.cleanup_confirmed_at is None
         ):
             raise ExeSubmissionError(
                 "EXECUTION_NOT_RESOLVED",

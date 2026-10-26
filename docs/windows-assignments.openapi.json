@@ -20,7 +20,7 @@
             "description": "A reserved assignment or replay. Raw response and code=SUCCESS/data envelope are accepted by Backend. An explicitly ended status never authorizes execution.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Assignment"}}}
           },
-          "409": {"description": "NO_WINDOWS_WORKER_AVAILABLE or WINDOWS_ASSIGNMENT_ENDED, in the top-level code field. Ended assignments cannot be automatically allocated again."},
+          "409": {"description": "NO_WINDOWS_WORKER_AVAILABLE, WINDOWS_ASSIGNMENT_ENDED or WINDOWS_ASSIGNMENT_CONFLICT, in the top-level code field. Ended or conflicting assignments are quarantined for operator review, not automatically retried or reallocated. Worker shortage remains retryable with the same submission_id."},
           "503": {"description": "Provider unavailable or outcome unknown. Replay the same submission_id; do not allocate with a new idempotency key."}
         }
       }
@@ -28,7 +28,7 @@
     "/api/windows-assignments/{lease_id}/release": {
       "post": {
         "operationId": "release_windows_assignment",
-        "description": "Empty request body. Translate to the Broker complete API using the same lease_id. This acknowledges the reservation return, not completion of VM recreation. Never expose a recreating worker to another job. Backend requires independently confirmed checker cleanup before this call.",
+        "description": "Empty request body. Translate to the Broker complete API using the same lease_id. This acknowledges the reservation return, not completion of VM recreation. Never expose a recreating worker to another job. Backend requires both a RESULT and a separate accepted CLEANUP(cleanup_complete=true) report before this call. A RESULT cleanup hint alone is insufficient.",
         "parameters": [{"name": "lease_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {
           "200": {

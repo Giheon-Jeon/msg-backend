@@ -36,7 +36,9 @@ class Command(BaseCommand):
                 self.stderr.write(error.code)
         ids = (
             ExeSubmission.objects.filter(
-                lease_released_at__isnull=False, cleanup_complete=True
+                lease_released_at__isnull=False,
+                cleanup_complete=True,
+                cleanup_confirmed_at__isnull=False,
             )
             .exclude(payload_key="")
             .values_list("pk", flat=True)[:limit]
@@ -46,6 +48,7 @@ class Command(BaseCommand):
         ids = (
             ExeSubmission.objects.filter(
                 cleanup_complete=True,
+                cleanup_confirmed_at__isnull=False,
                 finished_at__isnull=False,
                 lease_released_at__isnull=True,
             )

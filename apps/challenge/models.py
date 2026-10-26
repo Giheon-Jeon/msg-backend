@@ -264,6 +264,7 @@ class ExeSubmission(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     cleanup_complete = models.BooleanField(null=True, blank=True)
+    cleanup_confirmed_at = models.DateTimeField(null=True, blank=True)
     stdout = models.TextField(null=True, blank=True)
     stderr = models.TextField(null=True, blank=True)
     stdout_truncated = models.BooleanField(default=False)

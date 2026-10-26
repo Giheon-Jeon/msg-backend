@@ -735,6 +735,7 @@
             ]
           },
           "cleanup_complete": {
+            "description": "Confirmed only by a separate accepted CLEANUP report. A legacy true value without confirmation is returned as null.",
             "type": [
               "boolean",
               "null"
@@ -1024,6 +1025,7 @@
                 ]
               },
               "cleanup_complete": {
+                "description": "Compatibility hint only. RESULT never confirms cleanup or authorizes lease release; send a separate CLEANUP report.",
                 "type": [
                   "boolean",
                   "null"
@@ -1098,6 +1100,7 @@
                 "type": "string"
               },
               "cleanup_complete": {
+                "description": "Only an accepted true CLEANUP report confirms cleanup. RESULT must also be received before lease release.",
                 "type": "boolean"
               }
             },

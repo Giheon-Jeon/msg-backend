@@ -62,7 +62,10 @@
 | POST /internal/v1/checker-submissions/{submission_id}/events | event_id 중복을 확인하고 같은 결과만 재생한다 다른 파일·배정·버전, 늦은 상태 되돌리기는 거절한다 |
 
 실제 출력과 실행 시작 여부는 체커가 보고해야 한다 출력은 각 64 KiB이며 DB 저장 전에 제어문자를 정리한다
-RESULT가 도착해도 CLEANUP이 확인되기 전에는 배정을 반납하지 않는다 반납 ACK를 정리 증거로 쓰지 않는다
+RESULT와 별도 CLEANUP(cleanup_complete=true) 보고가 모두 확인되기 전에는 배정을 반납하지 않는다
+RESULT의 cleanup_complete는 참고 정보로만 검증하며 정리 완료 상태를 갱신하지 않는다
+CLEANUP 완료 보고를 원자적으로 저장한 서버 수신 시각(cleanup_confirmed_at)이 있어야 반납·파일 삭제를 허용한다 반납 ACK를 정리 증거로 쓰지 않는다
+두 보고의 도착 순서는 달라도 되지만 하나만 도착한 상태에서는 반납하지 않는다
 정리와 반납까지 확인한 실행 파일은 지운다 삭제 실패는 워커가 재시도하며 상태·해시·결과 기록은 보존한다
 POST 응답을 잃거나 전송 중 워커가 재시작되면 같은 작업의 GET만 재시도한다 404·timeout을 근거로 다른 작업·호스트에서 재실행하지 않는다
 체커의 GET은 접수 확인에 사용한다 최종 결과와 정리는 callback으로 보고해야 한다
@@ -89,6 +92,7 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 
 - 배정 재시도는 저장된 submission_id·팀·release·파일 해시를 그대로 사용한다 Scheduler도 이 식별정보를 고정하고 같은 ID의 다른 본문은 거절해야 한다
 - 409 WINDOWS_ASSIGNMENT_ENDED는 자동 재배정하지 않는다 START_UNKNOWN으로 옮겨 FIFO에서 제외하고 예약·파일을 보존한다 실제 이력 확인 전에는 해당 팀의 새 실행을 막는다
+- 409 WINDOWS_ASSIGNMENT_CONFLICT도 START_UNKNOWN과 requires_review로 분리한다 같은 submission_id의 고정 정보 충돌은 자동 재시도로 해결하지 않으며 새 ID나 VM으로 바꿔 실행하지 않는다 다른 팀의 FIFO 처리는 계속한다
 - HTTP 200 응답도 status가 COMPLETED·EXPIRED이거나 expires_at이 지났으면 종료된 배정으로 처리한다 알 수 없는 status는 배정으로 저장하지 않는다 기존 초안 호환을 위해 status 생략은 허용하되 제공자는 실제 임대 상태를 함께 반환해야 한다
 - VM 부족·502·응답 유실은 같은 submission_id로 재시도한다 새 제출을 자동 생성하지 않는다
 - 반납은 응답의 lease_id가 일치하고 status가 COMPLETED 또는 EXPIRED일 때만 확인한다 빈 응답·404·502는 반납 확인이 아니며 파일을 삭제하지 않는다 재시도도 같은 lease_id를 쓴다
@@ -96,6 +100,13 @@ EXE_SUBMISSION_STORAGE_ROOT는 웹에서 제공하지 않는 별도의 영속 �
 - 임대가 끝나도 기존 실행의 결과를 추측하지 않는다 접수 여부가 불명확한 체커 작업은 같은 ID로 조회만 하며 자동 재실행·반납하지 않는다
 
 스케줄러 제공 API와 맞출 필드·응답은 windows-assignments.openapi.json에 별도 초안으로 남긴다 이 파일이 실제 제공 구현이나 팀 간 합의를 대신하지 않는다
+
+## 별도 정리 보고 적용 시 주의
+
+challenge.0011_exesubmission_cleanup_confirmed_at을 배포 전에 적용한다 이 migration은 nullable 확인 시각만 추가하며 데이터나 파일을 삭제하지 않는다
+기존 cleanup_complete=true 값이나 과거 이벤트의 해시만으로 별도 CLEANUP 완료 보고를 추정해 채우지 않는다
+확인 시각 없는 기존 작업은 자동 반납·파일 삭제를 보류한다 유효한 새 CLEANUP 완료 보고 또는 운영자 확인이 필요하며 기존 이벤트 ID 재생만으로 확인 시각을 만들지 않는다
+체커 인증 경계와 준비 정보 갱신·임대 만료·VM 초기화 상태 반영은 별도 계약 대기이며 이 보완에서 변경하지 않는다
 
 ## 실제 제공 구현과 남은 연결
 

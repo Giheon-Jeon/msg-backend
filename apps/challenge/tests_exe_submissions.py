@@ -790,6 +790,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.status, submission.attempt_state = "COMPLETED", "USED"
         submission.started_at = submission.finished_at = timezone.now()
         submission.cleanup_complete = True
+        submission.cleanup_confirmed_at = timezone.now()
         submission.save()
         for result in (
             None,
@@ -820,6 +821,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.status, submission.attempt_state = "TIMEOUT", "USED"
         submission.started_at = submission.finished_at = timezone.now()
         submission.cleanup_complete = True
+        submission.cleanup_confirmed_at = timezone.now()
         submission.save()
         opener = self.http_response(
             json.dumps(
@@ -849,6 +851,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.status, submission.attempt_state = "COMPLETED", "USED"
         submission.started_at = submission.finished_at = timezone.now()
         submission.cleanup_complete = True
+        submission.cleanup_confirmed_at = timezone.now()
         submission.save()
         url = f"/api/windows-assignments/{submission.lease_id}/release"
         for status, code in (
@@ -898,6 +901,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.status, submission.attempt_state = "COMPLETED", "USED"
         submission.started_at = submission.finished_at = timezone.now()
         submission.cleanup_complete = True
+        submission.cleanup_confirmed_at = timezone.now()
         submission.save()
         with (
             patch(
@@ -933,6 +937,7 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
         submission.started_at = timezone.now()
         submission.finished_at = timezone.now()
         submission.cleanup_complete = True
+        submission.cleanup_confirmed_at = timezone.now()
         submission.save()
         with (
             patch(
@@ -973,6 +978,28 @@ class WindowsAssignmentTests(ExeFixtures, TestCase):
 
 
 class ExeProvenanceMigrationTests(ExeFixtures, TransactionTestCase):
+    def test_existing_cleanup_flag_is_not_fabricated_into_separate_report_proof(self):
+        submission = self.accepted()
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
+
+        def restore_schema():
+            MigrationExecutor(connection).migrate(latest)
+
+        self.addCleanup(restore_schema)
+        previous = [("challenge", "0010_remote_run_config_and_events")]
+        executor.migrate(previous)
+        historical = executor.loader.project_state(previous).apps.get_model("challenge", "ExeSubmission")
+        historical.objects.filter(pk=submission.pk).update(
+            status="COMPLETED", attempt_state="USED", finished_at=timezone.now(), cleanup_complete=True,
+        )
+        restore_schema()
+        submission.refresh_from_db()
+        self.assertTrue(submission.cleanup_complete)
+        self.assertIsNone(submission.cleanup_confirmed_at)
+        self.assertIsNone(submission.lease_released_at)
+        self.assertTrue((self.root / submission.payload_key).is_file())
+
     def test_existing_submission_survives_provenance_migration(self):
         submission = self.accepted()
         executor = MigrationExecutor(connection)

@@ -374,7 +374,10 @@ def serialize_exe_submission(submission):
         status = (
             "START_UNKNOWN" if submission.dispatch_state == "UNKNOWN" else "PREPARING"
         )
-    if submission.finished_at and submission.cleanup_complete is not True:
+    cleanup = submission.cleanup_complete
+    if cleanup is True and submission.cleanup_confirmed_at is None:
+        cleanup = None
+    if submission.finished_at and cleanup is not True:
         status = "CLEANUP_PENDING"
     return {
         "submission_id": str(submission.pk),
@@ -387,7 +390,7 @@ def serialize_exe_submission(submission):
         ),
         # A lease is not proof that the Windows guest/checker is ready to execute.
         "vm_readiness": submission.vm_readiness,
-        "cleanup_complete": submission.cleanup_complete,
+        "cleanup_complete": cleanup,
         "requires_review": submission.status == ExeSubmission.Status.START_UNKNOWN
         or submission.dispatch_state == "UNKNOWN",
         "file_name": submission.file_name,

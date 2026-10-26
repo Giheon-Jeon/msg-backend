@@ -10,7 +10,7 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from django.core.management import call_command
-from django.db import close_old_connections, connection, connections
+from django.db import DatabaseError, close_old_connections, connection, connections
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -24,12 +24,12 @@ from apps.challenge.exe_submissions import ExeSubmissionError
 from apps.challenge.models import ExeExecutionEvent, ExeSubmission, Solve
 from apps.challenge.tests_exe_submissions import ExeFixtures, harmless_pe
 from apps.challenge.windows_assignments import (
+    purge_released_payload,
     release_windows_assignment,
     request_windows_assignment,
 )
 from apps.instances.services import SchedulerError
 from apps.teams.models import MileageHistory
-
 
 PINS = {
     "checker_commit_sha": "a" * 40,
@@ -164,6 +164,7 @@ class RemoteRunTests(ExeFixtures, TestCase):
                 attempt_state="USED",
                 finished_at=timezone.now(),
                 cleanup_complete=True,
+                cleanup_confirmed_at=timezone.now(),
                 created_at=timezone.now() - timedelta(minutes=2),
             )
         response = self.client.get(self.url)
@@ -408,6 +409,9 @@ class RemoteRunTests(ExeFixtures, TestCase):
             ).status_code,
             200,
         )
+        self.assertEqual(
+            self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
+        )
         key = row.payload_key
         with patch(
             "apps.challenge.windows_assignments._post_scheduler",
@@ -583,18 +587,163 @@ class RemoteRunTests(ExeFixtures, TestCase):
         self.assertEqual(row.payload_key, "")
         self.assertFalse(list(self.root.rglob("payload.exe")))
 
+    def test_result_cleanup_hint_cannot_release_or_delete_without_separate_report(self):
+        row = self.assigned()
+        client = self.checker(row)
+        body = self.event(row, cleanup_complete=True)
+        self.assertEqual(self.callback(client, row, body).status_code, 200)
+        row.refresh_from_db()
+        self.assertIsNotNone(row.finished_at)
+        self.assertIsNone(row.cleanup_complete)
+        self.assertIsNone(row.cleanup_confirmed_at)
+        detail = self.client.get(f"{self.url}/{row.pk}").data["data"]
+        self.assertEqual(detail["status"], "CLEANUP_PENDING")
+        self.assertIsNone(detail["cleanup_complete"])
+        with patch("apps.challenge.windows_assignments._post_scheduler") as scheduler:
+            with self.assertRaises(ExeSubmissionError):
+                release_windows_assignment(row.pk)
+            call_command("dispatch_exe_submissions", stdout=io.StringIO())
+        scheduler.assert_not_called()
+        self.assertTrue((self.root / row.payload_key).is_file())
+        self.assertEqual(
+            self.callback(
+                client, row, self.event(row, "CLEANUP", cleanup_complete=False)
+            ).status_code,
+            200,
+        )
+        row.refresh_from_db()
+        self.assertFalse(row.cleanup_complete)
+        self.assertIsNone(row.cleanup_confirmed_at)
+        with patch("apps.challenge.windows_assignments._post_scheduler") as scheduler:
+            with self.assertRaises(ExeSubmissionError):
+                release_windows_assignment(row.pk)
+        scheduler.assert_not_called()
+        cleanup = self.event(row, "CLEANUP")
+        self.assertEqual(self.callback(client, row, cleanup).status_code, 200)
+        row.refresh_from_db()
+        confirmed_at = row.cleanup_confirmed_at
+        self.assertIsNotNone(confirmed_at)
+        self.assertEqual(self.callback(client, row, cleanup).status_code, 200)
+        row.refresh_from_db()
+        self.assertEqual(row.cleanup_confirmed_at, confirmed_at)
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(row.lease_id), "status": "COMPLETED"},
+        ) as scheduler:
+            release_windows_assignment(row.pk)
+        scheduler.assert_called_once()
+        row.refresh_from_db()
+        self.assertEqual(row.payload_key, "")
+
+    def test_cleanup_false_cannot_be_promoted_by_a_result_hint(self):
+        row = self.assigned()
+        client = self.checker(row)
+        self.assertEqual(
+            self.callback(
+                client, row, self.event(row, "CLEANUP", cleanup_complete=False)
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.callback(
+                client, row, self.event(row, cleanup_complete=True)
+            ).status_code,
+            200,
+        )
+        row.refresh_from_db()
+        self.assertFalse(row.cleanup_complete)
+        self.assertIsNone(row.cleanup_confirmed_at)
+        with patch("apps.challenge.windows_assignments._post_scheduler") as scheduler:
+            with self.assertRaises(ExeSubmissionError):
+                release_windows_assignment(row.pk)
+        scheduler.assert_not_called()
+
+    def test_legacy_cleanup_boolean_is_not_proof_for_release_or_payload_deletion(self):
+        row = self.assigned()
+        row.status, row.attempt_state = "COMPLETED", "USED"
+        row.started_at = row.finished_at = timezone.now()
+        row.cleanup_complete = True
+        row.save()
+        path = self.root / row.payload_key
+        with patch("apps.challenge.windows_assignments._post_scheduler") as scheduler:
+            with self.assertRaises(ExeSubmissionError):
+                release_windows_assignment(row.pk)
+        scheduler.assert_not_called()
+        detail = self.client.get(f"{self.url}/{row.pk}").data["data"]
+        self.assertEqual(detail["status"], "CLEANUP_PENDING")
+        self.assertIsNone(detail["cleanup_complete"])
+        row.lease_released_at = timezone.now()
+        row.save(update_fields=["lease_released_at"])
+        self.assertFalse(purge_released_payload(row))
+        self.assertTrue(path.is_file())
+
+    def test_cleanup_confirmation_rolls_back_when_event_cannot_be_saved(self):
+        row = self.assigned()
+        client = self.checker(row)
+        cleanup = self.event(row, "CLEANUP")
+        with (
+            patch(
+                "apps.challenge.checker_events.ExeExecutionEvent.objects.create",
+                side_effect=DatabaseError("fixture"),
+            ),
+            self.assertLogs("apps.common.exceptions", level="ERROR"),
+        ):
+            response = self.callback(client, row, cleanup)
+        self.assertEqual(response.status_code, 500)
+        row.refresh_from_db()
+        self.assertIsNone(row.cleanup_complete)
+        self.assertIsNone(row.cleanup_confirmed_at)
+        self.assertFalse(
+            ExeExecutionEvent.objects.filter(pk=cleanup["event_id"]).exists()
+        )
+        self.assertEqual(self.callback(client, row, cleanup).status_code, 200)
+        row.refresh_from_db()
+        self.assertIsNotNone(row.cleanup_confirmed_at)
+
+    def test_invalid_cleanup_provenance_cannot_confirm_cleanup(self):
+        row = self.assigned()
+        client = self.checker(row)
+        for values in (
+            {"assignment_id": str(uuid.uuid4())},
+            {"payload_sha256": "d" * 64},
+            {"driver_sha256": "e" * 64},
+        ):
+            with self.subTest(values=values):
+                self.assertEqual(
+                    self.callback(
+                        client, row, self.event(row, "CLEANUP", **values)
+                    ).status_code,
+                    409,
+                )
+        row.refresh_from_db()
+        self.assertIsNone(row.cleanup_confirmed_at)
+        self.assertFalse(ExeExecutionEvent.objects.exists())
+
     def test_cleanup_before_result_preserves_proof_and_late_start_cannot_restart(self):
         row = self.assigned()
         client = self.checker(row)
         self.assertEqual(
             self.callback(client, row, self.event(row, "CLEANUP")).status_code, 200
         )
+        row.refresh_from_db()
+        confirmed_at = row.cleanup_confirmed_at
+        self.assertIsNotNone(confirmed_at)
+        with patch("apps.challenge.windows_assignments._post_scheduler") as scheduler:
+            with self.assertRaises(ExeSubmissionError):
+                release_windows_assignment(row.pk)
+        scheduler.assert_not_called()
         self.assertEqual(
             self.callback(client, row, self.event(row, "STARTED")).status_code, 409
         )
         self.assertEqual(self.callback(client, row, self.event(row)).status_code, 200)
         row.refresh_from_db()
         self.assertTrue(row.cleanup_complete)
+        self.assertEqual(row.cleanup_confirmed_at, confirmed_at)
+        with patch(
+            "apps.challenge.windows_assignments._post_scheduler",
+            return_value={"lease_id": str(row.lease_id), "status": "COMPLETED"},
+        ):
+            release_windows_assignment(row.pk)
 
     def test_started_is_only_recorded_once_and_result_cannot_contradict_it(self):
         row = self.assigned()

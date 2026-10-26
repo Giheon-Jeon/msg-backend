@@ -241,16 +241,12 @@ def apply_event(authenticated, body):
             row.attempt_state = (
                 "USED"
                 if started is True
-                else "RELEASED"
-                if started is False
-                else "RESERVED"
+                else "RELEASED" if started is False else "RESERVED"
             )
             row.started_at = utc_time(body["started_at"]) if started is True else None
             row.finished_at = utc_time(body["finished_at"])
             row.exit_code = body.get("exit_code")
-            row.cleanup_complete = (
-                True if row.cleanup_complete is True else body.get("cleanup_complete")
-            )
+            # RESULT cleanup hints never replace a separately accepted CLEANUP report.
             output = body.get("output")
             if output is not None:
                 row.stdout, row.stdout_truncated = normalize_exe_output(
@@ -267,6 +263,8 @@ def apply_event(authenticated, body):
                     409,
                 )
             row.cleanup_complete = body["cleanup_complete"]
+            if row.cleanup_complete is True and row.cleanup_confirmed_at is None:
+                row.cleanup_confirmed_at = timezone.now()
         row.dispatch_state = "CONFIRMED"
         row.last_error_code = ""
         row.save()

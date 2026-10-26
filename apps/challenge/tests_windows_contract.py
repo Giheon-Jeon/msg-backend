@@ -39,8 +39,9 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
                     self.connection.shutdown(socket.SHUT_RDWR)
                     self.connection.close()
                     return
-                payload = json.dumps(reply).encode()
-                self.send_response(200)
+                status, body = reply if isinstance(reply, tuple) else (200, reply)
+                payload = json.dumps(body).encode()
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
@@ -57,7 +58,9 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
             class LocalOnly:
                 def open(self, request, **kwargs):
                     if not request.full_url.startswith(origin + "/"):
-                        raise AssertionError("Only the local protocol fixture is allowed")
+                        raise AssertionError(
+                            "Only the local protocol fixture is allowed"
+                        )
                     return opener.open(request, **kwargs)
 
             return LocalOnly()
@@ -121,6 +124,50 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
         self.assertEqual(second.status, "ASSIGNED")
         self.assertEqual(ExeSubmission.objects.count(), 2)
 
+    def test_conflicting_assignment_is_quarantined_and_other_teams_continue(self):
+        row = self.accepted()
+        other = self.accepted_other_team()
+        response = (
+            409,
+            {
+                "code": "WINDOWS_ASSIGNMENT_CONFLICT",
+                "message": "private-provider-detail",
+            },
+        )
+        with self.scheduler([response, self.assignment(other)]) as requests:
+            first = assign_oldest_exe_submission()
+            second = assign_oldest_exe_submission()
+            self.assertIsNone(assign_oldest_exe_submission())
+        self.assertEqual(first.pk, row.pk)
+        self.assertEqual(first.status, "START_UNKNOWN")
+        self.assertEqual(first.attempt_state, "RESERVED")
+        self.assertEqual(first.last_error_code, "WINDOWS_ASSIGNMENT_CONFLICT")
+        self.assertEqual(second.pk, other.pk)
+        self.assertEqual(second.status, "ASSIGNED")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            json.loads(requests[0]["body"]),
+            {
+                "submission_id": str(row.pk),
+                "team_id": str(row.team_id),
+                "challenge_id": str(row.challenge_id),
+                "release_id": str(row.release_id),
+                "payload_sha256": row.payload_sha256,
+            },
+        )
+        row.refresh_from_db()
+        self.assertIsNone(row.lease_id)
+        self.assertIsNone(row.lease_released_at)
+        self.assertIsNone(row.finished_at)
+        self.assertTrue((self.root / row.payload_key).is_file())
+        detail = self.client.get(f"{self.url}/{row.pk}")
+        self.assertTrue(detail.data["data"]["requires_review"])
+        self.assertNotIn(b"private-provider-detail", detail.content)
+        ExeSubmission.objects.filter(pk=row.pk).update(
+            created_at=timezone.now() - timedelta(minutes=1)
+        )
+        self.assertEqual(self.post_exe().data["code"], "EXECUTION_IN_PROGRESS")
+
     def test_explicit_active_lease_is_accepted(self):
         row = self.accepted()
         response = {**self.assignment(row), "status": "LEASED"}
@@ -135,6 +182,7 @@ class WindowsAssignmentContractTests(ExeFixtures, TestCase):
         row.status, row.attempt_state = "COMPLETED", "USED"
         row.started_at = row.finished_at = timezone.now()
         row.cleanup_complete = True
+        row.cleanup_confirmed_at = timezone.now()
         row.save()
         stored_path = self.root / row.payload_key
         acknowledgement = {"lease_id": str(row.lease_id), "status": "COMPLETED"}
