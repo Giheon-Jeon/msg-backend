@@ -4642,15 +4642,98 @@ class AdminTeamManageTests(TestCase):
             score=100,
             flag_hash="x",
         )
-        Instance.objects.create(
+        instance = Instance.objects.create(
             user=self.member,
             team=self.team,
             challenge=challenge,
             status=InstanceStatus.RUNNING,
         )
-        res = self.delete({"reason": "정리"})
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+        # 종료 중 · 정리 대기도 스케줄러에 컨테이너가 남아 있을 수 있다.
+        for status in (
+            InstanceStatus.RUNNING,
+            InstanceStatus.STOPPING,
+            InstanceStatus.CLEANUP_PENDING,
+        ):
+            with self.subTest(status=status):
+                Instance.objects.filter(pk=instance.pk).update(status=status)
+                res = self.delete({"reason": "정리"})
+                self.assertEqual(res.status_code, 409)
+                self.assertEqual(res.data["code"], "ACTIVE_INSTANCE_EXISTS")
+                self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
+                self.assertEqual(self.events("TEAM_DELETED"), [])
+
+    def test_delete_restarts_when_solve_appears_before_team_lock(self):
+        """팀을 쥔 채 새 문제를 잠그면 정답 처리(문제 → 팀)와 교착한다. 처음부터 다시 잡아야 한다."""
+        from apps.adminpanel import views
+
+        first, late = [
+            Challenge.objects.create(
+                title=title,
+                category="WEB",
+                difficulty="EASY",
+                score=500,
+                flag_hash="x",
+                initial_score=500,
+                minimum_score=100,
+                decay=1,
+            )
+            for title in ("먼저 푼 문제", "나중에 푼 문제")
+        ]
+        Solve.objects.create(
+            team=self.team, challenge=first, earned_score=500, earned_mileage=0
+        )
+        calls = []
+        lock_challenges, lock_team = views._lock_challenges, views._get_team_for_update
+
+        def record_challenges(ids):
+            calls.append(("challenges", set(ids)))
+            return lock_challenges(ids)
+
+        def record_team(team_id):
+            if not any(name == "team" for name, _ in calls):
+                # 문제 목록을 읽은 뒤 팀을 잠그기 전에 정답이 하나 더 커밋된 상황
+                Solve.objects.create(
+                    team=self.team, challenge=late, earned_score=500, earned_mileage=0
+                )
+            calls.append(("team", None))
+            return lock_team(team_id)
+
+        with patch.object(views, "_lock_challenges", record_challenges), patch.object(
+            views, "_get_team_for_update", record_team
+        ):
+            res = self.delete({"reason": "정리"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            calls,
+            [
+                ("challenges", {first.pk}),
+                ("team", None),
+                ("challenges", {first.pk, late.pk}),
+                ("team", None),
+            ],
+        )
+        self.assertFalse(Team.objects.filter(pk=self.team.pk).exists())
+
+    def test_delete_rolls_back_when_score_recalculation_fails(self):
+        """재계산이 도중에 끊기면 팀 삭제도 남지 않아야 다시 시도할 수 있다."""
+        challenge = Challenge.objects.create(
+            title="웹",
+            category="WEB",
+            difficulty="EASY",
+            score=500,
+            flag_hash="x",
+        )
+        Solve.objects.create(
+            team=self.team, challenge=challenge, earned_score=500, earned_mileage=0
+        )
+        with patch(
+            "apps.adminpanel.views.update_dynamic_score_and_team_scores",
+            side_effect=RuntimeError("중단"),
+        ):
+            res = self.delete({"reason": "정리"})
+
+        self.assertEqual(res.status_code, 500)
         self.assertTrue(Team.objects.filter(pk=self.team.pk).exists())
         self.assertEqual(self.events("TEAM_DELETED"), [])
 

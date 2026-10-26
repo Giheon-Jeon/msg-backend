@@ -314,6 +314,10 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
     "UNAUTHENTICATED_USER": None,
+    # X-Forwarded-For 는 클라이언트가 임의로 넣을 수 있어 요청 제한에 쓰지 않는다.
+    # 실제 접속 주소(REMOTE_ADDR)와 login_id 조합으로 센다. 오프라인 대회라 접속 IP 가 모두 같아
+    # 손해가 없다. 온라인 대회로 바꾸면 모두가 프록시 IP 하나로 묶이므로 다시 본다.
+    "NUM_PROXIES": 0,
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "read_api": os.getenv("READ_API_THROTTLE_RATE", "60/min"),
