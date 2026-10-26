@@ -2,9 +2,12 @@ import math
 import uuid
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.password_validation import (
+    UserAttributeSimilarityValidator,
+    validate_password,
+)
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import (
     Count,
     DecimalField,
@@ -346,8 +349,14 @@ def account_create(request):
     try:
         # settings.AUTH_PASSWORD_VALIDATORS. 흔한 비밀번호와 숫자만으로 된 비밀번호를 거절한다.
         validate_password(password)
+        # 기본 유사도 검사는 username · email 을 보는데 User 에는 없어 login_id · nickname 과 따로 비교한다.
+        UserAttributeSimilarityValidator(user_attributes=("login_id", "nickname")).validate(
+            password, User(login_id=login_id, nickname=nickname)
+        )
     except ValidationError:
-        raise InvalidRequest("password 가 너무 단순합니다 (흔한 비밀번호이거나 숫자로만 됨)")
+        raise InvalidRequest(
+            "password 가 너무 단순합니다 (흔한 비밀번호, 숫자만, 아이디·닉네임과 비슷함)"
+        )
 
     if User.objects.filter(login_id=login_id).exists():
         raise LoginIdTaken()
@@ -1242,26 +1251,38 @@ def team_detail(request, team_id):
 def dashboard(request):
     now = timezone.now().replace(microsecond=0)
 
-    team_agg = Team.objects.aggregate(
-        total=Count("team_id"),
-        banned=Count("team_id", filter=Q(is_banned=True)),
-        mileage=Sum("mileage"),
-    )
-    pay = MileageHistory.objects.aggregate(
-        purchase=Count("history_id", filter=Q(type=MileageType.PURCHASE)),
-        refund=Count("history_id", filter=Q(type=MileageType.REFUND)),
-        pay_sum=Sum(
-            "amount",
-            filter=Q(type__in=[MileageType.PURCHASE, MileageType.REFUND]),
-        ),
-    )
-    inst = Instance.objects.aggregate(
-        running=Count("instance_id", filter=Q(status=InstanceStatus.RUNNING)),
-        failed=Count("instance_id", filter=Q(status=InstanceStatus.FAILED)),
-        total=Count("instance_id"),
-    )
+    # 집계를 한 스냅샷에서 읽어 대회 · 팀 · 결제 · 인스턴스 · 문제 수치가 같은 시점을 가리키게 한다.
+    # 바깥 트랜잭션 안(테스트)에서는 격리 수준을 바꿀 수 없어 그대로 읽는다.
+    snapshot = not connection.in_atomic_block
+    with transaction.atomic():
+        if snapshot:
+            with connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        team_agg = Team.objects.aggregate(
+            total=Count("team_id"),
+            banned=Count("team_id", filter=Q(is_banned=True)),
+            mileage=Sum("mileage"),
+        )
+        pay = MileageHistory.objects.aggregate(
+            purchase=Count("history_id", filter=Q(type=MileageType.PURCHASE)),
+            refund=Count("history_id", filter=Q(type=MileageType.REFUND)),
+            pay_sum=Sum(
+                "amount",
+                filter=Q(type__in=[MileageType.PURCHASE, MileageType.REFUND]),
+            ),
+        )
+        inst = Instance.objects.aggregate(
+            running=Count("instance_id", filter=Q(status=InstanceStatus.RUNNING)),
+            failed=Count("instance_id", filter=Q(status=InstanceStatus.FAILED)),
+            total=Count("instance_id"),
+        )
+        challenges = {
+            "total": Challenge.objects.count(),
+            "published": Challenge.objects.filter(is_published=True).count(),
+            "solved_total": Solve.objects.count(),
+        }
+        contest = Contest.objects.filter(is_active=True).first()
 
-    contest = Contest.objects.filter(is_active=True).first()
     if contest is None:
         contest_data = None
     else:
@@ -1291,11 +1312,7 @@ def dashboard(request):
                 "failed": inst["failed"],
                 "total": inst["total"],
             },
-            "challenges": {
-                "total": Challenge.objects.count(),
-                "published": Challenge.objects.filter(is_published=True).count(),
-                "solved_total": Solve.objects.count(),
-            },
+            "challenges": challenges,
             "collected_at": now,
         }
     )
