@@ -3286,6 +3286,77 @@ class AdminEventRecordingTests(TestCase):
         self.assertEqual(event.actor, "root")
         self.assertIn("플래그 공유", event.message)
 
+    @patch("apps.adminpanel.views.call_scheduler_delete")
+    def test_ban_stops_running_instances_of_team(self, mock_delete):
+        """정지된 팀의 실행 중 인스턴스는 강제 종료한다 (QA TC-61)."""
+        from apps.adminpanel.models import AdminEvent
+
+        running = self.instance()
+        other_team = Team.objects.create(team_name="다른 팀")
+        outsider = Instance.objects.create(
+            user=User.objects.create_user(
+                login_id="outsider", password="pw1234", nickname="밖", team=other_team
+            ),
+            team=other_team,
+            challenge=self.challenge,
+            status=InstanceStatus.RUNNING,
+        )
+
+        res = self.client.post(
+            f"/api/v1/admin/teams/{self.team.team_id}/ban",
+            {"ban_reason": "플래그 공유"},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["stopped_instance_count"], 1)
+        self.assertEqual(res.data["data"]["remaining_instance_count"], 0)
+        mock_delete.assert_called_once()
+        running.refresh_from_db()
+        self.assertEqual(running.status, InstanceStatus.STOPPING)
+        self.assertEqual(running.delete_reason, DeleteReason.ADMIN_FORCED)
+        outsider.refresh_from_db()
+        self.assertEqual(outsider.status, InstanceStatus.RUNNING)
+        event = self.only_event(AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(event.severity, AdminEvent.Severity.WARNING)
+        self.assertEqual(event.instance_id, running.instance_id)
+
+    @patch("apps.adminpanel.views.call_scheduler_delete")
+    def test_ban_keeps_ban_when_instances_cannot_be_stopped(self, mock_delete):
+        """종료가 실패하거나 종료할 수 없는 상태여도 정지는 유지하고 CRITICAL 로 남긴다."""
+        from apps.adminpanel.models import AdminEvent
+        from apps.instances.services import SchedulerError
+
+        mock_delete.side_effect = SchedulerError(
+            "SCHEDULER_UNAVAILABLE", "스케줄러에 연결할 수 없습니다", 503
+        )
+        failing = self.instance()
+        provisioning = self.instance(status=InstanceStatus.PROVISIONING)
+
+        res = self.client.post(
+            f"/api/v1/admin/teams/{self.team.team_id}/ban",
+            {"ban_reason": "플래그 공유"},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["data"]["stopped_instance_count"], 0)
+        self.assertEqual(res.data["data"]["remaining_instance_count"], 2)
+        self.team.refresh_from_db()
+        self.assertTrue(self.team.is_banned)
+        for instance in (failing, provisioning):
+            instance.refresh_from_db()
+        self.assertEqual(failing.status, InstanceStatus.RUNNING)
+        self.assertEqual(provisioning.status, InstanceStatus.PROVISIONING)
+        events = self.events(AdminEvent.EventType.INSTANCE_FORCED)
+        self.assertEqual(
+            {(e.instance_id, e.severity) for e in events},
+            {
+                (failing.instance_id, AdminEvent.Severity.CRITICAL),
+                (provisioning.instance_id, AdminEvent.Severity.CRITICAL),
+            },
+        )
+
     def test_unban_records_event_with_previous_reason(self):
         from apps.adminpanel.models import AdminEvent
 

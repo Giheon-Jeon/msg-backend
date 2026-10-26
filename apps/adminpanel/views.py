@@ -478,6 +478,9 @@ def _ban(request, team_id):
             team=team,
         )
 
+    # 정지를 먼저 커밋해 새 인스턴스 생성을 막은 뒤 종료한다. 종료가 실패해도 정지는 유지한다.
+    stopped, remaining = _stop_team_instances(request, team)
+
     return ok(
         {
             "team_id": str(team.team_id),
@@ -485,9 +488,84 @@ def _ban(request, team_id):
             "ban_reason": team.ban_reason,
             "banned_at": team.banned_at,
             "banned_by": team.banned_by,
+            "stopped_instance_count": stopped,
+            "remaining_instance_count": remaining,
         },
         message="팀 활동이 정지되었습니다",
     )
+
+
+def _stop_team_instances(request, team):
+    """정지된 팀의 활성 인스턴스를 강제 종료하고 (종료 요청 수, 남은 수)를 돌려준다.
+
+    강제 종료 API 와 같은 사용자 잠금 → 인스턴스 순서로, 인스턴스마다 따로 커밋한다.
+    스케줄러가 지울 수 있는 상태는 RUNNING 뿐이라 생성·재시작 중인 것은 기록만 남긴다.
+    """
+    stopped = remaining = 0
+    with transaction.atomic():
+        # 인스턴스 생성은 사용자 잠금을 쥔 채 스케줄러 응답을 몇 초 기다린다. 그 사이 정지되면
+        # 행이 아직 없어 목록에서 빠지므로, 팀원과 소유자의 잠금을 먼저 잡아 생성이 끝난 뒤에 읽는다.
+        user_ids = set(User.objects.filter(team=team).values_list("pk", flat=True))
+        user_ids.update(
+            Instance.objects.filter(
+                team=team, status__in=ACTIVE_INSTANCE_STATUSES
+            ).values_list("user_id", flat=True)
+        )
+        for user_id in sorted(user_ids):
+            InstanceLock.objects.select_for_update().get_or_create(user_id=user_id)
+        targets = list(
+            Instance.objects.filter(
+                team=team, status__in=ACTIVE_INSTANCE_STATUSES
+            ).values_list("instance_id", "user_id")
+        )
+    for instance_id, user_id in targets:
+        with transaction.atomic():
+            InstanceLock.objects.select_for_update().get_or_create(user_id=user_id)
+            instance = (
+                Instance.objects.select_for_update()
+                .select_related("challenge")
+                .filter(pk=instance_id, status__in=ACTIVE_INSTANCE_STATUSES)
+                .first()
+            )
+            if instance is None:
+                continue
+
+            failure = None
+            if instance.status not in DELETABLE_INSTANCE_STATUSES:
+                failure = f"{instance.status} 상태라 종료할 수 없음"
+            else:
+                try:
+                    call_scheduler_delete(instance, scheduler_auth_header(request))
+                except SchedulerError as error:
+                    failure = f"{error.code}: {error.message}"
+
+            if failure is not None:
+                remaining += 1
+                _record_event(
+                    AdminEvent.EventType.INSTANCE_FORCED,
+                    f"팀 정지에 따른 인스턴스 강제 종료 실패 ({failure})",
+                    request.user.login_id,
+                    severity=AdminEvent.Severity.CRITICAL,
+                    team=team,
+                    challenge=instance.challenge,
+                    instance_id=instance.instance_id,
+                )
+                continue
+
+            instance.status = InstanceStatus.STOPPING
+            instance.delete_reason = DeleteReason.ADMIN_FORCED
+            instance.save(update_fields=["status", "delete_reason", "updated_at"])
+            stopped += 1
+            _record_event(
+                AdminEvent.EventType.INSTANCE_FORCED,
+                "팀 정지에 따른 인스턴스 강제 종료",
+                request.user.login_id,
+                severity=AdminEvent.Severity.WARNING,
+                team=team,
+                challenge=instance.challenge,
+                instance_id=instance.instance_id,
+            )
+    return stopped, remaining
 
 
 @api_view(["PATCH"])
