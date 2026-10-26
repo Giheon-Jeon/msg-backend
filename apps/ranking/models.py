@@ -11,7 +11,8 @@ class LineMonopoly(models.Model):
         related_name="line_monopolies",
     )
     line_number = models.PositiveSmallIntegerField()
-    earned_score = models.DecimalField(max_digits=12, decimal_places=2)
+    # 라인 문제 점수(각 최대 12자리)의 합에 비율을 곱하므로 팀 점수와 같은 크기로 둔다.
+    earned_score = models.DecimalField(max_digits=20, decimal_places=2)
     is_category_bonus = models.BooleanField(default=False)
     monopolized_at = models.DateTimeField(auto_now_add=True)
 

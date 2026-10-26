@@ -20,7 +20,7 @@ from apps.challenge.models import Challenge
 from apps.challenge.services import hash_flag, is_correct_flag
 from apps.common.models import IdempotencyRecord
 from apps.instances import published_challenges as publications
-from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, RuntimeSecret
+from apps.instances.models import ChallengeRelease, ChallengeRuntimeConfig, ChallengeUserFileBundle, PollerArtifact, PublicationRequest, RuntimeSecret
 from apps.instances.runtime_secrets import create_runtime_secret, decrypt_runtime_secret
 from apps.instances.tests_releases import ReleaseTestBase, artifact_payload
 from apps.instances.tests_repository_environment import MemorySnapshot
@@ -96,11 +96,11 @@ class PublishedChallengeTests(ReleaseTestBase):
             value = next(item for item in self.artifacts if path.endswith(f"/{item['id']}"))
         return json.dumps(value).encode()
 
-    def preview(self):
-        return self.client.post(BASE + "/preview", {"artifact_id": self.artifacts[0]["id"]}, format="json")
+    def preview(self, **extra):
+        return self.client.post(BASE + "/preview", {"artifact_id": self.artifacts[0]["id"], **extra}, format="json")
 
-    def body(self):
-        response = self.preview()
+    def body(self, **extra):
+        response = self.preview(**extra)
         self.assertEqual(response.status_code, 200, response.data)
         return {"preview_token": response.data["data"]["preview_token"], "difficulty": "MEDIUM"}
 
@@ -455,3 +455,233 @@ class PublishedChallengeTests(ReleaseTestBase):
         self.assertEqual((container.env, container.secret_env), ({"PORT": "8080"}, {"FLAG": str(flag.pk)}))
         self.assertEqual(release.repository_env, {"revision": SHA, "files": ["env/app.env"], "missing": []})
         self.assertEqual(RuntimeSecret.objects.filter(challenge=release.challenge).count(), 1)
+
+    def linked_request(self):
+        challenge = Challenge.objects.create(
+            challenge_slug=SLUG, title="Linked publication", category="WEB", difficulty="EASY",
+            score=500, flag_hash=hash_flag(self.metadata["flag"]), is_published=False,
+        )
+        row = PublicationRequest.objects.create(
+            challenge=challenge, challenge_slug=SLUG, repository="MSG-CTF/2026_MSG_CTF",
+            workflow="challenge-validation.yml", ref="main", requested_sha=SHA,
+            dispatch_status="DISPATCHED", run_id=88, run_attempt=1, run_number=1,
+            dispatch_started_at=timezone.now(), requested_by=self.admin, requested_by_login=self.admin.login_id,
+        )
+        self.run.update(
+            run_attempt=1, run_number=1, repository={"full_name": row.repository},
+            head_repository={"full_name": row.repository}, path=".github/workflows/challenge-validation.yml",
+            event="workflow_dispatch", display_title=f"문제 요청 {SLUG} / {row.pk}",
+        )
+        return row
+
+    def test_linked_import_commits_three_way_sha_proof_without_activating(self):
+        row = self.linked_request()
+        preview = self.preview(publication_request_id=str(row.pk))
+        self.assertEqual(preview.status_code, 200, preview.data)
+        self.assertTrue(preview.data["data"]["sha_verified"])
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+        self.assertFalse(ChallengeRelease.objects.exists())
+        body = {"preview_token": preview.data["data"]["preview_token"], "difficulty": "EASY"}
+        response = self.import_body(body)
+        self.assertEqual(response.status_code, 200, response.data)
+        row.refresh_from_db()
+        proof = response.data["data"]["collection"]
+        self.assertEqual(row.collection, proof)
+        self.assertEqual(proof["artifact_ids"], {"publish": 11, "user-files": 12})
+        self.assertEqual((proof["run_id"], proof["run_attempt"], proof["registry_revision"], proof["source_sha"]), (88, 1, 1, SHA))
+        self.assertEqual(proof["release_id"], response.data["data"]["release_id"])
+        self.assertIsNone(ChallengeRuntimeConfig.objects.get(challenge=row.challenge).current_release_id)
+        self.assertFalse(row.challenge.is_published)
+        self.calls.clear()
+        detail = self.client.get(f"/api/v1/admin/publication_requests/{row.pk}")
+        self.assertTrue(detail.data["data"]["sha_verified"])
+        self.assertEqual(detail.data["data"]["collection"], proof)
+        self.assertEqual(self.import_body(body).json(), response.json())
+        self.assertEqual(self.calls, [])
+        encoded = json.dumps(detail.data)
+        self.assertNotIn(self.metadata["flag"], encoded)
+        self.assertNotIn("private-source-env", encoded)
+
+    def test_linked_request_rejects_wrong_run_slug_sha_repository_and_state_before_download(self):
+        row = self.linked_request()
+        for field, bad in (("run_id", 89), ("challenge_slug", "web-other"), ("requested_sha", "d" * 40),
+                           ("repository", "other/repo"), ("workflow", "other.yml"), ("ref", "dev"),
+                           ("dispatch_status", "DISPATCH_UNKNOWN"), ("dispatch_started_at", None),
+                           ("challenge_id", None)):
+            original = getattr(row, field)
+            PublicationRequest.objects.filter(pk=row.pk).update(**{field: bad})
+            self.calls.clear()
+            with self.subTest(field=field):
+                response = self.preview(publication_request_id=str(row.pk))
+                self.assertEqual(response.status_code, 409, response.data)
+                self.assertFalse(any(path.endswith("/zip") for path in self.calls))
+            PublicationRequest.objects.filter(pk=row.pk).update(**{field: original})
+        self.assertFalse(ChallengeRelease.objects.exists())
+
+    def test_linked_request_requires_exact_run_provenance_and_revision(self):
+        row = self.linked_request()
+        original = copy.deepcopy(self.run)
+        for field, bad in (("path", ".github/workflows/other.yml"), ("event", "push"),
+                           ("display_title", self.run["display_title"] + " extra"),
+                           ("repository", {"full_name": "other/repo"}), ("head_repository", {"full_name": "other/repo"}),
+                           ("run_number", 2), ("run_attempt", True)):
+            self.run = {**original, field: bad}
+            with self.subTest(field=field):
+                response = self.preview(publication_request_id=str(row.pk))
+                self.assertGreaterEqual(response.status_code, 400, response.data)
+        self.run = original
+        self.release.update(registry_revision=2, revision=2)
+        self.manifest["registry_revision"] = 2
+        self.assertEqual(self.preview(publication_request_id=str(row.pk)).status_code, 409)
+        self.assertFalse(ChallengeRelease.objects.exists())
+
+    def test_linked_bundle_sha_and_files_sha_are_rechecked_before_save(self):
+        row = self.linked_request()
+        for data in (self.release, self.manifest):
+            original = data["source_sha"]
+            data["source_sha"] = "e" * 40
+            with self.subTest(bundle="release" if data is self.release else "files"):
+                self.assertGreaterEqual(self.preview(publication_request_id=str(row.pk)).status_code, 400)
+            data["source_sha"] = original
+        del self.release["source_sha"]
+        self.release["commit_sha"] = SHA
+        self.assertEqual(self.preview(publication_request_id=str(row.pk)).status_code, 409)
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+        self.assertFalse(ChallengeRelease.objects.exists())
+
+    def test_linked_rerun_accepts_old_name_attempt_but_not_stale_preview_or_new_digest(self):
+        row = self.linked_request()
+        body = self.body(publication_request_id=str(row.pk))
+        first = self.import_body(body)
+        self.assertEqual(first.status_code, 200, first.data)
+        self.run["run_attempt"] = 2
+        PublicationRequest.objects.filter(pk=row.pk).update(run_attempt=2)
+        detail = self.client.get(f"/api/v1/admin/publication_requests/{row.pk}").data["data"]
+        self.assertFalse(detail["sha_verified"])
+        self.assertEqual(detail["collection"]["run_attempt"], 1)
+        self.assertEqual(self.import_body(body, "old-attempt").status_code, 409)
+        second = self.import_body(self.body(publication_request_id=str(row.pk)), "rerun")
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(second.data["data"]["release_status"], "duplicate")
+        self.assertEqual(second.data["data"]["collection"]["run_attempt"], 2)
+        self.assertEqual(ChallengeRelease.objects.count(), 1)
+        self.release["workload"]["containers"][0]["image"] = f"ghcr.io/msg-ctf/challenges/{SLUG}/app@sha256:{'b' * 64}"
+        self.assertEqual(self.import_body(self.body(publication_request_id=str(row.pk)), "changed-digest").status_code, 409)
+        row.refresh_from_db()
+        self.assertEqual(row.collection, second.data["data"]["collection"])
+
+    def test_linked_duplicate_candidates_are_rejected_without_latest_selection(self):
+        row = self.linked_request()
+        self.artifacts.append({**self.artifacts[0], "id": 13, "name": f"{SLUG}-88-2-abcdef-publish-bundle"})
+        self.assertEqual(self.preview(publication_request_id=str(row.pk)).status_code, 400)
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+
+    def test_linked_alias_uses_canonical_proof_and_signed_request_cannot_be_swapped(self):
+        row = self.linked_request()
+        alias = PublicationRequest.objects.create(
+            challenge=row.challenge, challenge_slug=SLUG, repository=row.repository, workflow=row.workflow,
+            ref=row.ref, requested_sha=SHA, reused_request=row, requested_by=self.admin,
+            requested_by_login=self.admin.login_id,
+        )
+        body = self.body(publication_request_id=str(alias.pk))
+        self.assertEqual(self.import_body({**body, "publication_request_id": str(row.pk)}).status_code, 400)
+        response = self.import_body(body)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["publication_request_id"], str(alias.pk))
+        self.assertEqual(response.data["data"]["dispatch_request_id"], str(row.pk))
+        alias.refresh_from_db()
+        row.refresh_from_db()
+        self.assertEqual(alias.collection, {})
+        self.assertEqual(row.collection, response.data["data"]["collection"])
+        detail = self.client.get(f"/api/v1/admin/publication_requests/{alias.pk}").data["data"]
+        self.assertEqual(detail["collection"], row.collection)
+        self.assertTrue(detail["sha_verified"])
+
+    def test_linked_storage_failure_rolls_back_proof_and_retry_can_complete(self):
+        row = self.linked_request()
+        body = self.body(publication_request_id=str(row.pk))
+        with patch("apps.instances.user_files.default_storage.save", side_effect=OSError("private-error")):
+            response = self.import_body(body)
+        self.assertEqual(response.status_code, 503, response.data)
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+        self.assertFalse(ChallengeRelease.objects.exists())
+        self.assertFalse(IdempotencyRecord.objects.exists())
+        self.assertEqual(self.import_body(body).status_code, 200)
+
+    def test_linked_request_is_rechecked_under_lock_before_any_import_writes(self):
+        row = self.linked_request()
+        body = self.body(publication_request_id=str(row.pk))
+        save = publications.save_publication
+
+        def newer_observation(prepared, *args):
+            PublicationRequest.objects.filter(pk=row.pk).update(run_attempt=2)
+            return save(prepared, *args)
+
+        with patch("apps.instances.published_challenges.save_publication", side_effect=newer_observation):
+            response = self.import_body(body)
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertFalse(ChallengeRelease.objects.exists())
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+
+    def test_linked_request_id_validation_and_admin_permission_precede_network(self):
+        for value in (None, True, 1, "not-a-uuid"):
+            with self.subTest(value=value):
+                self.assertEqual(self.preview(publication_request_id=value).status_code, 400)
+        self.assertEqual(self.calls, [])
+        response = self.preview(publication_request_id="00000000-0000-0000-0000-000000000001")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.calls, [])
+        row = self.linked_request()
+        self.auth("player")
+        self.assertEqual(self.preview(publication_request_id=str(row.pk)).status_code, 403)
+        self.assertEqual(self.calls, [])
+
+    def test_unlinked_collection_still_needs_no_request_uuid(self):
+        response = self.import_body(self.body())
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertNotIn("publication_request_id", response.data["data"])
+        self.assertFalse(PublicationRequest.objects.exists())
+
+    def test_linked_static_no_file_publication_has_proof_without_a_runtime_release(self):
+        self.make_static()
+        self.archive = None
+        self.manifest = user_manifest(None, slug=SLUG, source_sha=SHA)
+        row = self.linked_request()
+        response = self.import_body(self.body(publication_request_id=str(row.pk)))
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(response.data["data"]["collection"]["release_id"])
+        self.assertEqual(response.data["data"]["collection"]["artifact_ids"], {"user-files": 12})
+        self.assertFalse(ChallengeRelease.objects.exists())
+        self.assertFalse(ChallengeRuntimeConfig.objects.filter(challenge=row.challenge).exists())
+        self.assertFalse(ChallengeUserFileBundle.objects.get(challenge=row.challenge).present)
+
+    def test_linked_changed_file_content_does_not_replace_revision_or_successful_proof(self):
+        row = self.linked_request()
+        first = self.import_body(self.body(publication_request_id=str(row.pk)))
+        self.assertEqual(first.status_code, 200, first.data)
+        stored = ChallengeUserFileBundle.objects.get(challenge=row.challenge)
+        self.archive = user_archive({"changed.txt": b"new content"})
+        self.manifest = user_manifest(self.archive, slug=SLUG, source_sha=SHA)
+        response = self.import_body(self.body(publication_request_id=str(row.pk)), "changed-files")
+        self.assertEqual(response.status_code, 409, response.data)
+        stored.refresh_from_db()
+        row.refresh_from_db()
+        self.assertNotEqual(stored.sha256, self.manifest["user_files"]["sha256"])
+        self.assertEqual(row.collection, first.data["data"]["collection"])
+
+    def test_linked_pair_provenance_and_artifact_selection_are_rechecked_after_preview(self):
+        row = self.linked_request()
+        body = self.body(publication_request_id=str(row.pk))
+        self.artifacts[1]["workflow_run"]["head_sha"] = "e" * 40
+        self.assertEqual(self.import_body(body).status_code, 400)
+        self.artifacts[1]["workflow_run"]["head_sha"] = SHA
+        self.artifacts[1]["id"] = 99
+        self.assertEqual(self.import_body(body).status_code, 409)
+        row.refresh_from_db()
+        self.assertEqual(row.collection, {})
+        self.assertFalse(ChallengeRelease.objects.exists())

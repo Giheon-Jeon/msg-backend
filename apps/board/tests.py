@@ -529,6 +529,7 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(data["cell_states"], [])
         self.assertEqual(data["chance_cards"], [])
         self.assertIsNone(data["active_challenge"])
+        self.assertEqual(data["line_monopolies"], [])
         self.assertEqual(
             set(data.keys()),
             {
@@ -544,6 +545,7 @@ class BoardApiTestCase(TestCase):
                 "cell_states",
                 "chance_cards",
                 "active_challenge",
+                "line_monopolies",
             },
         )
 

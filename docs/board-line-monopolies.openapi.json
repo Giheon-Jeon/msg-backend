@@ -1,0 +1,44 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Board line monopoly payout response", "version": "1.0.0"},
+  "paths": {
+    "/api/v1/board/me": {
+      "get": {
+        "description": "Authenticated team board state including the team's persisted line payouts in ascending line_number order. Existing board fields are retained.",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Current team board state", "content": {"application/json": {"schema": {
+            "type": "object", "required": ["code", "data"],
+            "properties": {
+              "code": {"const": "SUCCESS"},
+              "data": {"type": "object", "required": ["line_monopolies"], "properties": {
+                "line_monopolies": {
+                  "type": "array", "maxItems": 6,
+                  "description": "Empty means no persisted payouts. A missing field in an older response means payout state is unknown. Never infer payment from cell visits or CLEARED cells alone.",
+                  "items": {"$ref": "#/components/schemas/LineMonopoly"}
+                }
+              }}
+            }
+          }}}}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}},
+    "schemas": {
+      "LineMonopoly": {
+        "type": "object", "additionalProperties": false,
+        "required": ["line_number", "earned_score", "is_category_bonus"],
+        "properties": {
+          "line_number": {"type": "integer", "minimum": 1, "maximum": 6},
+          "earned_score": {
+            "type": "number", "minimum": 0,
+            "description": "Actual persisted award, including zero and admin edits. Storage is Decimal(20,2). Whole integers are emitted without intermediate float rounding. Clients must preserve large integer JSON tokens before normal JavaScript number decoding. No estimate of a future award is implied."
+          },
+          "is_category_bonus": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@ from django.db import transaction
 from django.test import TestCase
 
 from apps.accounts.models import Team
+from apps.adminpanel.models import AdminSetting
 from apps.board.models import Cell, TeamChallengeAccess
 from apps.board.services import consume_cell
 from apps.challenge.models import Challenge, Solve
@@ -23,7 +24,7 @@ class LineMonopolyTests(TestCase):
             for index in range(2, 7)
         ]
 
-    def complete_line(self, team, prefix):
+    def complete_line(self, team, prefix, earned_score=100):
         last_challenge = None
         for index, cell in enumerate(self.cells, start=1):
             challenge = Challenge.objects.create(
@@ -44,11 +45,27 @@ class LineMonopolyTests(TestCase):
             Solve.objects.create(
                 team=team,
                 challenge=challenge,
-                earned_score=100,
+                earned_score=earned_score,
                 earned_mileage=0,
             )
             last_challenge = challenge
         return last_challenge
+
+    def test_bonus_at_largest_allowed_scores_and_percent_is_stored(self):
+        """관리자 API 가 허용하는 점수와 100% 비율 조합도 저장된다. 넘치면 마지막 정답 제출이 실패한다."""
+        AdminSetting.objects.create(key="board.line_category_bonus_percent", value=100)
+        for prefix, score, expected in (
+            ("reviewed", Decimal("2000000000"), Decimal("10000000000.00")),
+            ("largest", Decimal("9999999999.99"), Decimal("49999999999.95")),
+        ):
+            with self.subTest(score=score):
+                team = Team.objects.create(team_name=f"{prefix} 팀")
+                self.complete_line(team, prefix, earned_score=score)
+
+                award = check_and_record_line_monopoly(team, line_number=1)
+
+                award.refresh_from_db()
+                self.assertEqual(award.earned_score, expected)
 
     def test_each_team_receives_the_same_line_bonus_once(self):
         first_team = Team.objects.create(team_name="첫 번째 팀")
@@ -69,6 +86,25 @@ class LineMonopolyTests(TestCase):
             set(LineMonopoly.objects.values_list("team_id", "line_number")),
             {(first_team.pk, 1), (second_team.pk, 1)},
         )
+
+    def test_bonus_percent_follows_admin_settings(self):
+        AdminSetting.objects.create(key="board.line_bonus_percent", value=10)
+        AdminSetting.objects.create(key="board.line_category_bonus_percent", value=20)
+        same_category = Team.objects.create(team_name="같은 분야 팀")
+        mixed = Team.objects.create(team_name="섞인 분야 팀")
+        self.complete_line(same_category, "same")
+        last = self.complete_line(mixed, "mixed")
+        Challenge.objects.filter(pk=last.pk).update(
+            category=Challenge.CategoryType.PWN
+        )
+
+        category_award = check_and_record_line_monopoly(same_category, line_number=1)
+        line_award = check_and_record_line_monopoly(mixed, line_number=1)
+
+        self.assertTrue(category_award.is_category_bonus)
+        self.assertEqual(category_award.earned_score, Decimal("100.00"))
+        self.assertFalse(line_award.is_category_bonus)
+        self.assertEqual(line_award.earned_score, Decimal("50.00"))
 
     def test_same_team_cannot_receive_a_line_bonus_twice(self):
         team = Team.objects.create(team_name="한 번만 받는 팀")
