@@ -21,3 +21,5 @@ RUNNING 인스턴스의 접속 주소가 여러 개이고 원래 release의 heal
 해당 endpoint에 healthcheck_path를 추가합니다
 프론트는 이를 상태 확인으로 표시하고 같은 호스트의 해당 경로로 연결합니다
 DB의 주소와 네트워크 공개 설정은 변경하지 않습니다
+
+<!-- QA B0 baseline -->
