@@ -258,6 +258,7 @@ class KothApiTests(TestCase):
         )
         self.team.is_banned = True
         self.team.save(update_fields=["is_banned"])
+        self.auth("other")
         self.assertEqual(
             self.client.get(url).data["data"]["challenges"][0]["current_owner_team_id"],
             str(self.other.pk),
@@ -418,9 +419,8 @@ class KothApiTests(TestCase):
 
         response = self.client.get("/api/v1/koth/me")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["data"]["challenges"][0]["earned_score"], 60)
-        self.assertIsNone(response.data["data"]["challenges"][0]["rank"])
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "TEAM_BANNED")
 
     def test_leaderboard_requires_auth_and_valid_challenge_id(self):
         url = "/api/v1/koth/leaderboard"

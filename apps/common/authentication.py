@@ -14,6 +14,7 @@ BAN_EXEMPT_PATHS = frozenset(
 )
 
 ADMIN_PATH_PREFIX = "/api/v1/admin/"
+KOTH_PATH_PREFIX = "/api/v1/koth/"
 
 
 class JWTAuthentication(BaseAuthentication):
@@ -45,7 +46,7 @@ class JWTAuthentication(BaseAuthentication):
         return (user, payload)
 
     def _check_banned(self, request, user):
-        if request.method not in WRITE_METHODS:
+        if request.method not in WRITE_METHODS and not request.path.startswith(KOTH_PATH_PREFIX):
             return
         if request.path in BAN_EXEMPT_PATHS:
             return
