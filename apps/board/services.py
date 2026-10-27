@@ -1148,6 +1148,33 @@ def build_chance_cards_view(team, state, *, board_completed=None):
     return result
 
 
+def build_pending_chance_choice(team):
+    pending_roll = PendingDiceRoll.objects.filter(team_id=OuterRef("team_id"))
+    draw = (
+        TeamChanceCard.objects.select_related("card")
+        .filter(
+            Exists(pending_roll),
+            team=team,
+            card_id=ChanceCard.CardId.ROLL_TWICE_CHOOSE,
+            used_at__isnull=True,
+            discarded_at__isnull=True,
+            pending_first_number__isnull=False,
+            pending_second_number__isnull=False,
+        )
+        .first()
+    )
+    if draw is None:
+        return None
+    return {
+        "team_card_id": str(draw.pk),
+        "card_id": draw.card_id,
+        "effect": draw.card.effect,
+        "first_number": draw.pending_first_number,
+        "second_number": draw.pending_second_number,
+        "awaiting_confirm": True,
+    }
+
+
 def draw_chance_card(team):
     with board_state_for_update(team) as (state, dice):
         if PendingDiceRoll.objects.filter(team=team).exists():
@@ -1494,12 +1521,12 @@ def use_chance_card(team, card_id, payload, *, team_card_id=None):
         return result
 
 
-def confirm_chance_choice(team, choice):
+def confirm_chance_choice(team, choice, *, team_card_id=None):
     if choice not in ("FIRST", "SECOND"):
         raise ChanceConfirmNotFound()
 
     with board_state_for_update(team) as (state, dice):
-        draw = (
+        pending_draws = (
             TeamChanceCard.objects.select_related("card")
             .filter(
                 team=team,
@@ -1507,8 +1534,10 @@ def confirm_chance_choice(team, choice):
                 discarded_at__isnull=True,
                 pending_first_number__isnull=False,
             )
-            .first()
         )
+        if team_card_id is not None:
+            pending_draws = pending_draws.filter(pk=team_card_id)
+        draw = pending_draws.first()
         pending = PendingDiceRoll.objects.filter(team=team).first()
         if draw is None or pending is None:
             raise ChanceConfirmNotFound()
