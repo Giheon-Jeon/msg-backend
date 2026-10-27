@@ -28,6 +28,7 @@ from .services import (
     build_cell_states,
     acknowledge_dice_roll_request,
     build_chance_cards_view,
+    build_pending_chance_choice,
     challenge_solve_deadline,
     compute_blocked_reason,
     confirm_chance_choice,
@@ -149,6 +150,11 @@ class BoardMeView(APIView):
                     else []
                 ),
                 "active_challenge": _serialize_active_challenge(active_access),
+                "pending_chance_choice": (
+                    build_pending_chance_choice(team)
+                    if state.has_chance_cards
+                    else None
+                ),
                 "line_monopolies": [
                     {
                         "line_number": row["line_number"],
@@ -406,8 +412,14 @@ class ChanceConfirmView(APIView):
     @idempotent
     def post(self, request, *args, **kwargs):
         team = _get_team(request)
-        choice = _request_object(request).get("choice")
-        return ok(confirm_chance_choice(team, choice))
+        payload = _request_object(request)
+        return ok(
+            confirm_chance_choice(
+                team,
+                payload.get("choice"),
+                team_card_id=_team_card_id(payload),
+            )
+        )
 
 
 class OpenedChallengesView(APIView):
