@@ -529,6 +529,7 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(data["cell_states"], [])
         self.assertEqual(data["chance_cards"], [])
         self.assertIsNone(data["active_challenge"])
+        self.assertIsNone(data["pending_chance_choice"])
         self.assertEqual(data["line_monopolies"], [])
         self.assertEqual(
             set(data.keys()),
@@ -546,6 +547,7 @@ class BoardApiTestCase(TestCase):
                 "chance_cards",
                 "active_challenge",
                 "line_monopolies",
+                "pending_chance_choice",
             },
         )
 
@@ -1769,6 +1771,134 @@ class BoardApiTestCase(TestCase):
         self.assertEqual(response.json()["code"], "CARD_ID_REQUIRED")
 
     # ---------------------------------------------------------------- chance/confirm
+
+    def prepare_pending_chance_choice(self):
+        draw = self.draw_card("card_roll_twice_choose")
+        with patch("apps.board.services.random.randint", side_effect=[1, 1, 3, 3]):
+            response = self.post_idem(
+                "/api/v1/board/chance/use",
+                {"team_card_id": str(draw.pk)},
+                key="recover-use",
+            )
+        self.assertEqual(response.status_code, 200)
+        return draw
+
+    def test_board_me_restores_pending_chance_choice_without_rerolling(self):
+        draw = self.prepare_pending_chance_choice()
+        self.state.refresh_from_db()
+        before = (self.state.position_id, self.state.dice_rolls_left, self.state.updated_at)
+        with patch("apps.board.services.random.randint") as random_roll:
+            first = self.client.get("/api/v1/board/me").json()["data"]
+            second = self.client.get("/api/v1/board/me").json()["data"]
+        self.assertEqual(
+            first["pending_chance_choice"],
+            {
+                "team_card_id": str(draw.pk),
+                "card_id": "card_roll_twice_choose",
+                "effect": "ROLL_TWICE_CHOOSE",
+                "first_number": 2,
+                "second_number": 6,
+                "awaiting_confirm": True,
+            },
+        )
+        self.assertEqual(first["pending_chance_choice"], second["pending_chance_choice"])
+        random_roll.assert_not_called()
+        self.state.refresh_from_db()
+        self.assertEqual(
+            (self.state.position_id, self.state.dice_rolls_left, self.state.updated_at),
+            before,
+        )
+        self.assertEqual(DiceRoll.objects.filter(team=self.team).count(), 2)
+
+    def test_board_me_pending_choice_is_team_scoped(self):
+        self.prepare_pending_chance_choice()
+        self.as_other_leader()
+        data = self.client.get("/api/v1/board/me").json()["data"]
+        self.assertIsNone(data["pending_chance_choice"])
+
+    def test_board_me_pending_choice_requires_a_pending_movement(self):
+        self.prepare_pending_chance_choice()
+        PendingDiceRoll.objects.filter(team=self.team).delete()
+        data = self.client.get("/api/v1/board/me").json()["data"]
+        self.assertIsNone(data["pending_chance_choice"])
+
+    def test_board_me_ignores_used_or_discarded_pending_choice(self):
+        draw = self.prepare_pending_chance_choice()
+        for field in ("used_at", "discarded_at"):
+            with self.subTest(field=field):
+                TeamChanceCard.objects.filter(pk=draw.pk).update(**{field: timezone.now()})
+                data = self.client.get("/api/v1/board/me").json()["data"]
+                self.assertIsNone(data["pending_chance_choice"])
+                TeamChanceCard.objects.filter(pk=draw.pk).update(**{field: None})
+
+    def test_board_me_regular_post_roll_has_no_chance_choice(self):
+        self.draw_card("card_reroll")
+        with patch("apps.board.services.random.randint", side_effect=[1, 1]):
+            self.post_idem("/api/v1/board/dice/roll", key="regular-roll")
+        data = self.client.get("/api/v1/board/me").json()["data"]
+        self.assertIsNone(data["pending_chance_choice"])
+
+    def test_recovered_chance_choice_confirms_once_and_then_clears(self):
+        draw = self.prepare_pending_chance_choice()
+        pending = self.client.get("/api/v1/board/me").json()["data"]["pending_chance_choice"]
+        payload = {"choice": "SECOND", "team_card_id": pending["team_card_id"]}
+        first = self.post_idem("/api/v1/board/chance/confirm", payload, key="recovered")
+        repeated = self.post_idem("/api/v1/board/chance/confirm", payload, key="recovered")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), repeated.json())
+        self.assertEqual(first.json()["data"]["chosen_number"], 6)
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.position_id, 7)
+        self.assertEqual(self.state.dice_rolls_left, 0)
+        draw.refresh_from_db()
+        self.assertIsNotNone(draw.used_at)
+        data = self.client.get("/api/v1/board/me").json()["data"]
+        self.assertIsNone(data["pending_chance_choice"])
+
+    def test_chance_confirm_does_not_accept_another_teams_card_id(self):
+        own = self.prepare_pending_chance_choice()
+        foreign = TeamChanceCard.objects.create(
+            team=self.other_team, source_cell_id=7, card_id="card_roll_twice_choose"
+        )
+        response = self.post_idem(
+            "/api/v1/board/chance/confirm",
+            {"choice": "SECOND", "team_card_id": str(foreign.pk)},
+            key="foreign-choice",
+        )
+        self.assertEqual(response.status_code, 404)
+        own.refresh_from_db()
+        self.assertIsNone(own.used_at)
+        self.assertTrue(PendingDiceRoll.objects.filter(team=self.team).exists())
+
+    def test_stale_card_confirmation_does_not_confirm_new_pending_card(self):
+        old = self.prepare_pending_chance_choice()
+        self.post_idem(
+            "/api/v1/board/chance/confirm",
+            {"choice": "FIRST", "team_card_id": str(old.pk)},
+            key="old-choice",
+        )
+        self.state.refresh_from_db()
+        self.state.position_id = 1
+        self.state.dice_rolls_left = 1
+        self.state.save(update_fields=["position", "dice_rolls_left"])
+        new = self.draw_card("card_roll_twice_choose", source_cell_index=30)
+        with patch("apps.board.services.random.randint", side_effect=[2, 2, 3, 3]):
+            self.post_idem(
+                "/api/v1/board/chance/use",
+                {"team_card_id": str(new.pk)},
+                key="new-use",
+            )
+        response = self.post_idem(
+            "/api/v1/board/chance/confirm",
+            {"choice": "SECOND", "team_card_id": str(old.pk)},
+            key="stale-choice",
+        )
+        self.assertEqual(response.status_code, 404)
+        new.refresh_from_db()
+        self.assertIsNone(new.used_at)
+        pending = self.client.get("/api/v1/board/me").json()["data"]["pending_chance_choice"]
+        self.assertEqual(pending["team_card_id"], str(new.pk))
+        self.assertEqual(pending["first_number"], 4)
 
     def test_chance_confirm_roll_twice_choose(self):
         self.draw_card("card_roll_twice_choose")

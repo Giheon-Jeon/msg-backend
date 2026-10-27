@@ -1,0 +1,64 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Board pending chance choice recovery", "version": "1.0.0"},
+  "paths": {
+    "/api/v1/board/me": {
+      "get": {
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "Current team board, including a persisted pending card choice",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "properties": {"data": {
+                "type": "object",
+                "required": ["pending_chance_choice"],
+                "properties": {"pending_chance_choice": {"$ref": "#/components/schemas/PendingChanceChoice"}}
+              }}
+            }}}
+          }
+        }
+      }
+    },
+    "/api/v1/board/chance/confirm": {
+      "post": {
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["choice"],
+            "properties": {
+              "choice": {"type": "string", "enum": ["FIRST", "SECOND"]},
+              "team_card_id": {"type": "string", "format": "uuid", "description": "Bind confirmation to the displayed card; optional for older clients"}
+            }
+          }}}
+        },
+        "responses": {
+          "200": {"description": "Persisted choice confirmed exactly once"},
+          "400": {"description": "Invalid card UUID or request body"},
+          "404": {"description": "No matching pending choice for this team and card"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}},
+    "schemas": {
+      "PendingChanceChoice": {
+        "type": "object", "nullable": true, "additionalProperties": false,
+        "description": "Null when no unused, undiscarded roll-twice card and pending movement exist for this team; reading never rerolls or spends dice",
+        "required": ["team_card_id", "card_id", "effect", "first_number", "second_number", "awaiting_confirm"],
+        "properties": {
+          "team_card_id": {"type": "string", "format": "uuid"},
+          "card_id": {"type": "string", "enum": ["card_roll_twice_choose"]},
+          "effect": {"type": "string", "enum": ["ROLL_TWICE_CHOOSE"]},
+          "first_number": {"type": "integer", "minimum": 2, "maximum": 12},
+          "second_number": {"type": "integer", "minimum": 2, "maximum": 12},
+          "awaiting_confirm": {"type": "boolean", "enum": [true]}
+        }
+      }
+    }
+  }
+}
