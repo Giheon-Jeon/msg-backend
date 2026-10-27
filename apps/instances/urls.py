@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.instances.admin_views import ReleaseActivateView, ReleaseDeriveView, ReleaseListCreateView
+from apps.instances.admin_views import ReleaseActivateView, ReleaseApproveView, ReleaseDeriveView, ReleaseListCreateView
 from apps.instances.image_preparation_views import (
     ImagePreparationListCreateView, ImagePreparationDetailView,
     ImagePreparationRetryView, ImagePreparationRefreshView,
@@ -60,6 +60,11 @@ urlpatterns = [
         "admin/challenges/<uuid:challenge_id>/releases",
         ReleaseListCreateView.as_view(),
         name="admin-challenge-releases",
+    ),
+    path(
+        "admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/approve",
+        ReleaseApproveView.as_view(),
+        name="admin-challenge-release-approve",
     ),
     path(
         "admin/challenges/<uuid:challenge_id>/releases/<uuid:release_id>/activate",

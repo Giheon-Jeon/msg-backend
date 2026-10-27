@@ -54,6 +54,35 @@ def _current_release_id(challenge):
     return config.current_release_id
 
 
+def _release_action_reason(body):
+    if not isinstance(body, dict):
+        raise ReleaseValidationError("요청 본문은 JSON 객체여야 합니다.")
+    reason = body.get("reason")
+    if reason is not None:
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+            raise ReleaseValidationError("reason 은 1~500자 문자열이어야 합니다.")
+        reason = reason.strip()
+        if "\x00" in reason or any("\ud800" <= char <= "\udfff" for char in reason):
+            raise ReleaseValidationError("reason 에 유효하지 않은 문자가 있습니다.")
+    return reason
+
+
+def _release_approval_error(release):
+    if not is_deployable(release):
+        return fail(
+            "RELEASE_NOT_DEPLOYABLE",
+            "현재 Scheduler 계약으로 배포할 수 없는 릴리스입니다.",
+            400,
+        )
+    if release.repository_env.get("missing"):
+        return fail(
+            "RELEASE_ENV_INCOMPLETE",
+            "저장소 환경변수 중 채우지 못한 값이 있습니다 환경변수에서 값을 넣어 새 버전을 만든 뒤 사용해주세요",
+            400,
+        )
+    return None
+
+
 @method_decorator(never_cache, name="dispatch")
 class ReleaseListCreateView(APIView):
     permission_classes = [IsAdmin]
@@ -124,22 +153,63 @@ class ReleaseListCreateView(APIView):
         )
 
 
+@method_decorator(never_cache, name="dispatch")
+class ReleaseApproveView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request, challenge_id, release_id):
+        try:
+            reason = _release_action_reason(request.data)
+        except ReleaseValidationError as error:
+            return fail("INVALID_REQUEST", error.message, 400)
+        if set(request.data) - {"reason"}:
+            return fail("INVALID_REQUEST", "승인 요청에는 reason만 지정할 수 있습니다.", 400)
+        with transaction.atomic():
+            challenge = _get_challenge(challenge_id, for_update=True)
+            if challenge is None:
+                return fail("CHALLENGE_NOT_FOUND", "존재하지 않는 문제 ID입니다.", 404)
+            release = (
+                ChallengeRelease.objects.prefetch_related("containers")
+                .filter(challenge=challenge, release_id=release_id).first()
+            )
+            if release is None:
+                return fail("RELEASE_NOT_FOUND", "존재하지 않는 릴리스 ID입니다.", 404)
+            error = _release_approval_error(release)
+            if error is not None:
+                return error
+            if release.approved_at is None:
+                release.approved_at = timezone.now()
+                release.save(update_fields=["approved_at"])
+                message = f"릴리스 승인: v{release.version} (release_id={release.pk}, revision={release.registry_revision})"
+                if reason:
+                    message += f": {reason}"
+                AdminEvent.objects.create(
+                    type=AdminEvent.EventType.CHALLENGE_RELEASE_APPROVED,
+                    severity=AdminEvent.Severity.INFO,
+                    message=message,
+                    challenge=challenge,
+                    actor=request.user.login_id,
+                )
+            current_id = _current_release_id(challenge)
+        return ok({
+            "challenge_id": str(challenge.pk), "release_id": str(release.pk),
+            "version": release.version, "registry_revision": release.registry_revision,
+            "approved_at": isoformat_z(release.approved_at),
+            "current_release_id": str(current_id) if current_id else None,
+            "is_current": current_id == release.pk,
+        }, message="릴리스가 승인되었습니다. 현재 적용 버전은 변경하지 않았습니다.")
+
+
 class ReleaseActivateView(APIView):
     permission_classes = [IsAdmin]
 
     def post(self, request, challenge_id, release_id):
         # 지정한 릴리스를 현재 배포 버전으로 전환한다. 옛 버전 지정이 곧 롤백이다
-        body = request.data
-        if not isinstance(body, dict):
-            return fail("INVALID_REQUEST", "요청 본문은 JSON 객체여야 합니다.", 400)
         # 사유는 선택이다. 기존 화면이 빈 본문으로 전환하므로 필수로 바꾸면 깨진다.
-        reason = body.get("reason")
-        if reason is not None:
-            if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
-                return fail("INVALID_REQUEST", "reason 은 1~500자 문자열이어야 합니다.", 400)
-            reason = reason.strip()
-            if "\x00" in reason or any("\ud800" <= char <= "\udfff" for char in reason):
-                return fail("INVALID_REQUEST", "reason 에 유효하지 않은 문자가 있습니다.", 400)
+        try:
+            reason = _release_action_reason(request.data)
+        except ReleaseValidationError as error:
+            return fail("INVALID_REQUEST", error.message, 400)
 
         with transaction.atomic():
             challenge = _get_challenge(challenge_id, for_update=True)
@@ -155,19 +225,9 @@ class ReleaseActivateView(APIView):
             if release is None:
                 return fail("RELEASE_NOT_FOUND", "존재하지 않는 릴리스 ID입니다.", 404)
 
-            if not is_deployable(release):
-                return fail(
-                    "RELEASE_NOT_DEPLOYABLE",
-                    "현재 Scheduler 계약으로 배포할 수 없는 릴리스입니다.",
-                    400,
-                )
-
-            if release.repository_env.get("missing"):
-                return fail(
-                    "RELEASE_ENV_INCOMPLETE",
-                    "저장소 환경변수 중 채우지 못한 값이 있습니다 환경변수에서 값을 넣어 새 버전을 만든 뒤 사용해주세요",
-                    400,
-                )
+            error = _release_approval_error(release)
+            if error is not None:
+                return error
 
             if release.approved_at is None:
                 release.approved_at = timezone.now()

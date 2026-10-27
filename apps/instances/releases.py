@@ -518,6 +518,7 @@ def serialize_release(release, current_release_id=None, file_bundles=None):
             for container in containers
         ],
         "is_current": release.release_id == current_release_id,
+        "approved_at": isoformat_z(release.approved_at),
         "is_deployable": is_deployable(release),
         "note": release.note,
         "repository_env": release.repository_env or None,

@@ -6,8 +6,10 @@ Runtime #70의 B안 계약을 사용하는 기본 비활성 기능이다. 실제
 
 ## 흐름
 
-- 현재 main의 승인은 release 활성화와 함께 기록된다. 이 동작을 유지한다.
-- 기능이 켜져 있으면 활성화 트랜잭션에 이미지 준비 요청을 저장한다. 같은 release,
+- 기존 `/activate`는 release 승인과 활성화를 함께 처리한다. 이 동작을 유지한다.
+- 별도 `/approve`는 승인 시각과 감사 기록만 저장한다. active, 준비 요청, 기존
+  pending 활성화 의도 및 세대는 변경하지 않는다. Runtime이나 Scheduler를 호출하지 않는다.
+- 기능이 켜져 있으면 기존 활성화 트랜잭션에 이미지 준비 요청을 저장한다. 같은 release,
   고정 요청 내용, Runtime origin의 자동 요청은 재사용한다. HTTP는 호출하지 않는다.
 - 워커가 커밋된 요청을 읽어 Runtime에 전송하고 이후 operation을 조회한다.
 - 모든 컨테이너의 digest 이미지, 선언 포트, architecture, isolation profile,
@@ -25,6 +27,7 @@ Runtime #70의 B안 계약을 사용하는 기본 비활성 기능이다. 실제
 
 | Method | 경로 | 용도 |
 | --- | --- | --- |
+| POST | `/admin/challenges/{challenge_id}/releases/{release_id}/approve` | 활성화 없는 승인, 본문 `{}` 또는 `{"reason":"검토 사유"}` |
 | GET | `/admin/challenges/{challenge_id}/releases/{release_id}/image_preparations` | 이력, `page` 기본 1, 20개씩 |
 | POST | 위와 동일 | 승인된 release의 새 준비 요청, 본문 `{}` |
 | GET | `/admin/challenges/{challenge_id}/image_preparations/{request_id}` | 요청, operation, 노드·이미지 결과 |
@@ -69,6 +72,24 @@ python manage.py process_image_preparations --limit 20
 명령은 대기 중인 최대 20개를
 한 번 처리하고 종료한다. 상태 갱신도 다음 실행이 필요하다. 비활성일 때는 요청 DB
 조회나 HTTP 없이 종료한다. 워커는 DB 트랜잭션 밖에서 실행해야 한다.
+
+## 활성화 없는 승인과 준비
+
+새 미승인 release는 `/approve`로 승인한 뒤 기존 `/image_preparations`에 별도로 접수한다.
+승인 API는 기존 활성화와 같은 배포 가능 여부 및 미완성 저장소 환경변수 검사를 수행한다.
+`reason`은 선택이며 null 또는 공백 제거 후 1~500자 문자열이다. 그 외 필드는 거절한다.
+동일 release의 반복 승인은 최초 승인 시각을 유지하고 감사 기록을 중복 생성하지 않는다.
+최초 승인과 `CHALLENGE_RELEASE_APPROVED` 감사 기록은 같은 트랜잭션으로 저장한다.
+릴리스 목록의 `approved_at`은 미승인이면 null이다. 승인 응답은 release 식별자,
+승인 시각, current_release_id, is_current를 반환하며 환경변수나 비밀값은 포함하지 않는다.
+
+Backend 승인은 Runtime의 정확한 digest 정책 승인이나 실제 이미지 다운로드 완료를
+대신하지 않는다. 승인 뒤에도 Runtime의 정책·플랫폼·노드 검증을 통과해야 한다.
+준비만 할 때에는 `/activate`를 호출하지 않는다. 특히 준비 후 활성화 모드가 꺼져 있으면
+기존 `/activate`는 즉시 active를 바꾼다. 기존 참가자 인스턴스는 승인 API가 변경하지 않는다.
+
+`adminpanel.0012_admin_event_release_approved`는 승인 감사 이벤트의 type 선택지만 추가한다.
+기존 release를 자동 승인하거나 데이터·파일·active를 변경하지 않는다.
 
 `instances.0014_imagepreparationrequest`는 신규 테이블만 추가하며 기존 데이터는
 수정·삭제하지 않는다. 요청이 참조하는 release와 부모 요청은 삭제로부터 보호한다.
