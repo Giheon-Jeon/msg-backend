@@ -1,7 +1,8 @@
 import json
 import uuid
 from datetime import timezone as dt_timezone
-from urllib.error import HTTPError, URLError
+from http.client import HTTPException
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -402,14 +403,15 @@ def scheduler_request(method, path, body=None, auth_header=None, query=None):
     request = Request(url, data=payload, headers=headers, method=method)
 
     try:
-        # settings에서 URL scheme과 authority를 검증한 배포 설정만 사용한다.
-        with urlopen(  # nosec B310
-            request, timeout=settings.SCHEDULER_TIMEOUT_SECONDS
-        ) as response:
-            response_body = response.read().decode("utf-8")
-    except HTTPError as error:
-        raise scheduler_error_from_response(error) from error
-    except (TimeoutError, URLError) as error:
+        try:
+            # settings에서 URL scheme과 authority를 검증한 배포 설정만 사용한다.
+            with urlopen(  # nosec B310
+                request, timeout=settings.SCHEDULER_TIMEOUT_SECONDS
+            ) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as error:
+            raise scheduler_error_from_response(error) from error
+    except (OSError, HTTPException) as error:
         raise SchedulerError(
             "SCHEDULER_UNAVAILABLE",
             "인스턴스 서버와 연결할 수 없습니다. 잠시 후 다시 시도해주세요.",

@@ -3,7 +3,9 @@ import json
 import threading
 import uuid
 from datetime import timedelta
-from unittest.mock import patch
+from http.client import IncompleteRead, RemoteDisconnected
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from django.db import close_old_connections, connections
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -237,6 +239,64 @@ class AdminCleanupRetryTests(TestCase):
                 self.assertEqual(instance.status, InstanceStatus.FAILED)
                 self.assertNotIn("private-invalid-json", response.content.decode())
         self.assertFalse(AdminEvent.objects.filter(message__contains="private-invalid-json").exists())
+
+    @override_settings(SCHEDULER_BASE_URL="https://scheduler.example")
+    @patch("apps.instances.services.urlopen")
+    def test_transport_disconnect_returns_503_and_records_failure(self, urlopen):
+        for stage, error in (
+            ("headers", RemoteDisconnected("private-connection-detail")),
+            ("headers", ConnectionResetError("private-connection-detail")),
+            ("body", IncompleteRead(b"private-response-body", 100)),
+            ("body", ConnectionResetError("private-connection-detail")),
+            ("error_body_400", IncompleteRead(b"private-response-body", 100)),
+            ("error_body_503", IncompleteRead(b"private-response-body", 100)),
+        ):
+            with self.subTest(stage=stage, error=type(error).__name__):
+                instance = self._instance(status=InstanceStatus.FAILED)
+                before = Instance.objects.values().get(pk=instance.pk)
+                urlopen.reset_mock(return_value=True, side_effect=True)
+                if stage == "headers":
+                    urlopen.side_effect = error
+                elif stage == "body":
+                    urlopen.return_value.__enter__.return_value.read.side_effect = error
+                else:
+                    http_error = HTTPError("https://scheduler.example", int(stage[-3:]),
+                                           "private-http-detail", {}, None)
+                    http_error.read = Mock(side_effect=error)
+                    urlopen.side_effect = http_error
+                response = self.retry(instance.pk)
+                self.assertEqual((response.status_code, response.data["code"]),
+                                 (503, "SCHEDULER_UNAVAILABLE"))
+                self.assertEqual(Instance.objects.values().get(pk=instance.pk), before)
+                event = AdminEvent.objects.get(instance_id=instance.pk)
+                self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
+                self.assertEqual(event.actor, "root")
+                self.assertIn("SCHEDULER_UNAVAILABLE", event.message)
+                self.assertNotIn("private-", event.message)
+                self.assertNotIn("private-", response.content.decode())
+                urlopen.assert_called_once()
+
+    @override_settings(SCHEDULER_BASE_URL="https://scheduler.example")
+    @patch("apps.instances.services.urlopen")
+    def test_complete_http_errors_keep_existing_status_and_audit_behavior(self, urlopen):
+        for status, code, expected_status, expected_code in (
+            (400, "INVALID_STATE_TRANSITION", 400, "INVALID_STATE_TRANSITION"),
+            (404, "INSTANCE_NOT_FOUND", 404, "INSTANCE_NOT_FOUND"),
+            (502, "INTERNAL_ERROR", 503, "SCHEDULER_UNAVAILABLE"),
+        ):
+            with self.subTest(status=status):
+                instance = self._instance(status=InstanceStatus.FAILED)
+                urlopen.side_effect = HTTPError(
+                    "https://scheduler.example", status, "upstream error", {},
+                    io.BytesIO(json.dumps({"code": code, "message": "retry unavailable"}).encode()),
+                )
+                response = self.retry(instance.pk)
+                self.assertEqual((response.status_code, response.data["code"]),
+                                 (expected_status, expected_code))
+                instance.refresh_from_db()
+                self.assertEqual(instance.status, InstanceStatus.FAILED)
+                event = AdminEvent.objects.get(instance_id=instance.pk)
+                self.assertEqual(event.severity, AdminEvent.Severity.CRITICAL)
 
     @override_settings(SCHEDULER_API_TOKEN="")
     @patch("apps.instances.services.scheduler_request")
